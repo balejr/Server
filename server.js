@@ -12,7 +12,7 @@ const userRoutes = require('./routes/userRoutes');
 const dataRoutes = require('./routes/dataRoutes');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT;
 
 // Middleware
 app.use(cors());
