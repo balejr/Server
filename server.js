@@ -6,6 +6,8 @@ const cors = require('cors');
 const multer = require('multer');
 const { connectToDatabase } = require('./config/db');
 
+// test 
+
 // Import routes
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
