@@ -34,6 +34,8 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
         blobHTTPHeaders: { blobContentType: file.mimetype },
       });
       profileImageUrl = blockBlobClient.url;
+
+      console.log("Uploaded Image URL:", profileImageUrl); // ✅ Debugging
     }
     
     const hashedPassword = await bcrypt.hash(password, 12);
