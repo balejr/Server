@@ -7,16 +7,15 @@ const router = express.Router();
 // -------------------- DAILY LOGS --------------------
 // POST daily Log
 router.post('/dailylog', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
     const {
-        sleep, steps, heartrate, waterIntake, sleepQuality, stepsQuality,
-        restingHeartRate, heartrateVariability, weight, effectiveDate
+      sleep, steps, heartrate, waterIntake, sleepQuality, stepsQuality,
+      restingHeartRate, heartrateVariability, weight, effectiveDate
     } = req.body;
 
-    const userId = req.user.userId;
-
     try {
-        const pool = getPool();
-        await pool.request()
+      const pool = getPool();
+      await pool.request()
         .input('userId', userId)
         .input('sleep', sleep)
         .input('steps', steps)
@@ -29,35 +28,45 @@ router.post('/dailylog', authenticateToken, async (req, res) => {
         .input('weight', weight)
         .input('effectiveDate', effectiveDate)
         .query(`
-            INSERT INTO dbo.DailyLogs 
-            (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, StepsQuality, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
-            VALUES 
-            (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @stepsQuality, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
+          INSERT INTO dbo.DailyLogs 
+          (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, StepsQuality, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
+          VALUES 
+          (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @stepsQuality, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
         `);
-        res.status(200).json({ message: 'Daily log added successfully' });
+      res.status(200).json({ message: 'Daily log added successfully' });
     } catch (err) {
-        console.error('DailyLog POST Error:', err);
-        res.status(500).json({ message: 'Failed to insert daily log' });
+      console.error('DailyLog POST Error:', err);
+      res.status(500).json({ message: 'Failed to insert daily log' });
+    }
+});
+
+// GET daily log by ID
+router.get('/dailylog/:logId', authenticateToken, async (req, res) => {
+    const { logId } = req.params;
+
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('logId', logId)
+        .query('SELECT * FROM dbo.DailyLogs WHERE LogID = @logId');
+      res.status(200).json(result.recordset[0]);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch daily log' });
     }
 });
 
 // GET all daily logs for specific user
-router.get('/dailylog/:userId', authenticateToken, async (req, res) => {
-    const { userId } = req.params;
-    const tokenUserId = req.user.userId;
-
-    if (parseInt(userId) !== tokenUserId) {
-        return res.status(403).json({ message: 'Unauthorized access' });
-    }
+router.get('/dailylogs', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
 
     try {
-        const pool = getPool();
-        const result = await pool.request()
+      const pool = getPool();
+      const result = await pool.request()
         .input('userId', userId)
         .query('SELECT * FROM dbo.DailyLogs WHERE UserID = @userId');
-        res.status(200).json(result.recordset);
+      res.status(200).json(result.recordset);
     } catch (err) {
-        res.status(500).json({ message: 'Failed to fetch daily logs' });
+      res.status(500).json({ message: 'Failed to fetch daily logs' });
     }
 });
 
@@ -97,193 +106,441 @@ router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
     }
 });
 
-// -------------------- WORKOUT --------------------
-// POST a new workout
-router.post('/workout', authenticateToken, async (req, res) => {
-    const {
-      workoutName,
-      equipment,
-      secondaryMusc,
-      targetMusc,
-      instructions
-    } = req.body;
-  
+// -------------------- EXERCISE EXISTENCE --------------------
+// POST exercise instance
+router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
-  
+    const {
+      exerciseId, reps, sets, difficulty, date, note, rir, rpe,
+      targetMuscle, instructions, completed
+    } = req.body;
+
     try {
       const pool = getPool();
       await pool.request()
-        .input('workoutName', workoutName)
         .input('userId', userId)
-        .input('equipment', equipment)
-        .input('secondaryMusc', secondaryMusc)
-        .input('targetMusc', targetMusc)
+        .input('exerciseId', exerciseId)
+        .input('reps', reps)
+        .input('sets', sets)
+        .input('difficulty', difficulty)
+        .input('date', date)
+        .input('note', note)
+        .input('rir', rir)
+        .input('rpe', rpe)
+        .input('targetMuscle', targetMuscle)
         .input('instructions', instructions)
-        .input('createDate', new Date())
+        .input('completed', completed)
         .query(`
-          INSERT INTO dbo.Workout 
-          (WorkoutName, UserID, Equipment, SecondaryMusc, TargetMusc, Instructions, CreateDate)
-          VALUES (@workoutName, @userId, @equipment, @secondaryMusc, @targetMusc, @instructions, @createDate)
+          INSERT INTO dbo.ExerciseExistence
+          (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed)
+          VALUES
+          (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed)
         `);
-      res.status(200).json({ message: 'Workout added successfully' });
+      res.status(200).json({ message: 'Exercise existence added successfully' });
     } catch (err) {
-      console.error('Workout Insert Error:', err);
-      res.status(500).json({ message: 'Failed to insert workout' });
-    }
-  });
-
-// GET a specific existing workout by ID
-router.get('/workout/:workoutId', authenticateToken, async (req, res) => {
-    const { workoutId } = req.params;
-    try {
-        const pool = getPool();
-        const result = await pool.request()
-        .input('workoutId', workoutId)
-        .query('SELECT * FROM dbo.Workout WHERE WorkoutID = @workoutId');
-        res.status(200).json(result.recordset[0]);
-    } catch (err) {
-        res.status(500).json({ message: 'Failed to fetch workout' });
+      console.error('ExerciseExistence POST Error:', err);
+      res.status(500).json({ message: 'Failed to insert exercise existence' });
     }
 });
 
-// EDIT an existing workout by workout ID
-router.patch('/workout/:workoutId', authenticateToken, async (req, res) => {
-    const { workoutId } = req.params;
+// GET exercise instance
+router.get('/exerciseexistence/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('id', id)
+        .query('SELECT * FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
+      res.status(200).json(result.recordset[0]);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch exercise existence' });
+    }
+});
+
+// GET all exercise instances for specific user
+router.get('/exerciseexistences', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch exercise existences' });
+    }
+});
+
+// GET all exercise instances for specific user and specific exercise
+router.get('/exerciseexistence/user/:exerciseId', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { exerciseId } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .input('exerciseId', exerciseId)
+        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId AND ExerciseID = @exerciseId');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch by user and exerciseId' });
+    }
+});
+
+// GET all exercise instances for specific user on a specific date
+router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { date } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .input('date', date)
+        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId AND Date = @date');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch by user and date' });
+    }
+});
+
+// PATCH edit an exercise instance
+router.patch('/exerciseexistence/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
     const fields = req.body;
 
     const pool = getPool();
-    const request = pool.request().input('workoutId', workoutId);
+    const request = pool.request().input('id', id);
     const updates = Object.keys(fields).map((key) => {
-        request.input(key, fields[key]);
-        return `${key} = @${key}`;
+      request.input(key, fields[key]);
+      return `${key} = @${key}`;
     }).join(', ');
 
     try {
-        await request.query(`UPDATE dbo.Workout SET ${updates} WHERE WorkoutID = @workoutId`);
-        res.status(200).json({ message: 'Workout updated successfully' });
+      await request.query(`UPDATE dbo.ExerciseExistence SET ${updates} WHERE ExerciseExistenceID = @id`);
+      res.status(200).json({ message: 'Exercise existence updated' });
     } catch (err) {
-        res.status(500).json({ message: 'Failed to update workout' });
+      res.status(500).json({ message: 'Failed to update exercise existence' });
     }
 });
 
-// DELETE workout by ID
-router.delete('/workout/:workoutId', authenticateToken, async (req, res) => {
-    const { workoutId } = req.params;
-  
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('workoutId', workoutId)
-        .query('DELETE FROM dbo.Workout WHERE WorkoutID = @workoutId');
-  
-      res.status(200).json({ message: 'Workout deleted successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to delete workout' });
-    }
-});
-
-// -------------------- WORKOUT HISTORY --------------------
-// POST a workout history instance
-router.post('/workouthistory', authenticateToken, async (req, res) => {
-    const {
-      workoutId,
-      workoutType,
-      duration,
-      caloriesBurned,
-      sets,
-      reps,
-      intensity,
-      load,
-      completedInd,
-      durationLeft
-    } = req.body;
-  
-    const userId = req.user.userId;
-  
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('workoutId', workoutId)
-        .input('userId', userId)
-        .input('workoutType', workoutType)
-        .input('duration', duration)
-        .input('caloriesBurned', caloriesBurned)
-        .input('sets', sets)
-        .input('reps', reps)
-        .input('intensity', intensity)
-        .input('load', load)
-        .input('createDate', new Date())
-        .input('completedInd', completedInd)
-        .input('durationLeft', durationLeft)
-        .query(`
-          INSERT INTO dbo.WorkoutHistory 
-          (WorkoutID, UserID, WorkoutType, Duration, CaloriesBurned, Sets, Reps, Intensity, Load, CreateDate, CompletedInd, DurationLeft)
-          VALUES 
-          (@workoutId, @userId, @workoutType, @duration, @caloriesBurned, @sets, @reps, @intensity, @load, @createDate, @completedInd, @durationLeft)
-        `);
-  
-      res.status(200).json({ message: 'Workout history entry added successfully' });
-    } catch (err) {
-      console.error('WorkoutHistory POST Error:', err);
-      res.status(500).json({ message: 'Failed to insert workout history' });
-    }
-  });
-
-// GET all workout history for a specific user
-router.get('/workouthistory/:userId', authenticateToken, async (req, res) => {
-    const { userId } = req.params;
-    const tokenUserId = req.user.userId;
-  
-    if (parseInt(userId) !== tokenUserId) {
-      return res.status(403).json({ message: 'Unauthorized access' });
-    }
-
-    try {
-        const pool = getPool();
-        const result = await pool.request()
-        .input('userId', userId)
-        .query('SELECT * FROM dbo.WorkoutHistory WHERE UserID = @userId ORDER BY CreateDate DESC');
-        res.status(200).json(result.recordset);
-    } catch (err) {
-        res.status(500).json({ message: 'Failed to fetch workout history' });
-    }
-});
-
-// EDIT a workout history instance by ID
-router.patch('/workouthistory/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const fields = req.body;
-
-  const pool = getPool();
-  const request = pool.request().input('id', id);
-  const updates = Object.keys(fields).map((key) => {
-    request.input(key, fields[key]);
-    return `${key} = @${key}`;
-  }).join(', ');
-
-  try {
-    await request.query(`UPDATE dbo.WorkoutHistory SET ${updates} WHERE WorkoutHistoryID = @id`);
-    res.status(200).json({ message: 'Workout history updated' });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to update workout history' });
-  }
-});
-
-// DELETE workout history entry by ID
-router.delete('/workouthistory/:id', authenticateToken, async (req, res) => {
+// DELETE an exercise instance
+router.delete('/exerciseexistence/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-  
     try {
       const pool = getPool();
       await pool.request()
         .input('id', id)
-        .query('DELETE FROM dbo.WorkoutHistory WHERE WorkoutHistoryID = @id');
-  
-      res.status(200).json({ message: 'Workout history deleted successfully' });
+        .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
+      res.status(200).json({ message: 'Exercise existence deleted' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to delete workout history' });
+      res.status(500).json({ message: 'Failed to delete exercise existence' });
     }
 });
-  
+
+// -------------------- WORKOUT ROUTINE --------------------
+// POST a new workout routine
+router.post('/workoutroutine', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const {
+      workoutName, exerciseInstances, equipment, duration,
+      caloriesBurned, intensity, load, durationLeft, completed, workoutRoutineDate
+    } = req.body;
+
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('userId', userId)
+        .input('workoutName', workoutName)
+        .input('exerciseInstances', exerciseInstances) // comma-separated IDs
+        .input('equipment', equipment)
+        .input('duration', duration)
+        .input('caloriesBurned', caloriesBurned)
+        .input('intensity', intensity)
+        .input('load', load)
+        .input('durationLeft', durationLeft)
+        .input('completed', completed)
+        .input('workoutRoutineDate', workoutRoutineDate)
+        .query(`
+          INSERT INTO dbo.WorkoutRoutine
+          (UserID, WorkoutName, ExerciseInstances, Equipment, Duration, CaloriesBurned, Intensity, Load, DurationLeft, Completed, WorkoutRoutineDate)
+          VALUES
+          (@userId, @workoutName, @exerciseInstances, @equipment, @duration, @caloriesBurned, @intensity, @load, @durationLeft, @completed, @workoutRoutineDate)
+        `);
+
+      res.status(200).json({ message: 'Workout routine added successfully' });
+    } catch (err) {
+      console.error('WorkoutRoutine POST Error:', err);
+      res.status(500).json({ message: 'Failed to insert workout routine' });
+    }
+});
+
+// GET a workout routine by ID
+router.get('/workoutroutine/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('id', id)
+        .query('SELECT * FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+      res.status(200).json(result.recordset[0]);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch workout routine' });
+    }
+});
+
+// GET all workout routines for a specific user
+router.get('/workoutroutines', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch workout routines' });
+    }
+});
+
+// GET all workout routines for specific user on a specific date
+router.get('/workoutroutines/date/:date', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { date } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .input('date', date)
+        .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId AND WorkoutRoutineDate = @date');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch workout routines by date' });
+    }
+});
+
+// GET all exercise instances for a specific workout routine
+router.get('/workoutroutine/exerciseinstances/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = getPool();
+      const routineResult = await pool.request()
+        .input('id', id)
+        .query('SELECT ExerciseInstances FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+
+      const instanceIds = routineResult.recordset[0]?.ExerciseInstances?.split(',') || [];
+      if (instanceIds.length === 0) return res.status(200).json([]);
+
+      const placeholders = instanceIds.map((_, i) => `@id${i}`).join(',');
+      const request = pool.request();
+      instanceIds.forEach((val, i) => request.input(`id${i}`, parseInt(val)));
+
+      const result = await request.query(`
+        SELECT * FROM dbo.ExerciseExistence WHERE ExerciseExistenceID IN (${placeholders})
+      `);
+
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch exercise instances from workout routine' });
+    }
+});
+
+// PATCH edit a workout routine
+router.patch('/workoutroutine/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const fields = req.body;
+    const pool = getPool();
+    const request = pool.request().input('id', id);
+    const updates = Object.keys(fields).map((key) => {
+      request.input(key, fields[key]);
+      return `${key} = @${key}`;
+    }).join(', ');
+
+    try {
+      await request.query(`UPDATE dbo.WorkoutRoutine SET ${updates} WHERE WorkoutRoutineID = @id`);
+      res.status(200).json({ message: 'Workout routine updated successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to update workout routine' });
+    }
+});
+
+// DELETE a workout routine
+router.delete('/workoutroutine/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('id', id)
+        .query('DELETE FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+      res.status(200).json({ message: 'Workout routine deleted successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to delete workout routine' });
+    }
+});
+
+// -------------------- MESOCYCLES --------------------
+// POST a mesocycle
+router.post('/mesocycle', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { start_date, end_date, is_current, created_date } = req.body;
+
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('userId', userId)
+        .input('start_date', start_date)
+        .input('end_date', end_date)
+        .input('is_current', is_current)
+        .input('created_date', created_date)
+        .query(`
+          INSERT INTO dbo.Mesocycles (UserId, start_date, end_date, is_current, created_date)
+          VALUES (@userId, @start_date, @end_date, @is_current, @created_date)
+        `);
+      res.status(200).json({ message: 'Mesocycle added successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to insert mesocycle' });
+    }
+});
+
+// GET all users mesocycles
+router.get('/mesocycles', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId');
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch mesocycles' });
+    }
+});
+
+// EDIT specific mesocycle
+router.patch('/mesocycle/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const fields = req.body;
+    const pool = getPool();
+    const request = pool.request().input('id', id);
+    const updates = Object.keys(fields).map((key) => {
+      request.input(key, fields[key]);
+      return `${key} = @${key}`;
+    }).join(', ');
+
+    try {
+      await request.query(`UPDATE dbo.Mesocycles SET ${updates} WHERE mesocycle_id = @id`);
+      res.status(200).json({ message: 'Mesocycle updated successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to update mesocycle' });
+    }
+});
+
+// DELETE a mesocycle
+router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('id', id)
+      .query('DELETE FROM dbo.Mesocycles WHERE mesocycle_id = @id');
+    res.status(200).json({ message: 'Mesocycle deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete mesocycle' });
+  }
+});
+
+// -------------------- MICROCYCLES --------------------
+// POST a microcycle
+router.post('/microcycle', authenticateToken, async (req, res) => {
+    const { mesocycle_id, week_number, start_date, end_date, is_current, created_at } = req.body;
+
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('mesocycle_id', mesocycle_id)
+        .input('week_number', week_number)
+        .input('start_date', start_date)
+        .input('end_date', end_date)
+        .input('is_current', is_current)
+        .input('created_at', created_at)
+        .query(`
+          INSERT INTO dbo.Microcycles (mesocycle_id, week_number, start_date, end_date, is_current, created_at)
+          VALUES (@mesocycle_id, @week_number, @start_date, @end_date, @is_current, @created_at)
+        `);
+      res.status(200).json({ message: 'Microcycle added successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to insert microcycle' });
+    }
+});
+
+// GET all microcyles by user
+router.get('/microcycles', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .query(`
+          SELECT m.* FROM dbo.Microcycles m
+          INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
+          WHERE ms.UserId = @userId
+        `);
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch microcycles' });
+    }
+});
+
+// GET all microcycles within a mesocycle
+router.get('/microcycles/:mesocycle_id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { mesocycle_id } = req.params;
+    try {
+      const pool = getPool();
+      const result = await pool.request()
+        .input('userId', userId)
+        .input('mesocycle_id', mesocycle_id)
+        .query(`
+          SELECT m.* FROM dbo.Microcycles m
+          INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
+          WHERE ms.UserId = @userId AND m.mesocycle_id = @mesocycle_id
+        `);
+      res.status(200).json(result.recordset);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch microcycles for mesocycle' });
+    }
+});
+
+// PATCH edit a specific microcycle
+router.patch('/microcycle/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const fields = req.body;
+    const pool = getPool();
+    const request = pool.request().input('id', id);
+    const updates = Object.keys(fields).map((key) => {
+      request.input(key, fields[key]);
+      return `${key} = @${key}`;
+    }).join(', ');
+
+    try {
+      await request.query(`UPDATE dbo.Microcycles SET ${updates} WHERE microcycle_id = @id`);
+      res.status(200).json({ message: 'Microcycle updated successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to update microcycle' });
+    }
+});
+
+// DELETE a specific microcyle
+router.delete('/microcycle/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('id', id)
+        .query('DELETE FROM dbo.Microcycles WHERE microcycle_id = @id');
+      res.status(200).json({ message: 'Microcycle deleted successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to delete microcycle' });
+    }
+});
 
 module.exports = router;

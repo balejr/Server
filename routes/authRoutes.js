@@ -12,13 +12,14 @@ const { containerClient } = require('../middleware/blobClient'); // or pass via 
 // POST new user/ signup
 router.post('/signup', upload.single('profileImage'), async (req, res) => {
   const {
-    name,
+    firstName,
+    lastName,
     email,
     password,
     fitnessGoal,
     age,
     weight,
-    heightx,
+    height,
     gender,
     fitnessLevel
   } = req.body;
@@ -44,51 +45,51 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
     const transaction = pool.transaction();
     await transaction.begin();
 
-    const userRequest = new (require('mssql').Request)(transaction);
-    const userResult = await userRequest
-      .input('name', name)
-      .input('email', email)
+    const profileRequest = new (require('mssql').Request)(transaction);
+    const profileResult = await profileRequest
+      .input('firstName', firstName)
+      .input('lastName', lastName)
       .input('fitnessGoal', fitnessGoal)
       .input('age', age)
       .input('weight', weight)
-      .input('heightx', heightx)
+      .input('height', height)
       .input('gender', gender)
       .input('fitnessLevel', fitnessLevel)
       .input('profileImageUrl', profileImageUrl || null)
       .input('createDate', currentDate)
       .query(`
-        INSERT INTO dbo.[User] 
-        (Name, EmailAddr, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, CreateDate, ProfileImageUrl)
+        INSERT INTO dbo.UserProfile 
+        (FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, CreateDate, ProfileImageUrl)
         OUTPUT INSERTED.UserID
-        VALUES (@name, @email, @fitnessGoal, @age, @weight, @heightx, @gender, @fitnessLevel, @createDate, @profileImageUrl)
+        VALUES (@firstName, @lastName, @fitnessGoal, @age, @weight, @height, @gender, @fitnessLevel, @createDate, @profileImageUrl)
       `);
 
-    const userId = userResult.recordset[0].UserID;
+      const userId = profileResult.recordset[0].UserID;
 
-    const accountRequest = new (require('mssql').Request)(transaction);
-    await accountRequest
-      .input('userId', userId)
-      .input('username', email)
-      .input('password', hashedPassword)
-      .input('createDate', currentDate)
-      .query(`
-        INSERT INTO dbo.Account (UserID, UserName, Password, CreateDt)
-        VALUES (@userId, @username, @password, @createDate)
-      `);
+      const loginRequest = new (require('mssql').Request)(transaction);
+      await loginRequest
+        .input('userId', userId)
+        .input('email', email)
+        .input('password', hashedPassword)
+        .input('createDate', currentDate)
+        .query(`
+          INSERT INTO dbo.UserLogin (UserID, Email, Password, CreateDate)
+          VALUES (@userId, @email, @password, @createDate)
+        `);
+  
+      await transaction.commit();
 
-    await transaction.commit();
+      const token = generateToken({ userId });
 
-    const token = generateToken({ userId });
-
-    res.status(200).json({
-      message: 'User created successfully!',
-      token,
-      userId
-    });
-  } catch (error) {
-    console.error('Signup Error:', error);
-    res.status(500).json({ message: 'Error signing up user' });
-  }
+      res.status(200).json({
+        message: 'User created successfully!',
+        token,
+        userId
+      });
+    } catch (error) {
+      console.error('Signup Error:', error);
+      res.status(500).json({ message: 'Error signing up user' });
+    }
 });
 
 // POST existing user/ signin
@@ -102,9 +103,9 @@ router.post('/signin', async (req, res) => {
     const result = await pool.request()
       .input('email', email)
       .query(`
-        SELECT A.UserID, A.UserName, A.Password
-        FROM dbo.Account A
-        WHERE A.UserName = @email
+        SELECT A.UserID, A.Email, A.Password
+        FROM dbo.UserLogin A
+        WHERE A.Email = @email
       `);
 
     if (result.recordset.length === 0) {
@@ -125,7 +126,7 @@ router.post('/signin', async (req, res) => {
       token,
       user: {
         id: user.UserID,
-        email: user.UserName
+        email: user.Email
       }
     });
   } catch (error) {

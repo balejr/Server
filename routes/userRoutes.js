@@ -6,32 +6,7 @@ const bcrypt = require('bcrypt');
 
 const router = express.Router();
 
-// POST user profile/ create Account (linked to existing UserID)
-router.post('/account', async (req, res) => {
-  const { username, password, userId } = req.body;
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 12);
-    const pool = getPool();
-
-    await pool.request()
-      .input('username', username)
-      .input('password', hashedPassword)
-      .input('userId', userId)
-      .input('createDate', new Date())
-      .query(`
-        INSERT INTO dbo.Account (UserName, Password, UserID, CreateDt)
-        VALUES (@username, @password, @userId, @createDate)
-      `);
-
-    res.status(200).json({ message: 'Account created successfully' });
-  } catch (error) {
-    console.error('Create Account Error:', error);
-    res.status(500).json({ message: 'Failed to create account' });
-  }
-});
-
-// GET User Profile
+// GET user profile
 router.get('/profile', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -40,9 +15,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
     const result = await pool.request()
       .input('userId', userId)
       .query(`
-        SELECT Name, EmailAddr, FitnessGoal, Weight, Height, Gender,
-               FitnessLevel, Age, ProfileImageUrl, CreateDate
-        FROM dbo.[User]
+        SELECT FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, ProfileImageUrl
+        FROM dbo.UserProfile
         WHERE UserID = @userId
       `);
 
@@ -52,50 +26,76 @@ router.get('/profile', authenticateToken, async (req, res) => {
 
     res.status(200).json(result.recordset[0]);
   } catch (error) {
-    console.error('Fetch Profile Error:', error);
-    res.status(500).json({ message: 'Failed to fetch user profile' });
+    console.error('Get Profile Error:', error);
+    res.status(500).json({ message: 'Failed to get user profile' });
   }
 });
 
-// EDIT User Profile
+// PATCH update user profile
 router.patch('/profile', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
-    name, emailAddress, fitnessGoal, weight, height,
-    gender, fitnessLevel, age, profileImageURL
+    firstName,
+    lastName,
+    fitnessGoal,
+    age,
+    weight,
+    height,
+    gender,
+    fitnessLevel
   } = req.body;
 
   try {
     const pool = getPool();
     await pool.request()
       .input('userId', userId)
-      .input('name', name)
-      .input('emailAddress', emailAddress)
+      .input('firstName', firstName)
+      .input('lastName', lastName)
       .input('fitnessGoal', fitnessGoal)
+      .input('age', age)
       .input('weight', weight)
       .input('height', height)
       .input('gender', gender)
       .input('fitnessLevel', fitnessLevel)
-      .input('age', age)
-      .input('profileImageURL', profileImageURL)
       .query(`
-        UPDATE dbo.[User]
-        SET Name = @name,
-            EmailAddr = @emailAddress,
+        UPDATE dbo.UserProfile
+        SET FirstName = @firstName,
+            LastName = @lastName,
             FitnessGoal = @fitnessGoal,
+            Age = @age,
             Weight = @weight,
             Height = @height,
             Gender = @gender,
-            FitnessLevel = @fitnessLevel,
-            Age = @age,
-            ProfileImageUrl = @profileImageURL
+            FitnessLevel = @fitnessLevel
         WHERE UserID = @userId
       `);
 
     res.status(200).json({ message: 'Profile updated successfully' });
   } catch (error) {
-    console.error('Update Profile Error:', error);
+    console.error('Profile Update Error:', error);
     res.status(500).json({ message: 'Failed to update profile' });
+  }
+});
+
+// DELETE user profile
+router.delete('/profile', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+
+    await pool.request()
+      .input('userId', userId)
+      .query(`DELETE FROM dbo.UserLogin WHERE UserID = @userId`);
+
+    await pool.request()
+      .input('userId', userId)
+      .query(`DELETE FROM dbo.UserProfile WHERE UserID = @userId`);
+
+    res.status(200).json({ message: 'User profile deleted successfully' });
+  } catch (error) {
+    console.error('Profile Delete Error:', error);
+    res.status(500).json({ message: 'Failed to delete user profile' });
   }
 });
 
