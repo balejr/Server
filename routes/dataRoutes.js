@@ -109,38 +109,102 @@ router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
 // -------------------- EXERCISE EXISTENCE --------------------
 // POST exercise instance
 router.post('/exerciseexistence', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const {
-      exerciseId, reps, sets, difficulty, date, note, rir, rpe,
-      targetMuscle, instructions, completed
-    } = req.body;
+  const userId = req.user.userId;
+  const {
+    exercise, reps, sets, difficulty, date, note, rir, rpe,
+    completed, weight = 0
+  } = req.body;
 
-    try {
-      const pool = getPool();
+  try {
+    const pool = getPool();
+
+    const exerciseId = exercise.id;
+    const targetMuscle = exercise.target;
+    const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
+    const equipment = exercise.equipment;
+
+    // Insert exercise existence and get ID
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('exerciseId', exerciseId)
+      .input('reps', reps)
+      .input('sets', sets)
+      .input('difficulty', difficulty)
+      .input('date', date)
+      .input('note', note)
+      .input('rir', rir)
+      .input('rpe', rpe)
+      .input('targetMuscle', targetMuscle)
+      .input('instructions', instructions)
+      .input('completed', completed)
+      .query(`
+        INSERT INTO dbo.ExerciseExistence
+        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed)
+        OUTPUT INSERTED.ExerciseExistenceID
+        VALUES
+        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed)
+      `);
+
+    const insertedId = result.recordset[0].ExerciseExistenceID;
+    const today = date;
+    const load = reps * sets * weight;
+
+    // Check if routine exists for today
+    const routineQuery = await pool.request()
+      .input('userId', userId)
+      .input('date', today)
+      .query(`SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId AND WorkoutRoutineDate = @date`);
+
+    if (routineQuery.recordset.length > 0) {
+      // Routine exists, update it
+      const routine = routineQuery.recordset[0];
+      const instances = routine.ExerciseInstances ? routine.ExerciseInstances.split(',').map(s => s.trim()) : [];
+      const updatedInstances = [...instances, insertedId].join(',');
+
+      const equipmentList = routine.Equipment ? routine.Equipment.split(',').map(s => s.trim()) : [];
+      const newEquipment = equipmentList.includes(equipment) ? equipmentList : [...equipmentList, equipment];
+
+      const updatedLoad = (routine.Load || 0) + load;
+
+      await pool.request()
+        .input('id', routine.WorkoutRoutineID)
+        .input('instances', updatedInstances)
+        .input('equipment', newEquipment.join(','))
+        .input('load', updatedLoad)
+        .query(`
+          UPDATE dbo.WorkoutRoutine
+          SET ExerciseInstances = @instances,
+              Equipment = @equipment,
+              Load = @load
+          WHERE WorkoutRoutineID = @id
+        `);
+    } else {
+      // Routine doesn't exist, create one
       await pool.request()
         .input('userId', userId)
-        .input('exerciseId', exerciseId)
-        .input('reps', reps)
-        .input('sets', sets)
-        .input('difficulty', difficulty)
-        .input('date', date)
-        .input('note', note)
-        .input('rir', rir)
-        .input('rpe', rpe)
-        .input('targetMuscle', targetMuscle)
-        .input('instructions', instructions)
-        .input('completed', completed)
+        .input('workoutName', targetMuscle)
+        .input('exerciseInstances', insertedId.toString())
+        .input('equipment', equipment)
+        .input('duration', 0)
+        .input('caloriesBurned', 0)
+        .input('intensity', 0)
+        .input('load', load)
+        .input('durationLeft', 0)
+        .input('completed', 0)
+        .input('workoutRoutineDate', today)
         .query(`
-          INSERT INTO dbo.ExerciseExistence
-          (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed)
+          INSERT INTO dbo.WorkoutRoutine
+          (UserID, WorkoutName, ExerciseInstances, Equipment, Duration, CaloriesBurned, Intensity, Load, DurationLeft, Completed, WorkoutRoutineDate)
           VALUES
-          (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed)
+          (@userId, @workoutName, @exerciseInstances, @equipment, @duration, @caloriesBurned, @intensity, @load, @durationLeft, @completed, @workoutRoutineDate)
         `);
-      res.status(200).json({ message: 'Exercise existence added successfully' });
-    } catch (err) {
-      console.error('ExerciseExistence POST Error:', err);
-      res.status(500).json({ message: 'Failed to insert exercise existence' });
     }
+
+    res.status(200).json({ message: 'Exercise existence added successfully', id: insertedId });
+  } catch (err) {
+    console.error('ExerciseExistence POST Error:', err);
+    res.status(500).json({ message: 'Failed to insert exercise existence' });
+  }
 });
 
 // GET exercise instance
@@ -224,15 +288,39 @@ router.patch('/exerciseexistence/:id', authenticateToken, async (req, res) => {
 });
 
 // DELETE an exercise instance
+// DELETE EXERCISE EXISTENCE AND REMOVE FROM ROUTINE
 router.delete('/exerciseexistence/:id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
+
     try {
       const pool = getPool();
+
+      // Remove the existence ID from any linked WorkoutRoutine
+      const routineQuery = await pool.request()
+        .input('id', id)
+        .query(`
+          SELECT WorkoutRoutineID, ExerciseInstances FROM dbo.WorkoutRoutine
+          WHERE ExerciseInstances LIKE '%${id}%'
+        `);
+
+      for (const routine of routineQuery.recordset) {
+        const ids = routine.ExerciseInstances.split(',').map(i => i.trim()).filter(i => i !== id);
+        await pool.request()
+          .input('instances', ids.join(','))
+          .input('routineId', routine.WorkoutRoutineID)
+          .query(`
+            UPDATE dbo.WorkoutRoutine SET ExerciseInstances = @instances WHERE WorkoutRoutineID = @routineId
+          `);
+      }
+
       await pool.request()
         .input('id', id)
         .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
-      res.status(200).json({ message: 'Exercise existence deleted' });
+
+      res.status(200).json({ message: 'Exercise existence deleted and routine updated' });
     } catch (err) {
+      console.error('ExerciseExistence DELETE Error:', err);
       res.status(500).json({ message: 'Failed to delete exercise existence' });
     }
 });
