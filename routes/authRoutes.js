@@ -140,7 +140,7 @@ router.post('/signin', async (req, res) => {
 
 // CHECK EMAIL
 
-app.get('/auth/checkemail', async (req, res) => {
+app.get('/checkemail', async (req, res) => {
   const { email } = req.query;
 
   if (!email) {
