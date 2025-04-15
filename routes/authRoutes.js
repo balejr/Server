@@ -138,4 +138,29 @@ router.post('/signin', async (req, res) => {
   }
 });
 
+// CHECK EMAIL
+
+app.get('/auth/checkemail', async (req, res) => {
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({ message: 'Email query parameter is required' });
+  }
+
+  try {
+    // Replace this with your database query logic
+    const result = await db.query(
+      'SELECT COUNT(*) AS count FROM Users WHERE email = @email',
+      { replacements: { email }, type: db.QueryTypes.SELECT }
+    );
+
+    const exists = result[0].count > 0;
+    return res.json({ exists });
+  } catch (error) {
+    console.error('Error checking email:', error);
+    res.status(500).json({ message: 'Server error while checking email' });
+  }
+});
+
+
 module.exports = router;
