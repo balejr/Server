@@ -140,7 +140,7 @@ router.post('/signin', async (req, res) => {
 
 // CHECK EMAIL
 
-app.get('/checkemail', async (req, res) => {
+router.get('/checkemail', async (req, res) => {
   const { email } = req.query;
 
   if (!email) {
@@ -148,13 +148,13 @@ app.get('/checkemail', async (req, res) => {
   }
 
   try {
-    // Replace this with your database query logic
-    const result = await db.query(
-      'SELECT COUNT(*) AS count FROM Users WHERE email = @email',
-      { replacements: { email }, type: db.QueryTypes.SELECT }
-    );
+    const pool = getPool();
 
-    const exists = result[0].count > 0;
+    const result = await pool.request()
+      .input('email', email)
+      .query('SELECT COUNT(*) AS count FROM dbo.UserLogin WHERE Email = @email');
+
+    const exists = result.recordset[0].count > 0;
     return res.json({ exists });
   } catch (error) {
     console.error('Error checking email:', error);
