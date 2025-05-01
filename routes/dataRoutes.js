@@ -118,29 +118,42 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
 
-    const exerciseId = exercise.id;
+    // const exerciseId = exercise.id;
+    const exerciseName = exercise.name;
     const targetMuscle = exercise.target;
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
 
-    // console.log(exercise);
+      // Check if exercise already exists in dbo.Exercise
+      const checkExercise = await pool.request()
+      .input('name', exerciseName)
+      .query(`SELECT ExerciseID FROM dbo.Exercise WHERE Name = @name`);
 
-    // Insert in main exercise table
-    // const resultExercise = await pool.request()
-    //       .input('exerciseName', exercise)
-    //       .query(`
-    //         INSERT INTO dbo.Exercise (Name)
-    //         OUTPUT INSERTED.ExerciseID
-    //         VALUES (@exerciseName)
-    //       `);
+      let exerciseId;
 
-    // const newExerciseId = resultExercise.recordset[0].ExerciseID;
+      if (checkExercise.recordset.length > 0) {
+        // ✅ Found existing exercise
+        exerciseId = checkExercise.recordset[0].ExerciseID;
+      } else {
+        // 🆕 Insert new exercise
+        const insertExercise = await pool.request()
+          .input('name', exerciseName)
+          .input('targetMuscle', targetMuscle)
+          .input('instructions', instructions)
+          .input('equipment', equipment)
+          .query(`
+            INSERT INTO dbo.Exercise (Name, TargetMuscle, Instructions, Equipment)
+            OUTPUT INSERTED.ExerciseID
+            VALUES (@name, @targetMuscle, @instructions, @equipment)
+          `);
+  
+        exerciseId = insertExercise.recordset[0].ExerciseID;
+      }
 
     // Insert exercise existence and get ID
     const result = await pool.request()
       .input('userId', userId)
-      .input('exerciseId', exerciseId)
-      // .input('exerciseId', newExerciseId) 
+      .input('exerciseId', exerciseId) 
       .input('reps', reps)
       .input('sets', sets)
       .input('difficulty', difficulty)
