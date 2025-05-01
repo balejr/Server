@@ -119,7 +119,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const pool = getPool();
 
     // const exerciseId = exercise.id;
-    const exerciseName = exercise.exercise;
+    const exerciseName = exercise;
     const targetMuscle = exercise.target;
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
