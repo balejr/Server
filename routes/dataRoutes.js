@@ -123,10 +123,22 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
 
+    // Insert in main exercise table
+    const resultExercise = await pool.request()
+          .input('exerciseName', exercise)
+          .query(`
+            INSERT INTO dbo.Exercise (Name)
+            OUTPUT INSERTED.ExerciseID
+            VALUES (@exerciseName)
+          `);
+
+    const newExerciseId = resultExercise.recordset[0].ExerciseID;
+
     // Insert exercise existence and get ID
     const result = await pool.request()
       .input('userId', userId)
-      .input('exerciseId', exerciseId)
+      // .input('exerciseId', exerciseId)
+      .input('exerciseId', newExerciseId) 
       .input('reps', reps)
       .input('sets', sets)
       .input('difficulty', difficulty)
