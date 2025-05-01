@@ -119,23 +119,15 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const pool = getPool();
 
     const exerciseId = exercise.id;
-    // const targetMuscle = exercise.target;
-    // const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
-    // const equipment = exercise.equipment;
-    console.log('Received exercise:', exercise);
+    const targetMuscle = exercise.target;
+    const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
+    const equipment = exercise.equipment;
 
-    const exerciseName = typeof exercise === 'object' ? exercise.name || 'Unnamed' : exercise;
-    const targetMuscle = exercise?.target || '';
-    const instructions = Array.isArray(exercise?.instructions)
-          ? exercise.instructions.join(' ')
-          : exercise?.instructions || '';
-    const equipment = exercise?.equipment || 'None';
+    console.log(exercise);
 
-    
     // Insert in main exercise table
     const resultExercise = await pool.request()
-          // .input('exerciseName', exercise)
-          .input('exerciseName', exerciseName)
+          .input('exerciseName', exercise)
           .query(`
             INSERT INTO dbo.Exercise (Name)
             OUTPUT INSERTED.ExerciseID
