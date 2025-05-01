@@ -127,7 +127,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       // Check if exercise already exists in dbo.Exercise
       const checkExercise = await pool.request()
       .input('name', exerciseName)
-      .query(`SELECT ExerciseID FROM dbo.Exercise WHERE Name = @name`);
+      .query(`SELECT ExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
 
       let exerciseId;
 
@@ -142,7 +142,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
           .input('instructions', instructions)
           .input('equipment', equipment)
           .query(`
-            INSERT INTO dbo.Exercise (Name, TargetMuscle, Instructions, Equipment)
+            INSERT INTO dbo.Exercise (ExerciseName, TargetMuscle, Instructions, Equipment)
             OUTPUT INSERTED.ExerciseID
             VALUES (@name, @targetMuscle, @instructions, @equipment)
           `);
