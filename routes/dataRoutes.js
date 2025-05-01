@@ -138,13 +138,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         // 🆕 Insert new exercise
         const insertExercise = await pool.request()
           .input('name', exerciseName)
-          // .input('targetMuscle', targetMuscle)
-          // .input('instructions', instructions)
-          // .input('equipment', equipment)
+          .input('targetMuscle', targetMuscle)
+          .input('instructions', instructions)
+          .input('equipment', equipment)
           .query(`
-            INSERT INTO dbo.Exercise (ExerciseName)
+            INSERT INTO dbo.Exercise (Name, TargetMuscle, Instructions, Equipment)
             OUTPUT INSERTED.ExerciseID
-            VALUES (@name)
+            VALUES (@name, @targetMuscle, @instructions, @equipment)
           `);
   
         exerciseId = insertExercise.recordset[0].ExerciseID;
@@ -154,7 +154,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const result = await pool.request()
       .input('userId', userId)
       .input('exerciseId', exerciseId) 
-      .input('reps', reps)
+       .input('reps', reps)
       .input('sets', sets)
       .input('difficulty', difficulty)
       .input('date', date)
