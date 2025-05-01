@@ -122,10 +122,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const targetMuscle = exercise.target;
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
+    const exerciseName = exercise.name || exercise.exerciseName || exercise;
+
 
     // Insert in main exercise table
     const resultExercise = await pool.request()
-          .input('exerciseName', exercise)
+          // .input('exerciseName', exercise)
+          .input('exerciseName', exerciseName)
           .query(`
             INSERT INTO dbo.Exercise (Name)
             OUTPUT INSERTED.ExerciseID
