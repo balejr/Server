@@ -112,7 +112,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
     exercise, reps, sets, difficulty, date, note, rir, rpe, status,
-    completed, weight = 0
+    completed, weight
   } = req.body;
 
   try {
@@ -165,12 +165,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       .input('instructions', instructions)
       .input('completed', completed)
       .input('status', status)
+      .input('weight', weight)
       .query(`
         INSERT INTO dbo.ExerciseExistence
-        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed, Status)
+        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed, Status, Weight)
         OUTPUT INSERTED.ExerciseExistenceID
         VALUES
-        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status)
+        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status, @weight)
       `);
 
     const insertedId = result.recordset[0].ExerciseExistenceID;
