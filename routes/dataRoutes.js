@@ -287,7 +287,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
       const result = await pool.request()
         .input('userId', userId)
         .input('date', date)
-        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId AND Date = @date');
+        .query('SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId WHERE ee.UserID = @userId AND ee.Date = @date');
       res.status(200).json(result.recordset);
     } catch (err) {
       res.status(500).json({ message: 'Failed to fetch by user and date' });
