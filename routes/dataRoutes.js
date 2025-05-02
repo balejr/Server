@@ -111,7 +111,7 @@ router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
 router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
-    exercise, reps, sets, difficulty, date, note, rir, rpe,
+    exercise, reps, sets, difficulty, date, note, rir, rpe, status,
     completed, weight = 0
   } = req.body;
 
@@ -164,12 +164,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       .input('targetMuscle', targetMuscle)
       .input('instructions', instructions)
       .input('completed', completed)
+      .input('status', status)
       .query(`
         INSERT INTO dbo.ExerciseExistence
-        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed)
+        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed, Status)
         OUTPUT INSERTED.ExerciseExistenceID
         VALUES
-        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed)
+        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status)
       `);
 
     const insertedId = result.recordset[0].ExerciseExistenceID;
