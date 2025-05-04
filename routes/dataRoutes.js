@@ -110,77 +110,103 @@ router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
 // POST exercise instance
 router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
-  const {
-    exercise, reps, sets, difficulty, date, note, rir, rpe, status,
-    completed, weight
-  } = req.body;
+  // const {
+  //   exercise, reps, sets, difficulty, date, note, rir, rpe, status,
+  //   completed, weight
+  // } = req.body;
+  const { exerciseList } = req.body;  
+
+  if (!Array.isArray(exerciseList) || exerciseList.length === 0) {
+    return res.status(400).json({ message: 'No exercises provided' });
+  }
+
+  const pool = getPool();
+  const insertedIds = [];
 
   try {
-    const pool = getPool();
-
+    // const pool = getPool();
     // const exerciseId = exercise.id;
-    const exerciseName = exercise;
-    const sourceexerciseId = exercise.id;
-    const targetMuscle = exercise.target;
-    const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
-    const equipment = exercise.equipment;
+    for (const item of exerciseList) {
+      const {
+        exercise,
+        reps,
+        sets,
+        difficulty,
+        date,
+        note = '',
+        rir = 0,
+        rpe = 0,
+        status = 'Not started',
+        completed = 0,
+        weight = 0
+      } = item;
 
-    console.log (exercise);
+    // const exerciseName = exercise;
+    // const sourceexerciseId = exercise.id;
+    // const targetMuscle = exercise.target;
+    // const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
+    // const equipment = exercise.equipment;
 
-      // Check if exercise already exists in dbo.Exercise
-      const checkExercise = await pool.request()
+    const exerciseName = exercise.name || exercise;
+    const sourceExerciseId = exercise.id;
+    const targetMuscle = exercise.target || '';
+    const instructions = Array.isArray(exercise.instructions)
+        ? exercise.instructions.join(' ')
+        : exercise.instructions || '';
+    const equipment = exercise.equipment || '';
+
+     // Check or insert exercise in dbo.Exercise
+     const checkExercise = await pool.request()
+     .input('name', exerciseName)
+     .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
+
+   let MasterExerciseId;
+
+   if (checkExercise.recordset.length > 0) {
+    MasterExerciseId = checkExercise.recordset[0].MasterExerciseID;
+  } else {
+    const insertExercise = await pool.request()
       .input('name', exerciseName)
-      .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
-
-      let MasterExerciseId;
-
-      if (checkExercise.recordset.length > 0) {
-        // ✅ Found existing exercise
-        MasterExerciseId = checkExercise.recordset[0].MasterExerciseId;
-      } else {
-        // 🆕 Insert new exercise
-        const insertExercise = await pool.request()
-          .input('name', exerciseName)
-          .input('exerciseId', sourceexerciseId)
-          .input('targetMuscle', targetMuscle)
-          .input('instructions', instructions)
-          .input('equipment', equipment)
-          .query(`
-            INSERT INTO dbo.Exercise (ExerciseName, TargetMuscle, Instructions, Equipment)
-            OUTPUT INSERTED.MasterExerciseID
-            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
-          `);
-  
-        MasterExerciseId = insertExercise.recordset[0].MasterExerciseId;
-      }
-
-    // Insert exercise existence and get ID
-    const result = await pool.request()
-      .input('userId', userId)
-      .input('exerciseId', sourceexerciseId) 
-      .input('reps', reps)
-      .input('sets', sets)
-      .input('difficulty', difficulty)
-      .input('date', date)
-      .input('note', note)
-      .input('rir', rir)
-      .input('rpe', rpe)
       .input('targetMuscle', targetMuscle)
       .input('instructions', instructions)
-      .input('completed', completed)
-      .input('status', status)
-      .input('weight', weight)
+      .input('equipment', equipment)
       .query(`
-        INSERT INTO dbo.ExerciseExistence
-        (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed, Status, Weight)
-        OUTPUT INSERTED.ExerciseExistenceID
-        VALUES
-        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status, @weight)
+        INSERT INTO dbo.Exercise (ExerciseName, TargetMuscle, Instructions, Equipment)
+        OUTPUT INSERTED.MasterExerciseID
+        VALUES (@name, @targetMuscle, @instructions, @equipment)
       `);
 
-    const insertedId = result.recordset[0].ExerciseExistenceID;
-    const today = date;
-    const load = reps * sets * weight;
+    MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
+  }
+
+     // Insert into dbo.ExerciseExistence
+     const result = await pool.request()
+     .input('userId', userId)
+     .input('exerciseId', sourceExerciseId)
+     .input('reps', reps)
+     .input('sets', sets)
+     .input('difficulty', difficulty)
+     .input('date', date)
+     .input('note', note)
+     .input('rir', rir)
+     .input('rpe', rpe)
+     .input('targetMuscle', targetMuscle)
+     .input('instructions', instructions)
+     .input('completed', completed)
+     .input('status', status)
+     .input('weight', weight)
+     .query(`
+       INSERT INTO dbo.ExerciseExistence
+       (UserID, ExerciseID, Reps, Sets, Difficulty, Date, Note, RIR, RPE, TargetMuscle, Instructions, Completed, Status, Weight)
+       OUTPUT INSERTED.ExerciseExistenceID
+       VALUES
+       (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status, @weight)
+     `);
+
+   insertedIds.push(result.recordset[0].ExerciseExistenceID);
+   const load = reps * sets * weight;
+   const today = date;
+  }
 
     // Check if routine exists for today
     const routineQuery = await pool.request()
