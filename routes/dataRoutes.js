@@ -128,13 +128,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       // Check if exercise already exists in dbo.Exercise
       const checkExercise = await pool.request()
       .input('name', exerciseName)
-      .query(`SELECT ExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
+      .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
 
-      let exerciseId;
+      let MasterexerciseId;
 
       if (checkExercise.recordset.length > 0) {
         // ✅ Found existing exercise
-        exerciseId = checkExercise.recordset[0].ExerciseID;
+        MasterexerciseId = checkExercise.recordset[0].MasterexerciseId;
       } else {
         // 🆕 Insert new exercise
         const insertExercise = await pool.request()
@@ -149,14 +149,14 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
           `);
   
-        exerciseId = insertExercise.recordset[0].ExerciseID;
+        MasterexerciseId = insertExercise.recordset[0].MasterexerciseId;
       }
 
     // Insert exercise existence and get ID
     const result = await pool.request()
       .input('userId', userId)
       .input('exerciseId', sourceexerciseId) 
-       .input('reps', reps)
+      .input('reps', reps)
       .input('sets', sets)
       .input('difficulty', difficulty)
       .input('date', date)
