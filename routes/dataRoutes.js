@@ -122,6 +122,10 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
   const pool = getPool();
   const insertedIds = [];
+  let totalLoad = 0;
+  let allEquipment = new Set();
+  let today = null;
+  let targetMuscle = '';
 
   try {
     // const pool = getPool();
@@ -133,12 +137,12 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         sets,
         difficulty,
         date,
-        note = '',
-        rir = 0,
+        // note = '',
+        // rir = 0,
         rpe = 0,
-        status = 'Not started',
-        completed = 0,
-        weight = 0
+        // status = 'Not started',
+        // completed = 0,
+         weight = 0
       } = item;
 
     // const exerciseName = exercise;
@@ -147,13 +151,17 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     // const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     // const equipment = exercise.equipment;
 
-    const exerciseName = exercise.name || exercise;
-    const sourceExerciseId = exercise.id;
-    const targetMuscle = exercise.target || '';
-    const instructions = Array.isArray(exercise.instructions)
+    const exerciseName = exercise.exerciseName || exercise.name || exercise;
+      const sourceExerciseId = exercise.id;
+      const target = exercise.target || '';
+      const instructions = Array.isArray(exercise.instructions)
         ? exercise.instructions.join(' ')
         : exercise.instructions || '';
-    const equipment = exercise.equipment || '';
+      const equipment = exercise.equipment || '';
+
+      targetMuscle = targetMuscle || target; // Set for routine insert
+      allEquipment.add(equipment);
+      today = today || date;
 
      // Check or insert exercise in dbo.Exercise
      const checkExercise = await pool.request()
@@ -203,9 +211,13 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
        (@userId, @exerciseId, @reps, @sets, @difficulty, @date, @note, @rir, @rpe, @targetMuscle, @instructions, @completed, @status, @weight)
      `);
 
-   insertedIds.push(result.recordset[0].ExerciseExistenceID);
-   const load = reps * sets * weight;
-   const today = date;
+  //  insertedIds.push(result.recordset[0].ExerciseExistenceID);
+  //  const load = reps * sets * weight;
+  //  const today = date;
+
+   const insertedId = result.recordset[0].ExerciseExistenceID;
+   insertedIds.push(insertedId);
+   totalLoad += (reps * sets * weight);
   }
 
     // Check if routine exists for today
