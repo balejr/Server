@@ -125,16 +125,18 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
 
+    console.log (exercise);
+
       // Check if exercise already exists in dbo.Exercise
       const checkExercise = await pool.request()
       .input('name', exerciseName)
       .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
 
-      let MasterexerciseId;
+      let MasterExerciseId;
 
       if (checkExercise.recordset.length > 0) {
         // ✅ Found existing exercise
-        MasterexerciseId = checkExercise.recordset[0].MasterexerciseId;
+        MasterExerciseId = checkExercise.recordset[0].MasterExerciseId;
       } else {
         // 🆕 Insert new exercise
         const insertExercise = await pool.request()
@@ -149,7 +151,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
           `);
   
-        MasterexerciseId = insertExercise.recordset[0].MasterexerciseId;
+        MasterExerciseId = insertExercise.recordset[0].MasterExerciseId;
       }
 
     // Insert exercise existence and get ID
