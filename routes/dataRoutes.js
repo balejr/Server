@@ -120,6 +120,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
     // const exerciseId = exercise.id;
     const exerciseName = exercise;
+    const sourceexerciseId = exercise.id;
     const targetMuscle = exercise.target;
     const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     const equipment = exercise.equipment;
@@ -138,13 +139,14 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         // 🆕 Insert new exercise
         const insertExercise = await pool.request()
           .input('name', exerciseName)
+          .input('exerciseId', sourceexerciseId)
           .input('targetMuscle', targetMuscle)
           .input('instructions', instructions)
           .input('equipment', equipment)
           .query(`
             INSERT INTO dbo.Exercise (ExerciseName, TargetMuscle, Instructions, Equipment)
-            OUTPUT INSERTED.ExerciseID
-            VALUES (@name, @targetMuscle, @instructions, @equipment)
+            OUTPUT INSERTED.MasterExerciseID
+            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
           `);
   
         exerciseId = insertExercise.recordset[0].ExerciseID;
@@ -153,7 +155,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     // Insert exercise existence and get ID
     const result = await pool.request()
       .input('userId', userId)
-      .input('exerciseId', exerciseId) 
+      .input('exerciseId', sourceexerciseId) 
        .input('reps', reps)
       .input('sets', sets)
       .input('difficulty', difficulty)
