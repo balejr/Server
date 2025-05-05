@@ -298,7 +298,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     res.status(200).json({ message: 'Exercise existence added successfully', id: insertedId });
   } catch (err) {
     console.error('ExerciseExistence POST Error:', err);
-    res.status(500).json({ message: 'Failed to insert exercise existence' });
+    console.error('Error details:', err.stack); // Add this
+    res.status(500).json({ message: 'Failed to insert exercise existence', error: err.message });
+    // res.status(500).json({ message: 'Failed to insert exercise existence' });
   }
 });
 
