@@ -163,7 +163,6 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       allEquipment.add(equipment);
       today = today || date;
 
-      console.log('Resolved MasterExerciseId:', MasterExerciseId);
       console.log('Using SourceExerciseId:', sourceExerciseId);
 
      // Check or insert exercise in dbo.Exercise
@@ -188,6 +187,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       `);
 
     MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
+
+    console.log('Resolved MasterExerciseId:', MasterExerciseId);
+
   }
 
   console.log('Attempting to insert ExerciseExistence with:', {
@@ -255,13 +257,15 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       const equipmentList = routine.Equipment ? routine.Equipment.split(',').map(s => s.trim()) : [];
       const newEquipment = equipmentList.includes(equipment) ? equipmentList : [...equipmentList, equipment];
 
-      const updatedLoad = (routine.Load || 0) + load;
+      // const updatedLoad = (routine.Load || 0) + load;
+      const updatedLoad = (routine.Load || 0) + totalLoad;
 
       await pool.request()
         .input('id', routine.WorkoutRoutineID)
         .input('instances', updatedInstances)
         .input('equipment', newEquipment.join(','))
-        .input('load', updatedLoad)
+        // .input('load', updatedLoad)
+        .input('load', totalLoad)
         .query(`
           UPDATE dbo.WorkoutRoutine
           SET ExerciseInstances = @instances,
