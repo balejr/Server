@@ -163,6 +163,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       allEquipment.add(equipment);
       today = today || date;
 
+      console.log('Resolved MasterExerciseId:', MasterExerciseId);
+      console.log('Using SourceExerciseId:', sourceExerciseId);
+
      // Check or insert exercise in dbo.Exercise
      const checkExercise = await pool.request()
      .input('name', exerciseName)
@@ -187,6 +190,23 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
   }
 
+  console.log('Attempting to insert ExerciseExistence with:', {
+    userId,
+    exerciseId: sourceExerciseId,
+    reps,
+    sets,
+    difficulty,
+    date,
+    note,
+    rir,
+    rpe,
+    targetMuscle,
+    instructions,
+    completed,
+    status,
+    weight
+  });
+  
      // Insert into dbo.ExerciseExistence
      const result = await pool.request()
      .input('userId', userId)
