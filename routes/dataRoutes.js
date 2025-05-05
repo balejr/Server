@@ -137,12 +137,12 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         sets,
         difficulty,
         date,
-        // note = '',
-        // rir = 0,
+        note = '',
+        rir = 0,
         rpe = 0,
-        // status = 'Not started',
-        // completed = 0,
-         weight = 0
+        status = 'Not started',
+        completed = 0,
+        weight = 0
       } = item;
 
     // const exerciseName = exercise;
