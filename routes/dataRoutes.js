@@ -177,6 +177,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   } else {
     const insertExercise = await pool.request()
       .input('name', exerciseName)
+      .input('exerciseId', sourceExerciseId)
       .input('targetMuscle', targetMuscle)
       .input('instructions', instructions)
       .input('equipment', equipment)
