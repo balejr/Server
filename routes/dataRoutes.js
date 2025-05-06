@@ -151,7 +151,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
     // const instructions = Array.isArray(exercise.instructions) ? exercise.instructions.join(' ') : exercise.instructions;
     // const equipment = exercise.equipment;
 
-    const exerciseName = exercise.exerciseName || exercise.name || exercise;
+    const exerciseName = exercise.exerciseName || exercise.name;
       const sourceExerciseId = exercise.id;
       const target = exercise.target || '';
       const instructions = Array.isArray(exercise.instructions)
@@ -182,9 +182,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       .input('instructions', instructions)
       .input('equipment', equipment)
       .query(`
-        INSERT INTO dbo.Exercise (ExerciseName, TargetMuscle, Instructions, Equipment)
+        INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment)
         OUTPUT INSERTED.MasterExerciseID
-        VALUES (@name, @targetMuscle, @instructions, @equipment)
+        VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
       `);
 
     MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
