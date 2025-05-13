@@ -303,7 +303,19 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
       const result = await pool.request()
         .input('userId', userId)
         .input('date', date)
-        .query('SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId WHERE ee.UserID = @userId AND CONVERT(date, ee.Date) = @date');
+        .query(`SELECT ee.ExerciseExistenceID, e.ExerciseName, ee.ExerciseId, ee.Reps, ee.UserId 
+              , ee.Sets, ee.difficulty, ee.Note, ee.RIR, ee.RPE, ee.Status, ee.Weight, ee.TargetMuscle, ee.Instructions, ee.completed 
+              FROM dbo.ExerciseExistence ee
+              INNER JOIN (SELECT UserId, MAX([Date]) as [Date] 
+                  FROM dbo.ExerciseExistence 
+                  WHERE UserID = @userid
+                  AND CONVERT(date, [Date]) = @date
+                  GROUP BY UserId) eex
+              ON ee.UserId = eex.UserId
+              AND ee.[Date] = eex.[Date]
+              LEFT JOIN dbo.[Exercise] e 
+              ON ee.ExerciseId = e.ExerciseId `)
+        // .query('SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId WHERE ee.UserID = @userId AND CONVERT(date, ee.Date) = @date');
       res.status(200).json(result.recordset);
     } catch (err) {
       res.status(500).json({ message: 'Failed to fetch by user and date' });
