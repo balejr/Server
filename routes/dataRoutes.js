@@ -303,8 +303,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
       const result = await pool.request()
         .input('userId', userId)
         .input('date', date)
-        .query(`SELECT ee.ExerciseExistenceID, e.ExerciseName, ee.ExerciseId, ee.Reps, ee.UserId 
-              , ee.Sets, ee.difficulty, ee.Note, ee.RIR, ee.RPE, ee.Status, ee.Weight, ee.TargetMuscle, ee.Instructions, ee.completed 
+        .query(`SELECT ee.*, e.ExerciseName 
               FROM dbo.ExerciseExistence ee
               INNER JOIN (SELECT UserId, MAX([Date]) as [Date] 
                   FROM dbo.ExerciseExistence 
