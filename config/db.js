@@ -28,6 +28,13 @@ const connectToDatabase = async () => {
   }
 };
 
-const getPool = () => pool;
+// const getPool = () => pool;
+
+const getPool = () => {
+  if (!pool) {
+    console.error('DB pool not initialized. Did you call connectToDatabase()?');
+  }
+  return pool;
+};
 
 module.exports = { connectToDatabase, getPool };

@@ -3,6 +3,7 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const { getPool } = require('../config/db');
 const { generateToken } = require('../utils/token');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -162,5 +163,129 @@ router.get('/checkemail', async (req, res) => {
   }
 });
 
+// POST existing user/ forgot-password
+// ✅ FORGOT PASSWORD (store code in DB using UserID)
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  const pool = getPool();
+
+  try {
+    // Get latest UserID for the email
+    const userResult = await pool.request()
+      .input('email', email)
+      .query(`
+        SELECT TOP 1 UserID
+        FROM dbo.UserLogin
+        WHERE Email = @email
+        ORDER BY UserID DESC
+      `);
+
+    if (userResult.recordset.length === 0) {
+      return res.status(200).json({ message: 'If an account exists, a reset code has been sent.' });
+    }
+
+    const userId = userResult.recordset[0].UserID;
+
+    // Delete any previous unused code for this user
+    await pool.request()
+      .input('userId', userId)
+      .query(`DELETE FROM dbo.PasswordResets WHERE UserID = @userId AND Used = 0`);
+
+    // Generate 6-digit code and expiration timestamp
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+    const lastModified = new Date();
+
+    // Insert into PasswordResets table
+    await pool.request()
+      .input('userId', userId)
+      .input('code', code)
+      .input('expiresAt', expiresAt)
+      .input('lastModified', lastModified)
+      .query(`
+        INSERT INTO dbo.PasswordResets (UserID, Code, ExpiresAt, LastModified, Used)
+        VALUES (@userId, @code, @expiresAt, @lastModified, 0)
+      `);
+
+    await sendPasswordResetEmail(email, code);
+
+    res.status(200).json({ message: 'If an account exists, a reset code has been sent.' });
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    res.status(500).json({ message: 'Something went wrong while sending reset code.' });
+  }
+});
+
+// ✅ RESET PASSWORD (validate code from DB using UserID)
+router.post('/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  const pool = getPool();
+
+  try {
+    // Get latest UserID for the email
+    const userResult = await pool.request()
+      .input('email', email)
+      .query(`
+        SELECT TOP 1 UserID
+        FROM dbo.UserLogin
+        WHERE Email = @email
+        ORDER BY UserID DESC
+      `);
+
+    if (userResult.recordset.length === 0) {
+      return res.status(400).json({ message: 'Invalid reset attempt' });
+    }
+
+    const userId = userResult.recordset[0].UserID;
+
+    // Remove expired codes
+    await pool.request()
+      .query(`DELETE FROM dbo.PasswordResets WHERE ExpiresAt < GETDATE()`);
+
+    // Look up active code
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('code', code)
+      .query(`
+        SELECT *
+        FROM dbo.PasswordResets
+        WHERE UserID = @userId AND Code = @code AND Used = 0
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired reset code' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    await pool.request()
+      .input('email', email)
+      .input('password', hashedPassword)
+      .query(`
+        UPDATE dbo.UserLogin
+        SET Password = @password
+        WHERE UserID = (
+          SELECT MAX(UserID)
+          FROM dbo.UserLogin
+          WHERE Email = @email
+        )
+      `);
+
+    // ✅ Mark code as used instead of deleting it
+    await pool.request()
+      .input('userId', userId)
+      .input('code', code)
+      .query(`
+        UPDATE dbo.PasswordResets
+        SET Used = 1
+        WHERE UserID = @userId AND Code = @code
+      `);
+
+    res.status(200).json({ message: 'Password reset successful!' });
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    res.status(500).json({ message: 'Something went wrong while resetting password.' });
+  }
+});
 
 module.exports = router;
