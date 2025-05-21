@@ -1,7 +1,9 @@
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: process.env.EMAIL_HOST,      // e.g., "smtp.gmail.com", "smtp.office365.com", etc.
+  port: parseInt(process.env.EMAIL_PORT) || 587, // 587 for TLS, 465 for SSL
+  secure: process.env.EMAIL_SECURE === 'true',  // true for port 465, false for 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -10,7 +12,7 @@ const transporter = nodemailer.createTransport({
 
 async function sendPasswordResetEmail(email, code) {
   const mailOptions = {
-    from: '"ApogeeFit Support" <support@hpapogee.com>',
+    from: `"ApogeeFit Support" <${process.env.EMAIL_USER}>`,
     to: email,
     subject: 'Your ApogeeFit Reset Code',
     html: `
@@ -31,4 +33,3 @@ async function sendPasswordResetEmail(email, code) {
 }
 
 module.exports = { sendPasswordResetEmail };
-
