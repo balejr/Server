@@ -303,7 +303,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
       const result = await pool.request()
         .input('userId', userId)
         .input('date', date)
-        .query(`SELECT ex.* 
+        .query(`SELECT ex.* , e.ExerciseName
                 FROM dbo.ExerciseExistence ex
                 INNER JOIN 
                 (
@@ -311,7 +311,8 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
                 FROM dbo.ExerciseExistence ee
                 INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
                     FROM dbo.ExerciseExistence 
-                    WHERE UserID = @userId
+                    WHERE UserID = '37'
+                    AND CONVERT(date, [Date]) = '2025-05-26'
                     GROUP BY UserId) eex
                 ON ee.UserId = eex.UserId
                 AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
@@ -319,7 +320,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
                 ) ey
                 on ex.ExerciseExistenceID = ey.ExerciseExistenceID
                 LEFT JOIN dbo.[Exercise] e 
-                ON ex.ExerciseId = e.ExerciseId `)
+                ON ex.ExerciseId = e.ExerciseId`)
         // .query('SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId WHERE ee.UserID = @userId AND CONVERT(date, ee.Date) = @date');
       res.status(200).json(result.recordset);
     } catch (err) {
