@@ -312,7 +312,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
                 INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
                     FROM dbo.ExerciseExistence 
                     WHERE UserID = '37'
-                    AND CONVERT(date, [Date]) = '2025-05-26'
+                    AND CONVERT(date, [Date]) = @date
                     GROUP BY UserId) eex
                 ON ee.UserId = eex.UserId
                 AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
