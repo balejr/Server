@@ -600,11 +600,13 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 // -------------------- MICROCYCLES --------------------
 // POST a microcycle
 router.post('/microcycle', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
     const { mesocycle_id, week_number, start_date, end_date, is_current, created_at } = req.body;
 
     try {
       const pool = getPool();
       await pool.request()
+        .input('userId', userId)
         .input('mesocycle_id', mesocycle_id)
         .input('week_number', week_number)
         .input('start_date', start_date)
@@ -612,8 +614,8 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
         .input('is_current', is_current)
         .input('created_at', created_at)
         .query(`
-          INSERT INTO dbo.Microcycles (mesocycle_id, week_number, start_date, end_date, is_current, created_at)
-          VALUES (@mesocycle_id, @week_number, @start_date, @end_date, @is_current, @created_at)
+          INSERT INTO dbo.Microcycles (mesocycle_id, week_number, start_date, end_date, is_current, created_at, UserID)
+          VALUES (@mesocycle_id, @week_number, @start_date, @end_date, @is_current, @created_at, @userId)
         `);
       res.status(200).json({ message: 'Microcycle added successfully' });
     } catch (err) {
