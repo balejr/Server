@@ -602,14 +602,14 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 
 router.post('/microcycle', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
-    const { mesocycle_id, week_number, start_date, end_date, is_current, created_at } = req.body;
+    const { mesocycle_id, start_date, end_date, is_current, created_at } = req.body;
 
     try {
       const pool = getPool();
       await pool.request()
         .input('userId', userId)
         .input('mesocycle_id', mesocycle_id)
-        .input('week_number', week_number)
+        // .input('week_number', week_number)
         .input('start_date', start_date)
         .input('end_date', end_date)
         .input('is_current', is_current)
