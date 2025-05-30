@@ -599,6 +599,7 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 
 // -------------------- MICROCYCLES --------------------
 // POST a microcycle
+
 router.post('/microcycle', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { mesocycle_id, week_number, start_date, end_date, is_current, created_at } = req.body;
@@ -619,7 +620,7 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
         `);
       res.status(200).json({ message: 'Microcycle added successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to insert microcycle' });
+      res.status(500).json({ message: 'Failed to insert microcycle' , err});
     }
 });
 
