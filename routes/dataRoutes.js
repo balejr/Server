@@ -614,7 +614,7 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
         .input('is_current', is_current)
         .input('created_at', created_at)
         .query(`
-          INSERT INTO dbo.Microcycles (mesocycle_id, week_number, start_date, end_date, is_current, created_at, UserID)
+          INSERT INTO dbo.Microcycles (mesocycle_id, week_number, start_date, end_date, is_current, created_at, userID)
           VALUES (@mesocycle_id, @week_number, @start_date, @end_date, @is_current, @created_at, @userId)
         `);
       res.status(200).json({ message: 'Microcycle added successfully' });
