@@ -619,7 +619,7 @@ router.get('/mesocycle/date', authenticateToken, async (req, res) => {
       `);
     res.json(result.recordset);
   } catch (error) {
-    console.error('Error fetching mesocycles by dates:', error);
+    console.error('Error fetching mesocycles by dates:', error.message, error.stack);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
