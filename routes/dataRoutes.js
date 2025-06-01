@@ -557,7 +557,7 @@ router.get('/mesocycles', authenticateToken, async (req, res) => {
       const pool = getPool();
       const result = await pool.request()
         .input('userId', userId)
-        .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId');
+        .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId and is_current = 1');
       res.status(200).json(result.recordset);
     } catch (err) {
       res.status(500).json({ message: 'Failed to fetch mesocycles' });
