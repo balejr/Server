@@ -311,7 +311,7 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
                 FROM dbo.ExerciseExistence ee
                 INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
                     FROM dbo.ExerciseExistence 
-                    WHERE UserID = '37'
+                    WHERE UserID = @userId
                     AND CONVERT(date, [Date]) = @date
                     GROUP BY UserId) eex
                 ON ee.UserId = eex.UserId
@@ -594,6 +594,33 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
     res.status(200).json({ message: 'Mesocycle deleted successfully' });
   } catch (err) {
     res.status(500).json({ message: 'Failed to delete mesocycle' });
+  }
+});
+
+// GET /mesocycles/by-dates?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+router.get('/mesocycle/by-dates', async (req, res) => {
+  const { start_date, end_date } = req.query;
+  const userId = req.user.userId;
+
+  if (!start_date || !end_date) {
+    return res.status(400).json({ error: 'Missing start_date or end_date' });
+  }
+
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('userId', userId)
+      .input('start_date', sql.Date, start_date)
+      .input('end_date', sql.Date, end_date)
+      .query(`
+        SELECT * FROM Mesocycles
+        WHERE start_date >= @start_date AND end_date <= @end_date
+        AND UserId = @userId
+      `);
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('Error fetching mesocycles by dates:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
