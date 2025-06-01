@@ -600,7 +600,7 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 // GET /mesocycles/by-dates?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 router.get('/mesocycle/date', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
-  const { start_date, end_date } = req.query;
+  const { start_date, end_date } = req.query; // ✅ Use query, not params
 
   if (!start_date || !end_date) {
     return res.status(400).json({ error: 'Missing start_date or end_date' });
@@ -608,21 +608,23 @@ router.get('/mesocycle/date', authenticateToken, async (req, res) => {
 
   try {
     const pool = getPool();
-    await pool.request()
+    const result = await pool.request()
       .input('userId', userId)
-      .input('start_date', sql.Date, start_date)
-      .input('end_date', sql.Date, end_date)
+      .input('start_date', start_date)
+      .input('end_date', end_date)
       .query(`
         SELECT * FROM Mesocycles
         WHERE start_date >= @start_date AND end_date <= @end_date
         AND UserId = @userId
       `);
+
     res.json(result.recordset);
   } catch (error) {
-    console.error('Error fetching mesocycles by dates:', error.message, error.stack);
+    console.error('Error fetching mesocycles by dates:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
 
 // -------------------- MICROCYCLES --------------------
 // POST a microcycle
