@@ -1,8 +1,33 @@
 cd /home/site// routes/dataRoutes.js
 const express = require('express');
+// const axios = require('axios');
 const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const router = express.Router();
+
+// GET EXERCISES
+// GET exercises from external API (proxy)
+router.get('/exercises', authenticateToken, async (req, res) => {
+  try {
+    const response = await axios.get('https://exercisedb.p.rapidapi.com/exercises?limit=1000&offset=0', {
+      headers: {
+        'X-RapidAPI-Key': process.env.RAPID_API_KEY,
+        'X-RapidAPI-Host': process.env.RAPID_API_HOST,
+      },
+    });
+
+    // Optionally shape the data
+    const exerciseList = response.data.map(item => ({
+      id: item.id,
+      name: item.name,
+    }));
+
+    res.status(200).json(exerciseList);
+  } catch (error) {
+    console.error('Failed to fetch exercises:', error);
+    res.status(500).json({ message: 'Failed to fetch exercises' });
+  }
+});
 
 // -------------------- DAILY LOGS --------------------
 // POST daily Log
