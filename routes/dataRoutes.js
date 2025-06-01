@@ -598,9 +598,9 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 });
 
 // GET /mesocycles/by-dates?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
-router.get('/mesocycle/by-dates', async (req, res) => {
-  const { start_date, end_date } = req.query;
+router.get('/mesocycle/date/:date', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
+  const { start_date, end_date } = req.params;
 
   if (!start_date || !end_date) {
     return res.status(400).json({ error: 'Missing start_date or end_date' });
