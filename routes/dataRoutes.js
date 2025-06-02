@@ -579,6 +579,7 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
         `);
       res.status(200).json({ message: 'Mesocycle added successfully' });
     } catch (err) {
+      console.error('Server error inserting mesocycle:', err); 
       res.status(500).json({ message: 'Failed to insert mesocycle' });
     }
 });
