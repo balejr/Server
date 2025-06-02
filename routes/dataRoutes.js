@@ -641,6 +641,7 @@ router.get('/mesocycle/date', authenticateToken, async (req, res) => {
         SELECT * FROM Mesocycles
         WHERE start_date >= @start_date AND end_date <= @end_date
         AND UserId = @userId
+        AND is_current = 1
       `);
 
     res.json(result.recordset);
