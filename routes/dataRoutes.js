@@ -623,7 +623,7 @@ router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
 });
 
 // GET /mesocycles/by-dates?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
-router.get('/mesocycle/date', authenticateToken, async (req, res) => {
+router.get('/mesocycles/date', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { start_date, end_date } = req.query; // ✅ Use query, not params
 
