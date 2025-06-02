@@ -561,7 +561,7 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
       const pool = getPool();
       // Step 1: Set all existing mesocycles for this user to is_current = 0
     await pool.request()
-        .input('userId', sql.Int, userId)
+        .input('userId', userId)
         .query(`
           UPDATE Mesocycles
           SET is_current = 0
