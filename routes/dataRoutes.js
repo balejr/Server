@@ -56,7 +56,7 @@ router.post('/dailylog', authenticateToken, async (req, res) => {
           INSERT INTO dbo.DailyLogs 
           (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, StepsQuality, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
           VALUES 
-          (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @stepsQuality, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
+           (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @stepsQuality, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
         `);
       res.status(200).json({ message: 'Daily log added successfully' });
     } catch (err) {
@@ -88,7 +88,13 @@ router.get('/dailylogs', authenticateToken, async (req, res) => {
       const pool = getPool();
       const result = await pool.request()
         .input('userId', userId)
-        .query('SELECT * FROM dbo.DailyLogs WHERE UserID = @userId');
+        .query(`SELECT dl.* FROM dbo.DailyLogs dl
+                INNER JOIN (SELECT MAX(LogId) AS LogId, EffectiveDate FROM dbo.DailyLogs 
+                WHERE UserID = @userId
+                GROUP BY EffectiveDate) dlx
+                  ON dl.LogId = dlx.LogId
+                `);
+
       res.status(200).json(result.recordset);
     } catch (err) {
       res.status(500).json({ message: 'Failed to fetch daily logs' });
