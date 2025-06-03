@@ -563,7 +563,7 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
     await pool.request()
         .input('userId', userId)
         .query(`
-          UPDATE dbo.Mesocycles
+          UPDATE dbo.mesocycles
           SET is_current = 0
           WHERE user_id = @userId
         `);
@@ -574,13 +574,14 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
         .input('is_current', is_current)
         .input('created_date', created_date)
         .query(`
-          INSERT INTO dbo.Mesocycles (UserId, start_date, end_date, is_current, created_date)
-          VALUES (@userId, @start_date, @end_date, @is_current, @created_date)
+          INSERT INTO dbo.mesocycles (UserId, start_date, end_date, is_current, created_date)
+          VALUES (@userId, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2))
         `);
       res.status(200).json({ message: 'Mesocycle added successfully' });
 
     } catch (err) {
       console.error('Server error inserting mesocycle:', err); 
+      console.error('Server error inserting mesocycle:', err.message);
       res.status(500).json({ message: 'Failed to insert mesocycle' });
     }
 });
