@@ -673,6 +673,13 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
       const pool = getPool();
       await pool.request()
         .input('userId', userId)
+        .query(`
+          UPDATE dbo.Microcycles
+          SET is_current = 0
+          WHERE UserId = @userId
+        `);
+      await pool.request()
+        .input('userId', userId)
         .input('mesocycle_id', mesocycle_id)
         // .input('week_number', week_number)
         .input('start_date', start_date)
