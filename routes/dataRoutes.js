@@ -772,5 +772,40 @@ router.delete('/microcycle/:id', authenticateToken, async (req, res) => {
       res.status(500).json({ message: 'Failed to delete microcycle' });
     }
 });
+//--------UNFINISED EXERCISES (Jump Back In) -------------------
+
+// GET /api/exercises/unfinished/:userId
+router.get('/exercises/unfinished/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT ex.* , e.ExerciseName
+                FROM dbo.ExerciseExistence ex
+                INNER JOIN 
+                (
+                SELECT MAX(ee.ExerciseExistenceID) as ExerciseExistenceID, ee.UserId, ee.ExerciseID
+                FROM dbo.ExerciseExistence ee
+                INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
+                    FROM dbo.ExerciseExistence 
+                    WHERE UserID = @userId
+                    GROUP BY UserId) eex
+                ON ee.UserId = eex.UserId
+                AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
+                GROUP BY ee.UserId, ee.ExerciseID
+                ) ey
+                on ex.ExerciseExistenceID = ey.ExerciseExistenceID
+                LEFT JOIN dbo.[Exercise] e 
+                ON ex.ExerciseId = e.ExerciseId
+                WHERE ex.STATUS IN ('not started', 'in progress', 'aborted')
+      `);
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching unfinished exercises:', err);
+    res.status(500).json({ message: 'Failed to fetch unfinished exercises' });
+  }
+});
 
 module.exports = router;
