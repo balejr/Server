@@ -20,10 +20,12 @@ router.get('/exercises', authenticateToken, async (req, res) => {
     const exerciseList = response.data.map(item => ({
       id: item.id,
       name: item.name,
-      bodypart: item.bodypart,
+      bodypart: item.bodyPart,
       target: item.target,
       equipment: item.equipment,
-      gifURL: item.gifURL
+      gifURL: item.gifUrl,
+      secondaryMuscles: item.secondaryMuscles,
+      instructions: item.instructions
     }));
 
     res.status(200).json(exerciseList);
