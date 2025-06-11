@@ -171,8 +171,8 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         note = '',
         rir = 0,
         rpe = 0,
-        status = 'Not started',
-        completed = 0,
+        status,
+        completed,
         weight = 0
       } = item;
 
