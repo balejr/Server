@@ -183,6 +183,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         ? exercise.instructions.join(' ')
         : exercise.instructions || '';
       const equipment = exercise.equipment || '';
+      const imageURL = exercise.imageURL || '';
 
       targetMuscleForRoutine = targetMuscleForRoutine || targetMuscle;
       allEquipment.add(equipment);
@@ -204,10 +205,11 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
           .input('targetMuscle', targetMuscle)
           .input('instructions', instructions)
           .input('equipment', equipment)
+          .input('imageURL', imageURL)
           .query(`
-            INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment)
+            INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
             OUTPUT INSERTED.MasterExerciseID
-            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment)
+            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
       }
