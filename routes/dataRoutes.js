@@ -205,14 +205,16 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
           .input('target', target)
           .input('instructions', instructions)
           .input('equipment', equipment)
-          .input('gifURL', gifURL)
+          .input('imageURL', gifURL)
           .query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
             OUTPUT INSERTED.MasterExerciseID
-            VALUES (@name, @exerciseId, @target, @instructions, @equipment, @gifURL)
+            VALUES (@name, @exerciseId, @target, @instructions, @equipment, @imageURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
       }
+
+      console.log('gifURL being inserted:', gifURL);
 
       // Insert into dbo.ExerciseExistence
       const result = await pool.request()
