@@ -828,7 +828,7 @@ router.get('/exercises/history/:userId', async (req, res) => {
     const result = await pool.request()
       .input('userId', userId)
       .query(`
-              SELECT DISTINCT ex.ExerciseId, e.ExerciseName
+              SELECT DISTINCT ex.ExerciseId, e.ExerciseName, ImageURL
               FROM dbo.ExerciseExistence ex
               LEFT JOIN dbo.[Exercise] e 
               ON ex.ExerciseId = e.ExerciseId
