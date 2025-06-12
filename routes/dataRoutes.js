@@ -178,7 +178,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
       const exerciseName = exercise.exerciseName || exercise.name;
       const sourceExerciseId = exercise.id;
-      const target = exercise.target || '';
+      const targetMuscle = exercise.target || '';
       const instructions = Array.isArray(exercise.instructions)
         ? exercise.instructions.join(' ')
         : exercise.instructions || '';
@@ -194,6 +194,8 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         .input('name', exerciseName)
         .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
 
+        console.log('gifURL being inserted:', gifURL);
+
       let MasterExerciseId;
 
       if (checkExercise.recordset.length > 0) {
@@ -202,19 +204,17 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         const insertExercise = await pool.request()
           .input('name', exerciseName)
           .input('exerciseId', sourceExerciseId)
-          .input('target', target)
+          .input('targetMuscle', targetMuscle)
           .input('instructions', instructions)
           .input('equipment', equipment)
           .input('imageURL', gifURL)
           .query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
             OUTPUT INSERTED.MasterExerciseID
-            VALUES (@name, @exerciseId, @target, @instructions, @equipment, @imageURL)
+            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
       }
-
-      console.log('gifURL being inserted:', gifURL);
 
       // Insert into dbo.ExerciseExistence
       const result = await pool.request()
