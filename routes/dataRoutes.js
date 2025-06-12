@@ -178,12 +178,12 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
       const exerciseName = exercise.exerciseName || exercise.name;
       const sourceExerciseId = exercise.id;
-      const targetMuscle = exercise.target || '';
+      const target = exercise.target || '';
       const instructions = Array.isArray(exercise.instructions)
         ? exercise.instructions.join(' ')
         : exercise.instructions || '';
       const equipment = exercise.equipment || '';
-      const imageURL = exercise.imageURL || '';
+      const gifURL = exercise.gifURL || '';
 
       targetMuscleForRoutine = targetMuscleForRoutine || targetMuscle;
       allEquipment.add(equipment);
@@ -202,14 +202,14 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         const insertExercise = await pool.request()
           .input('name', exerciseName)
           .input('exerciseId', sourceExerciseId)
-          .input('targetMuscle', targetMuscle)
+          .input('target', target)
           .input('instructions', instructions)
           .input('equipment', equipment)
-          .input('imageURL', imageURL)
+          .input('gifURL', gifURL)
           .query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
             OUTPUT INSERTED.MasterExerciseID
-            VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
+            VALUES (@name, @exerciseId, @target, @instructions, @equipment, @gifURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
       }
