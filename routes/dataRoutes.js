@@ -432,7 +432,7 @@ router.post('/workoutroutine', authenticateToken, async (req, res) => {
       caloriesBurned, intensity, load, durationLeft, completed, workoutRoutineDate
     } = req.body;
 
-    try {
+    try { 
       const pool = getPool();
       await pool.request()
         .input('userId', userId)
@@ -811,6 +811,31 @@ router.get('/exercises/unfinished/:userId', async (req, res) => {
   } catch (err) {
     console.error('Error fetching unfinished exercises:', err);
     res.status(500).json({ message: 'Failed to fetch unfinished exercises' });
+  }
+});
+
+//-------- EXERCISE History  -------------------
+
+// GET /api/exercises/unfinished/:userId
+router.get('/exercises/history/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+              SELECT DISTINCT e.ExerciseName
+              FROM dbo.ExerciseExistence ex
+              LEFT JOIN dbo.[Exercise] e 
+              ON ex.ExerciseId = e.ExerciseId
+              WHERE UserId = @userId
+              AND Status IN ('Completed')
+              and e.ExerciseName is not NULL
+      `);
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching completed exercises:', err);
+    res.status(500).json({ message: 'Failed to fetch completed exercises' });
   }
 });
 
