@@ -158,7 +158,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   let totalLoad = 0;
   let allEquipment = new Set();
   let today = null;
-  let targetMuscleForRoutine = '';
+  let targetMuscleForRoutine = ''; // fallback if workoutName not provided
+  let workoutNameForRoutine = '';
+  
 
   try {
     for (const item of exerciseList) {
@@ -173,7 +175,8 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
         rpe = 0,
         status,
         completed,
-        weight = 0
+        weight = 0,
+        workoutName = ''
       } = item;
 
       const exerciseName = exercise.exerciseName || exercise.name;
@@ -186,6 +189,8 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       const gifURL = exercise.gifURL || '';
 
       targetMuscleForRoutine = targetMuscleForRoutine || targetMuscle;
+      workoutNameForRoutine = workoutNameForRoutine || workoutName || targetMuscle;
+
       allEquipment.add(equipment);
       today = today || date;
 
@@ -263,6 +268,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       const allNewEquipment = [...new Set([...equipmentList, ...Array.from(allEquipment)])];
 
       const updatedLoad = (routine.Load || 0) + totalLoad;
+      
 
       await pool.request()
         .input('id', routine.WorkoutRoutineID)
@@ -280,7 +286,8 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       // Insert new routine
       await pool.request()
         .input('userId', userId)
-        .input('workoutName', targetMuscleForRoutine)
+        // .input('workoutName', targetMuscleForRoutine)
+        .input('workoutName', workoutNameForRoutine)
         .input('exerciseInstances', newInstances.join(','))
         .input('equipment', Array.from(allEquipment).join(','))
         .input('duration', 0)
