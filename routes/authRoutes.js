@@ -96,7 +96,7 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
 
 //------------Change Profile Picture ------------------------
 router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res) => {
-  const { userId } = req.params;
+  const userId = req.user.userId;
   const { ProfilePicture } = req.body;
 
   if (!ProfilePicture) {
