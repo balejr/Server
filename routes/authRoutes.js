@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const { getPool } = require('../config/db');
 const { generateToken } = require('../utils/token');
 const { sendPasswordResetEmail } = require('../utils/mailer');
+const { authenticateToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -92,6 +93,32 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
       res.status(500).json({ message: 'Error signing up user' });
     }
 });
+
+//------------Change Profile Picture ------------------------
+router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const { ProfilePicture } = req.body;
+
+  if (!ProfilePicture) {
+    return res.status(400).json({ message: 'ProfilePicture is required' });
+  }
+
+  try {
+    const pool = getPool();
+    await pool
+      .request()
+      .input('userId', userId)
+      .input('ProfilePicture', ProfilePicture)
+      .query('UPDATE dbo.UserProfile SET ProfileImageURL = @ProfilePicture WHERE UserID = @userId');
+
+    res.status(200).json({ message: 'Profile picture updated successfully' });
+  } catch (error) {
+    console.error('Error updating profile picture:', error);
+    res.status(500).json({ message: 'Failed to update profile picture' });
+  }
+});
+
+
 
 // POST existing user/ signin
 // SIGNIN
