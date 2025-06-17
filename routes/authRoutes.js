@@ -118,6 +118,43 @@ router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res
   }
 });
 
+//------------------Update User Info -------------------
+// PATCH edit user profile fields
+router.patch('/userprofile/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const fields = req.body;
+
+  const pool = getPool();
+  const request = pool.request().input('id', id);
+
+  const allowedFields = [
+      'FitnessGoal',
+      'Weight',
+      'Height',
+      'FitnessLevel',
+      'Age',
+      'ProfileImageURL'
+  ];
+
+  const updates = Object.keys(fields)
+      .filter(key => allowedFields.includes(key))
+      .map((key) => {
+          request.input(key, fields[key]);
+          return `${key} = @${key}`;
+      }).join(', ');
+
+  if (!updates) {
+      return res.status(400).json({ message: 'No valid fields to update' });
+  }
+
+  try {
+      await request.query(`UPDATE dbo.UserProfile SET ${updates} WHERE UserID = @id`);
+      res.status(200).json({ message: 'User profile updated' });
+  } catch (err) {
+      console.error('Update failed:', err);
+      res.status(500).json({ message: 'Failed to update user profile' });
+  }
+});
 
 
 // POST existing user/ signin
