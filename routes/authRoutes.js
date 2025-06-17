@@ -120,7 +120,7 @@ router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res
 
 //------------------Update User Info -------------------
 // PATCH edit user profile fields
-router.patch('/profile/:userId', authenticateToken, async (req, res) => {
+router.patch('/user/profile/:userId', authenticateToken, async (req, res) => {
   const userId = req.params.userId;
   const fields = req.body;
 
