@@ -121,11 +121,15 @@ router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res
 //------------------Update User Info -------------------
 // PATCH edit user profile fields
 router.patch('/user/profile/:userId', authenticateToken, async (req, res) => {
-  const userId  = req.user.userId;
+  const userId = req.params.userId;
   const fields = req.body;
 
   const pool = getPool();
   const request = pool.request().input('userId', userId);
+
+  console.log("Incoming userId:", userId);
+  console.log("Incoming fields:", fields);
+  console.log("Allowed updates:", Object.keys(fields).filter(key => allowedFields.includes(key)));
 
   const allowedFields = [
       'FitnessGoal',
