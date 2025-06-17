@@ -121,7 +121,7 @@ router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res
 //------------------Update User Info -------------------
 // PATCH edit user profile fields
 router.patch('/user/profile/:userId', authenticateToken, async (req, res) => {
-  const { userId } = req.user.userId;
+  const userId  = req.user.userId;
   const fields = req.body;
 
   const pool = getPool();
