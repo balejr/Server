@@ -124,39 +124,41 @@ router.patch('/user/profile/:userId', authenticateToken, async (req, res) => {
   const userId = req.params.userId;
   const fields = req.body;
 
+  // 🔍 DEBUG LOGGING
+  console.log("Incoming userId:", userId);
+  console.log("Incoming fields:", fields);
+
+  const allowedFields = [
+    'FitnessGoal',
+    'Weight',
+    'Height',
+    'FitnessLevel',
+    'Age',
+    'ProfileImageURL'
+  ];
+
+  const validKeys = Object.keys(fields).filter(key => allowedFields.includes(key));
+  console.log("Allowed updates:", validKeys);
+
   const pool = getPool();
   const request = pool.request().input('userId', userId);
 
-  console.log("Incoming userId:", userId);
-  console.log("Incoming fields:", fields);
-  console.log("Allowed updates:", Object.keys(fields).filter(key => allowedFields.includes(key)));
-
-  const allowedFields = [
-      'FitnessGoal',
-      'Weight',
-      'Height',
-      'FitnessLevel',
-      'Age',
-      'ProfileImageURL'
-  ];
-
-  const updates = Object.keys(fields)
-      .filter(key => allowedFields.includes(key))
-      .map((key) => {
-          request.input(key, fields[key]);
-          return `${key} = @${key}`;
-      }).join(', ');
+  const updates = validKeys
+    .map((key) => {
+      request.input(key, fields[key]);
+      return `${key} = @${key}`;
+    }).join(', ');
 
   if (!updates) {
-      return res.status(400).json({ message: 'No valid fields to update' });
+    return res.status(400).json({ message: 'No valid fields to update' });
   }
 
   try {
-      await request.query(`UPDATE dbo.UserProfile SET ${updates} WHERE UserID = @userId`);
-      res.status(200).json({ message: 'User profile updated' });
+    await request.query(`UPDATE dbo.UserProfile SET ${updates} WHERE UserID = @userId`);
+    res.status(200).json({ message: 'User profile updated' });
   } catch (err) {
-      console.error('Update failed:', err);
-      res.status(500).json({ message: 'Failed to update user profile' });
+    console.error('Update failed:', err);
+    res.status(500).json({ message: 'Failed to update user profile' });
   }
 });
 
