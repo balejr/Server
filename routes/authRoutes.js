@@ -121,11 +121,11 @@ router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res
 //------------------Update User Info -------------------
 // PATCH edit user profile fields
 router.patch('/userprofile/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+  const { userId } = req.user.userId;
   const fields = req.body;
 
   const pool = getPool();
-  const request = pool.request().input('id', id);
+  const request = pool.request().input('userId', userId);
 
   const allowedFields = [
       'FitnessGoal',
@@ -148,7 +148,7 @@ router.patch('/userprofile/:id', authenticateToken, async (req, res) => {
   }
 
   try {
-      await request.query(`UPDATE dbo.UserProfile SET ${updates} WHERE UserID = @id`);
+      await request.query(`UPDATE dbo.UserProfile SET ${updates} WHERE UserID = @userId`);
       res.status(200).json({ message: 'User profile updated' });
   } catch (err) {
       console.error('Update failed:', err);
