@@ -109,22 +109,10 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
   const file = req.file;
   let profileImageUrl = null;
 
-  // try {
-  //   // ✅ Upload new profile image to Azure if available
-  //   if (file) {
-  //     const blobName = `profile_${userId}_${Date.now()}.jpg`;
-  //     const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
-
-  //     await blockBlobClient.uploadData(file.buffer, {
-  //       blobHTTPHeaders: { blobContentType: file.mimetype },
-  //     });
-
-  //     profileImageUrl = blockBlobClient.url;
-  //   }
   try {
     if (file) {
-      const blobName = `profile_${Date.now()}.jpg`;
-      const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+      const blobName = `profile_${userId}_${Date.now()}.jpg`;
+      const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
       await blockBlobClient.uploadData(file.buffer, {
         blobHTTPHeaders: { blobContentType: file.mimetype },
       });
@@ -158,13 +146,20 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
     `;
 
     await request.query(updateQuery);
-
     res.status(200).json({ message: 'User profile updated successfully.' });
+
   } catch (error) {
-    console.error('Update Profile Error:', error);  // 🔥 this should log full details
+    // ✅ log WITHIN route context so req exists
+    console.error('Update Profile Error:', {
+      message: error.message,
+      stack: error.stack,
+      requestBody: req.body,
+      fileInfo: req.file
+    });
     res.status(500).json({ message: 'Error updating user profile' });
   }
 });
+
 
 //------------------Update User Info -------------------
 // PATCH edit user profile fields
