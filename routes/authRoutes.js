@@ -96,7 +96,7 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
 
 //------------Update Profile------------------------
 
-router.put('/update-profile/:userId', upload.single('profileImage'), async (req, res) => {
+router.patch('/update-profile/:userId', upload.single('profileImage'), async (req, res) => {
   const userId = req.params.userId;
   const {
     fitnessGoal,
