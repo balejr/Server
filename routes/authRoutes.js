@@ -109,16 +109,25 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
   const file = req.file;
   let profileImageUrl = null;
 
-  try {
-    // ✅ Upload new profile image to Azure if available
-    if (file) {
-      const blobName = `profile_${userId}_${Date.now()}.jpg`;
-      const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
+  // try {
+  //   // ✅ Upload new profile image to Azure if available
+  //   if (file) {
+  //     const blobName = `profile_${userId}_${Date.now()}.jpg`;
+  //     const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
 
+  //     await blockBlobClient.uploadData(file.buffer, {
+  //       blobHTTPHeaders: { blobContentType: file.mimetype },
+  //     });
+
+  //     profileImageUrl = blockBlobClient.url;
+  //   }
+  try {
+    if (file) {
+      const blobName = `profile_${Date.now()}.jpg`;
+      const blockBlobClient = containerClient.getBlockBlobClient(blobName);
       await blockBlobClient.uploadData(file.buffer, {
         blobHTTPHeaders: { blobContentType: file.mimetype },
       });
-
       profileImageUrl = blockBlobClient.url;
     }
 
@@ -152,7 +161,7 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
 
     res.status(200).json({ message: 'User profile updated successfully.' });
   } catch (error) {
-    console.error('Update Profile Error:', error);
+    console.error('Update Profile Error:', error);  // 🔥 this should log full details
     res.status(500).json({ message: 'Error updating user profile' });
   }
 });
