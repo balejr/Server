@@ -113,9 +113,11 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
     if (file) {
       const blobName = `profile_${userId}_${Date.now()}.jpg`;
       const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
+
       await blockBlobClient.uploadData(file.buffer, {
         blobHTTPHeaders: { blobContentType: file.mimetype },
       });
+
       profileImageUrl = blockBlobClient.url;
     }
 
@@ -128,7 +130,6 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
     request.input('height', height);
     request.input('fitnessLevel', fitnessLevel);
     request.input('age', age);
-
     if (profileImageUrl) {
       request.input('profileImageUrl', profileImageUrl);
     }
@@ -149,16 +150,16 @@ router.put('/update-profile/:userId', upload.single('profileImage'), async (req,
     res.status(200).json({ message: 'User profile updated successfully.' });
 
   } catch (error) {
-    // ✅ log WITHIN route context so req exists
     console.error('Update Profile Error:', {
       message: error.message,
       stack: error.stack,
-      requestBody: req.body,
+      requestBody: req.body, // ✅ this is okay because we are inside the route
       fileInfo: req.file
     });
     res.status(500).json({ message: 'Error updating user profile' });
   }
 });
+
 
 
 //------------------Update User Info -------------------
