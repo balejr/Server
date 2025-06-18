@@ -94,27 +94,66 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
     }
 });
 
-//------------Change Profile Picture ------------------------
-router.patch('/user/profile-picture/:userId', authenticateToken, async (req, res) => {
-  const userId = req.user.userId;
-  const { ProfilePicture } = req.body;
+//------------Update Profile------------------------
 
-  if (!ProfilePicture) {
-    return res.status(400).json({ message: 'ProfilePicture is required' });
-  }
+router.put('/update-profile/:userId', upload.single('profileImage'), async (req, res) => {
+  const userId = req.params.userId;
+  const {
+    fitnessGoal,
+    weight,
+    height,
+    fitnessLevel,
+    age
+  } = req.body;
+
+  const file = req.file;
+  let profileImageUrl = null;
 
   try {
-    const pool = getPool();
-    await pool
-      .request()
-      .input('userId', userId)
-      .input('ProfilePicture', ProfilePicture)
-      .query('UPDATE dbo.UserProfile SET ProfileImageURL = @ProfilePicture WHERE UserID = @userId');
+    // ✅ Upload new profile image to Azure if available
+    if (file) {
+      const blobName = `profile_${userId}_${Date.now()}.jpg`;
+      const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
 
-    res.status(200).json({ message: 'Profile picture updated successfully' });
+      await blockBlobClient.uploadData(file.buffer, {
+        blobHTTPHeaders: { blobContentType: file.mimetype },
+      });
+
+      profileImageUrl = blockBlobClient.url;
+    }
+
+    const pool = await getPool();
+    const request = pool.request();
+
+    request.input('userId', userId);
+    request.input('fitnessGoal', fitnessGoal);
+    request.input('weight', weight);
+    request.input('height', height);
+    request.input('fitnessLevel', fitnessLevel);
+    request.input('age', age);
+
+    if (profileImageUrl) {
+      request.input('profileImageUrl', profileImageUrl);
+    }
+
+    const updateQuery = `
+      UPDATE dbo.UserProfile
+      SET 
+        FitnessGoal = @fitnessGoal,
+        Weight = @weight,
+        Height = @height,
+        FitnessLevel = @fitnessLevel,
+        Age = @age
+        ${profileImageUrl ? ', ProfileImageUrl = @profileImageUrl' : ''}
+      WHERE UserID = @userId
+    `;
+
+    await request.query(updateQuery);
+
+    res.status(200).json({ message: 'User profile updated successfully.' });
   } catch (error) {
-    console.error('Error updating profile picture:', error);
-    res.status(500).json({ message: 'Failed to update profile picture' });
+    console.error('Update Profile Error:', error);
+    res.status(500).json({ message: 'Error updating user profile' });
   }
 });
 
