@@ -40,7 +40,7 @@ router.get('/exercises', authenticateToken, async (req, res) => {
 router.post('/dailylog', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const {
-      sleep, steps, heartrate, waterIntake, sleepQuality, stepsQuality,
+      sleep, steps, heartrate, waterIntake, sleepQuality, caloriesBurned,
       restingHeartRate, heartrateVariability, weight, effectiveDate
     } = req.body;
 
@@ -53,16 +53,16 @@ router.post('/dailylog', authenticateToken, async (req, res) => {
         .input('heartrate', heartrate)
         .input('waterIntake', waterIntake)
         .input('sleepQuality', sleepQuality)
-        .input('stepsQuality', stepsQuality)
+        .input('caloriesBurned', caloriesBurned)
         .input('restingHeartRate', restingHeartRate)
         .input('heartrateVariability', heartrateVariability)
         .input('weight', weight)
         .input('effectiveDate', effectiveDate)
         .query(`
           INSERT INTO dbo.DailyLogs 
-          (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, StepsQuality, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
+          (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, caloriesBurned, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
           VALUES 
-           (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @stepsQuality, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
+           (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @caloriesBurned, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
         `);
       res.status(200).json({ message: 'Daily log added successfully' });
     } catch (err) {
