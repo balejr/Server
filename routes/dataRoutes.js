@@ -829,6 +829,80 @@ router.get('/exercises/unfinished/:userId', async (req, res) => {
   }
 });
 
+//-------------Combined Meso and Micro ----------------------------
+router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const {
+    mesocycleStart,
+    mesocycleEnd,
+    microcycleStart,
+    microcycleEnd,
+    is_current,
+    created_date,
+  } = req.body;
+
+  try {
+    const pool = getPool();
+
+    // Step 1: Deactivate all previous mesocycles for the user
+    await pool.request()
+      .input('userId', userId)
+      .query(`
+        UPDATE dbo.mesocycles
+        SET is_current = 0
+        WHERE UserId = @userId
+      `);
+
+    // Step 2: Insert new mesocycle
+    const mesoResult = await pool.request()
+      .input('userId', userId)
+      .input('start_date', mesocycleStart)
+      .input('end_date', mesocycleEnd)
+      .input('is_current', is_current)
+      .input('created_date', created_date)
+      .query(`
+        INSERT INTO dbo.mesocycles (UserId, start_date, end_date, is_current, created_date)
+        OUTPUT INSERTED.id
+        VALUES (@userId, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2))
+      `);
+
+    const mesocycle_id = mesoResult.recordset[0]?.id;
+    if (!mesocycle_id) {
+      throw new Error("Mesocycle insertion failed, no ID returned.");
+    }
+
+    // Step 3: Deactivate all previous microcycles
+    await pool.request()
+      .input('userId', userId)
+      .query(`
+        UPDATE dbo.Microcycles
+        SET is_current = 0
+        WHERE UserId = @userId
+      `);
+
+    // Step 4: Insert new microcycle tied to the new mesocycle
+    await pool.request()
+      .input('userId', userId)
+      .input('mesocycle_id', mesocycle_id)
+      .input('start_date', microcycleStart)
+      .input('end_date', microcycleEnd)
+      .input('is_current', is_current)
+      .input('created_date', created_date)
+      .query(`
+        INSERT INTO dbo.Microcycles (mesocycle_id, start_date, end_date, is_current, created_date, userID)
+        VALUES (@mesocycle_id, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2), @userId)
+      `);
+
+    res.status(200).json({ message: 'Mesocycle and Microcycle added successfully', mesocycle_id });
+
+  } catch (err) {
+    console.error('Error in mesocycle-with-microcycle:', err.message);
+    res.status(500).json({ message: 'Failed to insert mesocycle and microcycle', error: err.message });
+  }
+});
+
+
+
 //-------- EXERCISE History  -------------------
 
 // GET /api/exercises/unfinished/:userId
