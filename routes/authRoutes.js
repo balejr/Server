@@ -127,8 +127,8 @@ router.patch('/update-profile/:userId', upload.single('profileImage'), async (re
     const request = pool.request();
 
     request.input('userId', userId);
-    request.input('lastname', lastname);
     request.input('firstname', firstname);
+    request.input('lastname', lastname);
     request.input('gender', gender);
     request.input('fitnessGoal', fitnessGoal);
     request.input('weight', weight);
