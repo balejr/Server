@@ -862,7 +862,7 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
       .input('created_date', created_date)
       .query(`
         INSERT INTO dbo.mesocycles (UserId, start_date, end_date, is_current, created_date)
-        OUTPUT INSERTED.id
+        OUTPUT INSERTED.mesocycle_id
         VALUES (@userId, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2))
       `);
 
