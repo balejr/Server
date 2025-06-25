@@ -98,6 +98,9 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
 router.patch('/update-profile/:userId', upload.single('profileImage'), async (req, res) => {
   const userId = req.params.userId;
   const {
+    lastname,
+    firstname,
+    gender,
     fitnessGoal,
     weight,
     height,
@@ -124,6 +127,9 @@ router.patch('/update-profile/:userId', upload.single('profileImage'), async (re
     const request = pool.request();
 
     request.input('userId', userId);
+    request.input('lastname', lastname);
+    request.input('firstname', firstname);
+    request.input('gender', gender);
     request.input('fitnessGoal', fitnessGoal);
     request.input('weight', weight);
     request.input('height', height);
@@ -136,6 +142,9 @@ router.patch('/update-profile/:userId', upload.single('profileImage'), async (re
     const updateQuery = `
       UPDATE dbo.UserProfile
       SET 
+        FirstName = @firstname,
+        LastName = @lastname,
+        Gender = @gender,
         FitnessGoal = @fitnessGoal,
         Weight = @weight,
         Height = @height,
