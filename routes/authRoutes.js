@@ -177,6 +177,9 @@ router.patch('/user/profile/:userId', authenticateToken, async (req, res) => {
   const fields = req.body;
 
   const allowedFields = [
+    'FirstName',
+    'LastName',
+    'Gender',
     'FitnessGoal',
     'Weight',
     'Height',
