@@ -866,7 +866,7 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
         VALUES (@userId, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2))
       `);
 
-    const mesocycle_id = mesoResult.recordset[0]?.id;
+    const mesocycle_id = mesoResult.recordset[0]?.mesocycle_id;
     if (!mesocycle_id) {
       throw new Error("Mesocycle insertion failed, no ID returned.");
     }
