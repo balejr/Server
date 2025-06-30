@@ -903,6 +903,7 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
 
 //-----------------------------Pevious Workout ------------------------------
 // GET /api/exercises/previous/:userId
+// GET /api/exercises/previous/:userId
 router.get('/exercises/previous/:userId', async (req, res) => {
   const { userId } = req.params;
 
@@ -912,8 +913,8 @@ router.get('/exercises/previous/:userId', async (req, res) => {
     const result = await pool.request()
       .input('userId', userId)
       .query(`
-       WITH LatestCompletedSets AS (
-        SELECT 
+        WITH LatestCompletedSets AS (
+          SELECT 
             ee.ExerciseExistenceID,
             ee.ExerciseID,
             ee.UserID,
@@ -921,41 +922,38 @@ router.get('/exercises/previous/:userId', async (req, res) => {
             e.ExerciseName,
             ee.Weight,
             ee.Reps,
-            ee.Sets,
             ROW_NUMBER() OVER (
-              PARTITION BY ee.UserID, ee.ExerciseID, ee.Sets 
+              PARTITION BY ee.UserID, ee.ExerciseID 
               ORDER BY ee.[Date] DESC, ee.ExerciseExistenceID DESC
-            ) as RowNum
+            ) as SetNumber,
+            RANK() OVER (
+              PARTITION BY ee.UserID, ee.ExerciseID 
+              ORDER BY ee.[Date] DESC
+            ) as DateRank
           FROM dbo.ExerciseExistence ee
           INNER JOIN dbo.Exercise e ON ee.ExerciseID = e.ExerciseID
           WHERE ee.UserID = @userId
-            AND ee.Status = 'Completed'
+            AND ee.Status = 'completed'
         )
         SELECT 
           ExerciseID,
           ExerciseName,
-          [Weight],
+          Weight,
           Reps,
-          [Sets],
           FORMAT([Date], 'yyyy-MM-dd') as Date,
-          MAX(RowNum) as RowNum
-        FROM LatestCompletedSets 
-        WHERE RowNum <= 5 
-        GROUP BY ExerciseID,
-          ExerciseName,
-          [Weight],
-          Reps,
-          [Sets],
-          FORMAT([Date], 'yyyy-MM-dd')
-        ORDER BY [Date], ExerciseID DESC
+          SetNumber
+        FROM LatestCompletedSets
+        WHERE DateRank = 1
+        ORDER BY ExerciseID, SetNumber
       `);
 
     const grouped = {};
 
-    // Format: group by ExerciseID -> [ "100lb x 8", "105lb x 6", ... ]
     result.recordset.forEach(row => {
       const key = row.ExerciseID;
-      const setString = `${row.Weight} x ${row.Reps}`;
+      const setLabel = `Set ${row.SetNumber}`;
+      const setString = `${setLabel}: ${row.Weight} x ${row.Reps}`;
+
       if (!grouped[key]) {
         grouped[key] = {
           name: row.ExerciseName,
@@ -971,6 +969,7 @@ router.get('/exercises/previous/:userId', async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch previous exercises' });
   }
 });
+
 
 
 //-------- EXERCISE History  -------------------
