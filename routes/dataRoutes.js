@@ -903,15 +903,16 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
 
 //-----------------------------Pevious Workout ------------------------------
 // GET /api/exercises/previous/:userId
-router.get('/exercises/previous/:userId/:exerciseId', async (req, res) => {
-  const { userId, exerciseId } = req.params;
+router.get('/exercises/previous/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { exerciseName } = req.query;
 
   try {
     const pool = await getPool();
 
     const result = await pool.request()
       .input('userId', userId)
-      .input('exerciseId', exerciseId)
+      .input('exerciseName', exerciseName)
       .query(`
         WITH LatestCompletedSets AS (
           SELECT 
@@ -933,8 +934,8 @@ router.get('/exercises/previous/:userId/:exerciseId', async (req, res) => {
           FROM dbo.ExerciseExistence ee
           INNER JOIN dbo.Exercise e ON ee.ExerciseID = e.ExerciseID
           WHERE ee.UserID = @userId
-            AND ee.ExerciseID = @exerciseId
             AND ee.Status = 'completed'
+            AND e.ExerciseName = @exerciseName
         )
         SELECT 
           ExerciseID,
@@ -945,19 +946,17 @@ router.get('/exercises/previous/:userId/:exerciseId', async (req, res) => {
           SetNumber
         FROM LatestCompletedSets
         WHERE DateRank = 1
-        ORDER BY SetNumber
+        ORDER BY ExerciseID, SetNumber
       `);
 
-    const sets = result.recordset.map(row => ({
-      weight: row.Weight,
-      reps: row.Reps,
-      set: row.SetNumber,
-    }));
+    const grouped = {
+      sets: result.recordset.map(row => ({
+        weight: row.Weight,
+        reps: row.Reps
+      }))
+    };
 
-    res.json({
-      exerciseId,
-      sets,
-    });
+    res.json(grouped);
   } catch (err) {
     console.error('Error fetching previous exercises:', err);
     res.status(500).json({ message: 'Failed to fetch previous exercises' });
