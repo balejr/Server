@@ -903,15 +903,15 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
 
 //-----------------------------Pevious Workout ------------------------------
 // GET /api/exercises/previous/:userId
-// GET /api/exercises/previous/:userId
-router.get('/exercises/previous/:userId', async (req, res) => {
-  const { userId } = req.params;
+router.get('/exercises/previous/:userId/:exerciseId', async (req, res) => {
+  const { userId, exerciseId } = req.params;
 
   try {
     const pool = await getPool();
 
     const result = await pool.request()
       .input('userId', userId)
+      .input('exerciseId', exerciseId)
       .query(`
         WITH LatestCompletedSets AS (
           SELECT 
@@ -933,6 +933,7 @@ router.get('/exercises/previous/:userId', async (req, res) => {
           FROM dbo.ExerciseExistence ee
           INNER JOIN dbo.Exercise e ON ee.ExerciseID = e.ExerciseID
           WHERE ee.UserID = @userId
+            AND ee.ExerciseID = @exerciseId
             AND ee.Status = 'completed'
         )
         SELECT 
@@ -944,31 +945,25 @@ router.get('/exercises/previous/:userId', async (req, res) => {
           SetNumber
         FROM LatestCompletedSets
         WHERE DateRank = 1
-        ORDER BY ExerciseID, SetNumber
+        ORDER BY SetNumber
       `);
 
-    const grouped = {};
+    const sets = result.recordset.map(row => ({
+      weight: row.Weight,
+      reps: row.Reps,
+      set: row.SetNumber,
+    }));
 
-    result.recordset.forEach(row => {
-      const key = row.ExerciseID;
-      const setLabel = `Set ${row.SetNumber}`;
-      const setString = `${setLabel}: ${row.Weight} x ${row.Reps}`;
-
-      if (!grouped[key]) {
-        grouped[key] = {
-          name: row.ExerciseName,
-          sets: [],
-        };
-      }
-      grouped[key].sets.push(setString);
+    res.json({
+      exerciseId,
+      sets,
     });
-
-    res.json(grouped);
   } catch (err) {
     console.error('Error fetching previous exercises:', err);
     res.status(500).json({ message: 'Failed to fetch previous exercises' });
   }
 });
+
 
 
 
