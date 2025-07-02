@@ -903,16 +903,14 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
 
 //-----------------------------Pevious Workout ------------------------------
 // GET /api/exercises/previous/:userId
-router.get('/exercises/previous/:userId', async (req, res) => {
+router.get('/exercises/previous-all/:userId', async (req, res) => {
   const { userId } = req.params;
-  const { exerciseName } = req.query;
 
   try {
     const pool = await getPool();
 
     const result = await pool.request()
       .input('userId', userId)
-      .input('exerciseName', exerciseName)
       .query(`
         WITH LatestCompletedSets AS (
           SELECT 
@@ -935,36 +933,31 @@ router.get('/exercises/previous/:userId', async (req, res) => {
           INNER JOIN dbo.Exercise e ON ee.ExerciseID = e.ExerciseID
           WHERE ee.UserID = @userId
             AND ee.Status = 'completed'
-            AND e.ExerciseName = @exerciseName
         )
         SELECT 
-          ExerciseID,
           ExerciseName,
           Weight,
           Reps,
-          FORMAT([Date], 'yyyy-MM-dd') as Date,
           SetNumber
         FROM LatestCompletedSets
         WHERE DateRank = 1
-        ORDER BY ExerciseID, SetNumber
+        ORDER BY ExerciseName, SetNumber
       `);
 
-    const grouped = {
-      sets: result.recordset.map(row => ({
-        weight: row.Weight,
-        reps: row.Reps
-      }))
-    };
+    // Group results by ExerciseName
+    const grouped = {};
+    result.recordset.forEach(row => {
+      const key = row.ExerciseName.toLowerCase();
+      if (!grouped[key]) grouped[key] = { sets: [] };
+      grouped[key].sets.push({ weight: row.Weight, reps: row.Reps });
+    });
 
     res.json(grouped);
   } catch (err) {
-    console.error('Error fetching previous exercises:', err);
+    console.error('Error fetching all previous exercises:', err);
     res.status(500).json({ message: 'Failed to fetch previous exercises' });
   }
 });
-
-
-
 
 //-------- EXERCISE History  -------------------
 
