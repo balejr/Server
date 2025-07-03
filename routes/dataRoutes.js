@@ -196,8 +196,9 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
       // Check or insert into dbo.Exercise
       const checkExercise = await pool.request()
-        .input('name', exerciseName)
-        .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseName = @name`);
+      .input('exerciseId', sourceExerciseId)
+      .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`);
+    
 
         console.log('gifURL being inserted:', gifURL);
 
