@@ -2,7 +2,8 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const { getPool } = require('../config/db');
-const { generateToken } = require('../utils/token');
+const { generateAccessToken, generateRefreshToken } = require('../utils/token');
+const { authenticateRefreshToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -79,16 +80,18 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
   
       await transaction.commit();
 
-      const token = generateToken({ userId });
+      const accessToken = generateAccessToken({ userId });
+      const refreshToken = generateRefreshToken({ userId });
 
       res.status(200).json({
-        message: 'User created successfully!',
-        token,
+        message: '用户创建成功！',
+        accessToken,
+        refreshToken,
         userId
       });
     } catch (error) {
       console.error('Signup Error:', error);
-      res.status(500).json({ message: 'Error signing up user' });
+      res.status(500).json({ message: '注册用户时出错' });
     }
 });
 
@@ -109,21 +112,23 @@ router.post('/signin', async (req, res) => {
       `);
 
     if (result.recordset.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ message: '邮箱或密码无效' });
     }
 
     const user = result.recordset[0];
     const isPasswordMatch = await bcrypt.compare(password, user.Password);
 
     if (!isPasswordMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ message: '邮箱或密码无效' });
     }
 
-    const token = generateToken({ userId: user.UserID });
+    const accessToken = generateAccessToken({ userId: user.UserID });
+    const refreshToken = generateRefreshToken({ userId: user.UserID });
 
     res.status(200).json({
-      message: 'Login successful!',
-      token,
+      message: '登录成功！',
+      accessToken,
+      refreshToken,
       user: {
         id: user.UserID,
         email: user.Email
@@ -131,7 +136,53 @@ router.post('/signin', async (req, res) => {
     });
   } catch (error) {
     console.error('Signin Error:', error);
-    res.status(500).json({ message: 'Server error during login' });
+    res.status(500).json({ message: '登录过程中服务器出错' });
+  }
+});
+
+// SIGNIN Testing
+router.post('/signin-testing', async (req, res) => {
+  const { token } = req.body;
+
+  if (!token) return res.status(401).json({ message: 'Missing Refresh Token' });
+  if (!refreshTokens.includes(token)) return res.status(403).json({ message: 'Invalid Token' });
+  jwt.verify(token, REFRESH_SECRET, (err, user) => {
+    if (err) {
+      res.status(403).json({ message: 'Expired or Invalid Token' })
+      const newAccessToken = generateAccessToken({ userId: user.userId });
+      res.json({ accessToken: newAccessToken });
+    }});
+});
+
+// POST refresh token
+router.post('/refresh', authenticateRefreshToken, async (req, res) => {
+  try {
+    const { userId } = req.user;
+    
+    // 生成新的访问令牌
+    const newAccessToken = generateAccessToken({ userId });
+    
+    res.status(200).json({
+      message: '令牌刷新成功',
+      accessToken: newAccessToken
+    });
+  } catch (error) {
+    console.error('Refresh Token Error:', error);
+    res.status(500).json({ message: '刷新令牌时出错' });
+  }
+});
+
+// POST logout (可选，用于撤销刷新令牌)
+router.post('/logout', async (req, res) => {
+  try {
+    // 在实际应用中，您可能想要将刷新令牌加入黑名单
+    // 这里我们只是返回成功消息
+    res.status(200).json({
+      message: '登出成功'
+    });
+  } catch (error) {
+    console.error('Logout Error:', error);
+    res.status(500).json({ message: '登出时出错' });
   }
 });
 
