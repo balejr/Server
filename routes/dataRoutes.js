@@ -1,4 +1,4 @@
-// routes/dataRoutes.js
+cd /home/site// routes/dataRoutes.js
 const express = require('express');
 const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');

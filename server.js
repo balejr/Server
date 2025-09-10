@@ -10,8 +10,7 @@ const { connectToDatabase } = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const dataRoutes = require("./routes/dataRoutes");
-// const chatbotRoutes = require("./routes/chatbotRoutes");
-const chatbotRoutes = require("./routes/chatBotRoutes");
+const chatbotRoutes = require("./routes/chatbotRoutes");
 const { router: usageRoutes } = require("./routes/usageRoutes");
 
 const app = express();

@@ -105,6 +105,9 @@ router.post('/signin', async (req, res) => {
       .query(`
         SELECT A.UserID, A.Email, A.Password
         FROM dbo.UserLogin A
+        INNER JOIN (SELECT Email, MAX(UserID) as UserId FROM dbo.UserLogin GROUP BY Email) B
+        ON A.UserID = B.UserID
+        AND A.Email = B.Email
         WHERE A.Email = @email
       `);
 
