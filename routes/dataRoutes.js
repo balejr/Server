@@ -347,7 +347,7 @@ router.get('/exerciseexistence/user/:exerciseId', authenticateToken, async (req,
 router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { date } = req.params;
-    try {
+    try { 
       const pool = getPool();
       const result = await pool.request()
         .input('userId', userId)
