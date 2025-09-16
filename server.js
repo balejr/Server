@@ -32,7 +32,7 @@ app.use("/api/usage", usageRoutes);
 
 // Root route for health check
 app.get("/", (req, res) => {
-  res.send("ApogeeHnP Backend is running!");
+  res.send("ApogeeHnP backend is running!");
 });
 
 // Start server
