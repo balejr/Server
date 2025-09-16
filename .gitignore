@@ -2,8 +2,18 @@ package-lock.json
 package-lock.*
 node_modules/
 .env
-venv/
-venv*/
+
+# Node
+npm-debug.log
+yarn-error.log
+
+# Python
 __pycache__/
 *.pyc
-
+*.pyo
+*.pyd
+*.db
+venv/
+venv*/
+pose_analysis_backend/venv/
+pose_analysis_backend/venv/
