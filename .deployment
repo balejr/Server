@@ -1,3 +1,0 @@
-[config]
-project = .
-command = node server.js
