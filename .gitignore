@@ -16,4 +16,5 @@ __pycache__/
 venv/
 venv*/
 pose_analysis_backend/venv/
-pose_analysis_backend/venv/
+pose_analysis_backend/venv311/
+
