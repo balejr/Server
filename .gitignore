@@ -1,15 +1,9 @@
-package-lock.json
-package-lock.*
-node_modules/
-.env
-
 # Node.js
 node_modules/
 
+# Environment
+.env
+
 # Python
-pose_analysis_backend/venv/
-pose_analysis_backend/venv311/
 *.pyc
 __pycache__/
-
-node_modules/
