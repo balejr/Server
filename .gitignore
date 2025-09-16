@@ -3,18 +3,12 @@ package-lock.*
 node_modules/
 .env
 
-# Node
-npm-debug.log
-yarn-error.log
+# Node.js
+node_modules/
 
 # Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.db
-venv/
-venv*/
 pose_analysis_backend/venv/
 pose_analysis_backend/venv311/
+*.pyc
+__pycache__/
 
