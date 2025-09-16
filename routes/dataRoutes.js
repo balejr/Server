@@ -1,4 +1,4 @@
-cd /home/site// routes/dataRoutes.js
+// cd /home/site// routes/dataRoutes.js
 const express = require('express');
 const axios = require('axios');
 const { getPool } = require('../config/db');
