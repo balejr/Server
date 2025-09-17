@@ -1,12 +1,10 @@
-# Node.js
-node_modules/
-
-# Environment
-.env
-
-# Python
+venv/
+__pycache__/
 *.pyc
-__pycache__/
+*.pyo
+*.pyd
+*.db
+.DS_Store
 node_modules/
-pose_analysis_backend/venv/
-__pycache__/
+build/
+dist/
