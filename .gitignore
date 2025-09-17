@@ -1,9 +1,28 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 *.db
-.DS_Store
-node_modules/
+*.sqlite3
+
+# Virtual environment
+venv/
+ENV/
+env/
+.env/
+
+# Build
 build/
 dist/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if using React/React Native in same repo)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
