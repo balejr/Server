@@ -1,6 +1,2 @@
 [config]
-# Point to the folder containing package.json / server.js
 project = .
-
-# Optional: explicitly force Node.js (Oryx will use installed Node.js version)
-# node_version = 18.20.8
