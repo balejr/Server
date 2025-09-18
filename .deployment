@@ -1,3 +1,2 @@
 [config]
-project = .
-platform = node
+command = node server.js
