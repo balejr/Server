@@ -11,6 +11,8 @@ venv/
 ENV/
 env/
 .env/
+pose_analysis_backend/venv311/
+
 
 # Build
 build/
@@ -26,3 +28,4 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pose_analysis_backend/venv311/
