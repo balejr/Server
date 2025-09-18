@@ -4,7 +4,7 @@
   "main": "server.js",
   "engines": {
     "node": "20.x"
-  },  
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
@@ -16,6 +16,7 @@
   "dependencies": {
     "@azure/storage-blob": "^12.27.0",
     "@google/generative-ai": "^0.24.1",
+    "axios": "^1.12.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
