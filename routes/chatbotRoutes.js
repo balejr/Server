@@ -2,8 +2,9 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI, Type } = require("@google/genai");
 const { checkUsageLimit, incrementUsage } = require("./usageRoutes");
+const { generatePlanId, saveWorkoutPlan } = require("./workoutRoutes");
 
 const router = express.Router();
 
@@ -14,49 +15,180 @@ const API_BASE_URL =
   "https://generativelanguage.googleapis.com";
 const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
 
-// The pre-engineered prompt for FitNext AI
-const FITNEXT_SYSTEM_PROMPT = `FitNext Smart Chatbot System Prompt
+// Debug: Log API configuration at startup
+console.log("🔧 Chatbot Routes - API Configuration:", {
+  hasApiKey: !!GOOGLE_API_KEY && GOOGLE_API_KEY !== "undefined",
+  apiKeyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
+  modelName: MODEL_NAME,
+  apiBaseUrl: API_BASE_URL,
+});
 
-You are FitNext AI, a comprehensive fitness and wellness assistant designed to provide personalized guidance across multiple domains:
+// Structured response configuration for FitNext AI
+const FITNEXT_SYSTEM_INSTRUCTION = `You are FitNext AI, the in-app health & fitness assistant.
 
-**Core Capabilities:**
-1. **Virtual Personal Trainer**: Create customized workout plans, provide exercise guidance, and track progress
-2. **Health & Fitness Coach**: Offer nutrition advice, lifestyle recommendations, and motivation
-3. **Scope-Limited Physical Therapist**: Provide basic form analysis, injury prevention tips, and recovery guidance
+Rules:
+• Scope → fitness education only. No diagnoses, prescriptions, or treatment plans.
+• Modes → GENERAL, WORKOUT_CONFIRM, WORKOUT_CREATE, WORKOUT_MODIFY, OUT_OF_SCOPE.
+• Intent → GENERAL, WORKOUT_REQUEST, WORKOUT_MODIFICATION, OUT_OF_SCOPE.
+• Always return valid JSON as defined by the response schema.
+• Use RPE (6–10 scale) to express workout intensity.
+• Never generate or modify a workout in the same turn you ask for confirmation.
+• Keep message titles under 60 chars, bodies under 240 chars.
+• Be concise, friendly, and professional—no emojis.
+• When out of scope, use the refusal template:
+  "I am an AI fitness assistant and cannot provide {diagnoses/prescriptions/unrelated info}.
+Please consult a licensed professional for that.
+   I can help with fitness education, workout planning, and healthy habits."`;
 
-**Knowledge Base:**
-- Exercise science and biomechanics
-- Nutrition fundamentals and meal planning
-- Injury prevention and recovery protocols
-- Progressive training methodologies
-- Mental health and motivation strategies
-- Equipment usage and alternatives
-
-**Response Guidelines:**
-- Always prioritize safety and proper form
-- Provide actionable, step-by-step instructions
-- Consider individual fitness levels and limitations
-- Include modifications for different skill levels
-- Reference evidence-based practices
-- Maintain an encouraging, supportive tone
-- Ask clarifying questions when needed
-- Disclaim medical advice appropriately
-
-**Safety Protocols:**
-- Never recommend exercises that could cause harm
-- Always suggest consulting healthcare providers for medical concerns
-- Emphasize proper warm-up and cool-down routines
-- Provide clear form cues and safety warnings
-- Recommend starting with lighter weights/progressions
-
-**Communication Style:**
-- Professional yet approachable
-- Clear and concise explanations
-- Use encouraging language
-- Provide specific, measurable recommendations
-- Include progress tracking suggestions
-
-Remember: Always prioritize safety and proper form. When in doubt, start lighter and progress gradually.`;
+// Structured response schema configuration
+const RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  required: ["mode", "intent", "message", "payload", "errors"],
+  properties: {
+    mode: {
+      type: Type.STRING,
+      enum: [
+        "GENERAL",
+        "WORKOUT_CONFIRM",
+        "WORKOUT_CREATE",
+        "WORKOUT_MODIFY",
+        "OUT_OF_SCOPE",
+      ],
+    },
+    intent: {
+      type: Type.STRING,
+      enum: [
+        "GENERAL",
+        "WORKOUT_REQUEST",
+        "WORKOUT_MODIFICATION",
+        "OUT_OF_SCOPE",
+      ],
+    },
+    message: {
+      type: Type.OBJECT,
+      required: ["title", "body"],
+      properties: {
+        title: {
+          type: Type.STRING,
+        },
+        body: {
+          type: Type.STRING,
+        },
+      },
+    },
+    payload: {
+      type: Type.OBJECT,
+      properties: {
+        summary: {
+          type: Type.OBJECT,
+          properties: {
+            goal: {
+              type: Type.STRING,
+            },
+            daysPerWeek: {
+              type: Type.INTEGER,
+            },
+            experience: {
+              type: Type.STRING,
+            },
+            equipment: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.STRING,
+              },
+            },
+            constraints: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.STRING,
+              },
+            },
+          },
+        },
+        plan: {
+          type: Type.OBJECT,
+          required: ["goal", "days", "split", "WorkoutGuide"],
+          properties: {
+            WorkoutGuide: {
+              type: Type.STRING,
+            },
+            goal: {
+              type: Type.STRING,
+            },
+            split: {
+              type: Type.STRING,
+            },
+            days: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                required: ["dayIndex", "label", "main"],
+                properties: {
+                  dayIndex: {
+                    type: Type.INTEGER,
+                  },
+                  label: {
+                    type: Type.STRING,
+                  },
+                  main: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      required: ["name", "sets", "reps", "rpe"],
+                      properties: {
+                        name: {
+                          type: Type.STRING,
+                        },
+                        sets: {
+                          type: Type.INTEGER,
+                        },
+                        reps: {
+                          type: Type.STRING,
+                        },
+                        rpe: {
+                          type: Type.INTEGER,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        planRef: {
+          type: Type.OBJECT,
+          properties: {
+            planId: {
+              type: Type.STRING,
+            },
+            baseVersion: {
+              type: Type.INTEGER,
+            },
+          },
+        },
+        answer: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.STRING,
+          },
+        },
+        referral: {
+          type: Type.STRING,
+        },
+        whatICanDo: {
+          type: Type.STRING,
+        },
+      },
+    },
+    errors: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.STRING,
+      },
+    },
+  },
+};
 
 // Database helper functions
 const saveMessageToDatabase = async (chatSessionId, userId, role, content) => {
@@ -165,12 +297,35 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
   }
 };
 
-// Function to call Gemini API with conversation history
+/**
+ * Function to call Gemini API with structured response
+ * @param {string} userMessage - The user's message
+ * @param {Array} conversationHistory - Previous conversation messages
+ * @returns {Promise<Object>} Structured response object
+ */
 const callGeminiAPI = async (userMessage, conversationHistory = []) => {
   try {
+    console.log("🔍 Debug - API Key check:", {
+      hasKey: !!GOOGLE_API_KEY,
+      keyValue: GOOGLE_API_KEY
+        ? `${GOOGLE_API_KEY.substring(0, 10)}...`
+        : "undefined",
+      keyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
+    });
+
+    console.log("🔍 Debug - Model check:", {
+      modelName: MODEL_NAME,
+      isValidModel: MODEL_NAME && MODEL_NAME.includes("gemini"),
+    });
+
     if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
-      console.log("API key not configured, returning mock response");
-      return getMockResponse(userMessage, conversationHistory);
+      console.log("❌ API key not configured, returning mock response");
+      return getMockStructuredResponse(userMessage, conversationHistory);
+    }
+
+    if (!MODEL_NAME || !MODEL_NAME.includes("gemini")) {
+      console.log("❌ Invalid model name, returning mock response");
+      return getMockStructuredResponse(userMessage, conversationHistory);
     }
 
     // Build conversation context
@@ -183,32 +338,114 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
       });
     }
 
-    const prompt = `${FITNEXT_SYSTEM_PROMPT}
+    // Initialize Google Generative AI with new SDK
+    const ai = new GoogleGenAI({
+      apiKey: GOOGLE_API_KEY,
+    });
 
-${conversationContext}
+    // Configuration for structured response
+    const config = {
+      temperature: 0.3,
+      responseMimeType: "application/json",
+      responseSchema: RESPONSE_SCHEMA,
+      systemInstruction: [
+        {
+          text: FITNEXT_SYSTEM_INSTRUCTION,
+        },
+      ],
+    };
 
-**Current User Message:** "${userMessage}"
+    // Build the conversation content
+    const contents = [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `${conversationContext}**Current User Message:** "${userMessage}"`,
+          },
+        ],
+      },
+    ];
 
-Please provide a helpful, fitness-focused response based on the FitNext knowledge base and the conversation context above. Keep your response concise and actionable. Remember what we've discussed previously and build upon that context.`;
+    // Generate structured content
+    console.log("🚀 Making API call to Gemini with:", {
+      model: MODEL_NAME,
+      userMessage: userMessage.substring(0, 50) + "...",
+      hasConfig: !!config,
+      hasSchema: !!config.responseSchema,
+    });
 
-    // Initialize Google Generative AI
-    const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+    // Try the exact structure from Google AI Studio
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      config,
+      contents,
+    });
 
-    // Generate content
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const aiResponse = response.text();
+    // Parse the structured response
+    console.log("📝 Response object:", response);
+    console.log("📝 Response type:", typeof response);
+    console.log("📝 Response methods:", Object.getOwnPropertyNames(response));
 
-    return aiResponse;
+    // Try different ways to get the text content
+    let responseText;
+    if (typeof response.text === "function") {
+      responseText = response.text();
+    } else if (
+      response.response &&
+      typeof response.response.text === "function"
+    ) {
+      responseText = response.response.text();
+    } else if (
+      response.candidates &&
+      response.candidates[0] &&
+      response.candidates[0].content
+    ) {
+      responseText = response.candidates[0].content.parts[0].text;
+    } else {
+      console.log("❌ Could not extract text from response");
+      throw new Error("Unable to extract text from Gemini response");
+    }
+
+    console.log("📝 Raw API Response:", responseText.substring(0, 200) + "...");
+
+    const structuredResponse = JSON.parse(responseText);
+    console.log("✅ Parsed structured response:", {
+      mode: structuredResponse.mode,
+      intent: structuredResponse.intent,
+      hasMessage: !!structuredResponse.message,
+    });
+
+    return structuredResponse;
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
-    return getMockResponse(userMessage, conversationHistory);
+    console.error("❌ Error calling Gemini API:", error);
+    console.error("❌ Error details:", error.message);
+    console.error("❌ Error stack:", error.stack);
+    console.error("❌ Error name:", error.name);
+    console.error("❌ Error cause:", error.cause);
+
+    // Check if it's a network error
+    if (error.message.includes("fetch failed")) {
+      console.error("🔍 Network/fetch error detected. Possible causes:");
+      console.error("   - Internet connection issues");
+      console.error("   - API key invalid or expired");
+      console.error("   - Model name incorrect");
+      console.error("   - API endpoint issues");
+      console.error("   - Rate limiting");
+    }
+
+    // Return fallback structured response
+    return getMockStructuredResponse(userMessage, conversationHistory);
   }
 };
 
-// Mock response function for fallback with conversation context
-const getMockResponse = (userMessage, conversationHistory = []) => {
+/**
+ * Mock structured response function for fallback
+ * @param {string} userMessage - The user's message
+ * @param {Array} conversationHistory - Previous conversation messages
+ * @returns {Object} Structured response object
+ */
+const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
   // Check if this is a follow-up question based on conversation history
   const hasPreviousContext = conversationHistory.length > 0;
   const lastMessage = hasPreviousContext
@@ -221,56 +458,75 @@ const getMockResponse = (userMessage, conversationHistory = []) => {
     userMessage.toLowerCase().includes("strength") ||
     userMessage.toLowerCase().includes("cardio") ||
     userMessage.toLowerCase().includes("weight loss") ||
-    userMessage.toLowerCase().includes("full body");
+    userMessage.toLowerCase().includes("full body") ||
+    userMessage.toLowerCase().includes("create") ||
+    userMessage.toLowerCase().includes("plan");
+
+  const isOutOfScope =
+    userMessage.toLowerCase().includes("pain") ||
+    userMessage.toLowerCase().includes("hurt") ||
+    userMessage.toLowerCase().includes("injury") ||
+    userMessage.toLowerCase().includes("medicine") ||
+    userMessage.toLowerCase().includes("doctor");
+
+  if (isOutOfScope) {
+    return {
+      mode: "OUT_OF_SCOPE",
+      intent: "OUT_OF_SCOPE",
+      message: {
+        title: "I can't help with that",
+        body: "I am an AI fitness assistant and cannot provide medical diagnoses or prescriptions. Please consult a licensed professional for that. I'm here to help with fitness education, workout planning, and general healthy habits.",
+      },
+      payload: {
+        referral: "Please consult a licensed professional for that.",
+        whatICanDo:
+          "I can help with fitness education, safe workouts, and healthy habit tips.",
+      },
+      errors: [],
+    };
+  }
 
   if (isWorkoutRequest) {
-    if (
-      hasPreviousContext &&
-      lastMessage.Role === "assistant" &&
-      lastMessage.Content.includes("workout")
-    ) {
-      return `Great! Based on our previous discussion, here are some specific next steps:
-
-**Next Actions:**
-• Start with the warm-up routine I mentioned
-• Focus on proper form for each exercise
-• Track your progress in a workout log
-• Rest 1-2 days between sessions
-
-**Questions for you:**
-• How did the first workout feel?
-• Any exercises that felt challenging?
-• What equipment do you have available?
-
-Let me know how it goes and I can help adjust the plan!`;
-    } else {
-      return `I can help you create a personalized workout plan! Based on your request, here's what I recommend:
-
-**Quick Workout Plan:**
-• **Warm-up**: 5-10 minutes light cardio + dynamic stretching
-• **Main Workout**: 3-4 compound exercises (squats, push-ups, rows)
-• **Sets**: 3 sets of 8-12 reps each
-• **Rest**: 60-90 seconds between sets
-• **Cool-down**: 5-10 minutes stretching
-
-**Progression Tips:**
-• Start with bodyweight exercises
-• Focus on proper form first
-• Gradually increase intensity
-• Rest 1-2 days between workouts
-
-Would you like me to create a more detailed, personalized plan based on your specific goals and fitness level?`;
-    }
+    return {
+      mode: "WORKOUT_CONFIRM",
+      intent: "WORKOUT_REQUEST",
+      message: {
+        title: "Confirm your plan",
+        body: "I can create a personalized workout plan based on your request. Shall I create it now?",
+      },
+      payload: {
+        confirmQuestion: "Would you like me to create a workout plan now?",
+        summary: {
+          goal: "General fitness",
+          daysPerWeek: 3,
+          experience: "intermediate",
+          equipment: ["bodyweight", "dumbbells"],
+          constraints: [],
+        },
+      },
+      errors: [],
+    };
   } else {
-    return `I'm your FitNext AI fitness assistant! I can help you with:
-
-• **Workout plans** and exercise routines
-• **Form analysis** and technique tips
-• **Nutrition guidance** for fitness goals
-• **Recovery strategies** and injury prevention
-• **Fitness questions** and general advice
-
-What specific fitness topic would you like to discuss?`;
+    return {
+      mode: "GENERAL",
+      intent: "GENERAL",
+      message: {
+        title: "Fitness Assistant",
+        body: "I'm your FitNext AI fitness assistant! I can help you with workout plans, exercise routines, form analysis, nutrition guidance, and general fitness advice.",
+      },
+      payload: {
+        answer: [
+          "• Workout plans and exercise routines",
+          "• Form analysis and technique tips",
+          "• Nutrition guidance for fitness goals",
+          "• Recovery strategies and injury prevention",
+          "• General fitness questions and advice",
+        ],
+        nextBestAction:
+          "What specific fitness topic would you like to discuss?",
+      },
+      errors: [],
+    };
   }
 };
 
@@ -293,18 +549,6 @@ router.post("/chat", authenticateToken, async (req, res) => {
   }
 
   try {
-    // Check usage limits
-    const usage = await checkUsageLimit(userId);
-
-    if (usage.remaining <= 0) {
-      return res.status(429).json({
-        success: false,
-        message:
-          "Weekly message limit reached. Upgrade to premium for more messages.",
-        remaining_queries: 0,
-      });
-    }
-
     // Get or create chat session
     const chatSessionId = await createOrGetChatSession(
       userId,
@@ -314,8 +558,39 @@ router.post("/chat", authenticateToken, async (req, res) => {
     // Get recent conversation history for context
     const conversationHistory = await getConversationHistory(chatSessionId, 10);
 
-    // Call Gemini API
-    const aiResponse = await callGeminiAPI(message, conversationHistory);
+    // Call Gemini API to get structured response
+    const structuredResponse = await callGeminiAPI(
+      message,
+      conversationHistory
+    );
+
+    // Determine inquiry type based on intent for usage tracking
+    const isWorkoutInquiry =
+      structuredResponse.intent === "WORKOUT_REQUEST" ||
+      structuredResponse.intent === "WORKOUT_MODIFICATION";
+
+    // Check appropriate usage limits based on inquiry type
+    const usage = await checkUsageLimit(
+      userId,
+      isWorkoutInquiry ? "workout" : "general"
+    );
+
+    if (usage.remaining <= 0) {
+      return res.status(429).json({
+        success: false,
+        message: isWorkoutInquiry
+          ? "Weekly workout inquiry limit reached. Upgrade to premium for more workout plans."
+          : "Weekly general inquiry limit reached. Upgrade to premium for more messages.",
+        remaining_queries: {
+          general: (await checkUsageLimit(userId, "general")).remaining,
+          workout: (await checkUsageLimit(userId, "workout")).remaining,
+        },
+        inquiry_type: isWorkoutInquiry ? "workout" : "general",
+      });
+    }
+
+    // Convert structured response to string for database storage
+    const aiResponseString = JSON.stringify(structuredResponse);
 
     // Save user message to database
     const userMessageSaved = await saveMessageToDatabase(
@@ -330,20 +605,58 @@ router.post("/chat", authenticateToken, async (req, res) => {
       chatSessionId,
       userId,
       "assistant",
-      aiResponse
+      aiResponseString
     );
 
-    // Increment usage counter
-    const usageIncremented = await incrementUsage(userId);
+    // Save workout plan to database if it's a WORKOUT_CREATE response
+    let savedPlanId = null;
+    if (
+      structuredResponse.mode === "WORKOUT_CREATE" &&
+      structuredResponse.payload?.plan
+    ) {
+      try {
+        savedPlanId = generatePlanId(userId);
+        await saveWorkoutPlan(
+          savedPlanId,
+          userId,
+          chatSessionId,
+          structuredResponse
+        );
 
-    // Update usage for response
-    const updatedUsage = await checkUsageLimit(userId);
+        console.log(`✅ Workout plan saved successfully: ${savedPlanId}`);
+        // Add plan ID to the response for frontend reference
+        structuredResponse.payload.savedPlanId = savedPlanId;
+      } catch (error) {
+        console.error("❌ Critical error: Failed to save workout plan", {
+          error: error.message,
+          userId: userId,
+          sessionId: chatSessionId,
+          planId: savedPlanId,
+        });
+        // Don't fail the entire request, but log the error
+        // Frontend will not receive savedPlanId if saving failed
+      }
+    }
+
+    // Increment usage counter based on inquiry type
+    const usageIncremented = await incrementUsage(
+      userId,
+      isWorkoutInquiry ? "workout" : "general"
+    );
+
+    // Get updated usage for response
+    const updatedGeneralUsage = await checkUsageLimit(userId, "general");
+    const updatedWorkoutUsage = await checkUsageLimit(userId, "workout");
 
     res.json({
       success: true,
-      response: aiResponse,
-      remaining_queries: updatedUsage.remaining,
+      response: structuredResponse, // Return structured response
+      remaining_queries: {
+        general: updatedGeneralUsage.remaining,
+        workout: updatedWorkoutUsage.remaining,
+      },
       conversation_id: chatSessionId,
+      inquiry_type: isWorkoutInquiry ? "workout" : "general",
     });
   } catch (error) {
     console.error("Chat endpoint error:", error);
@@ -389,9 +702,34 @@ router.get("/chat/history", authenticateToken, async (req, res) => {
         `);
     }
 
+    // Parse structured responses back to objects for display
+    const messages = result.recordset.reverse().map((msg) => {
+      try {
+        // Try to parse assistant messages as JSON (structured responses)
+        if (msg.Role === "assistant" && msg.Content.startsWith("{")) {
+          const parsedContent = JSON.parse(msg.Content);
+          return {
+            ...msg,
+            Content: parsedContent,
+            isStructured: true,
+          };
+        }
+        return {
+          ...msg,
+          isStructured: false,
+        };
+      } catch (error) {
+        // If parsing fails, return as-is (for legacy messages)
+        return {
+          ...msg,
+          isStructured: false,
+        };
+      }
+    });
+
     res.json({
       success: true,
-      messages: result.recordset.reverse(), // Return in chronological order
+      messages: messages, // Return in chronological order with structured responses parsed
     });
   } catch (error) {
     console.error("Get history error:", error);
