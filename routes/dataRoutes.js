@@ -985,4 +985,38 @@ router.get('/exercises/history/:userId', async (req, res) => {
   }
 });
 
+
+
+// PAYMENTS
+
+
+// POST 
+router.post('/payments', authenticateToken, async (req, res) => {
+    const UserId = req.user.userId;
+    const status = "pending";
+    const { plan, amount, currency, paymentMethod, created_date} = req.body;
+
+    try {
+      const pool = getPool();
+      await pool.request()
+        .input('userId', UserId)
+        .input('plan', plan)
+        .input('amount', amount)
+        .input('currency', currency)
+        .input('paymentMethod', paymentMethod)
+        .input('createdDate', created_date)
+        .input('status', status)
+        .query(`
+          INSERT INTO dbo.payments (plan, amount, currency, paymentMethod, status)
+          VALUES (@plan, @amount, @currency, @paymentMethod, @created_date, @status)
+        `);
+      res.status(200).json({ message: 'Payment added successfully' });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to insert Payment' });
+    }
+});
+
+
 module.exports = router;
+
+
