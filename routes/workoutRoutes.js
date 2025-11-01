@@ -138,13 +138,46 @@ const getUserWorkoutPlans = async (userId) => {
     const result = await pool.request().input("userId", userId).query(`
         SELECT 
           PlanID, Summary, Goal, DaysPerWeek, DurationWeeks, Split, 
-          Status, CreatedDate, LastModified
+          Status, CreatedDate, LastModified, PlanData
         FROM dbo.AIWorkoutPlans 
         WHERE UserID = @userId AND IsActive = 1
         ORDER BY CreatedDate DESC
       `);
 
-    return result.recordset;
+    // Process each plan to calculate total exercises
+    const plans = result.recordset.map((plan) => {
+      let totalExercises = 0;
+
+      try {
+        const planData = JSON.parse(plan.PlanData);
+
+        // Calculate total exercises across all days
+        if (Array.isArray(planData)) {
+          totalExercises = planData.reduce((total, day) => {
+            if (day.main && Array.isArray(day.main)) {
+              return total + day.main.length;
+            }
+            return total;
+          }, 0);
+        }
+      } catch (parseError) {
+        console.error(
+          "Error parsing plan data for total exercises:",
+          parseError
+        );
+        totalExercises = 0;
+      }
+
+      // Remove PlanData from response (we only needed it for calculation)
+      const { PlanData, ...planWithoutData } = plan;
+
+      return {
+        ...planWithoutData,
+        TotalExercises: totalExercises,
+      };
+    });
+
+    return plans;
   } catch (error) {
     console.error("Error getting user workout plans:", error);
     return [];
