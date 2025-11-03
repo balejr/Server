@@ -992,14 +992,14 @@ router.get('/exercises/history/:userId', async (req, res) => {
 
 // POST 
 router.post('/payments', authenticateToken, async (req, res) => {
-    const UserId = req.user.userId;
+    const userId = req.user.userId;
     const status = "pending";
     const { plan, amount, currency, paymentMethod, created_date} = req.body;
 
     try {
       const pool = getPool();
       await pool.request()
-        .input('userId', UserId)
+        .input('userId', userId)
         .input('plan', plan)
         .input('amount', amount)
         .input('currency', currency)
