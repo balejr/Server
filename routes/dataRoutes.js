@@ -1000,7 +1000,6 @@ router.post('/payments', authenticateToken, async (req, res) => {
       const pool = getPool();
       await pool.request()
         .input('payments_id', payments_id)
-        .input('userId', userId)
         .input('plan', plan)
         .input('amount', amount)
         .input('currency', currency)
