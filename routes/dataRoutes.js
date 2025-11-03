@@ -1007,7 +1007,7 @@ router.post('/payments', authenticateToken, async (req, res) => {
         .input('created_date', created_date)
         .input('status', status)
         .query(`
-          INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status,)
+          INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status)
           VALUES (@payments_id, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
         `);
       res.status(200).json({ message: 'Payment added successfully' });
