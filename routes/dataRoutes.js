@@ -1022,13 +1022,12 @@ router.get('/exercises/history/:userId', async (req, res) => {
 router.post('/payments', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const status = "pending";
-  const { payments_id, plan, amount, currency, paymentMethod, created_date } = req.body;
+  const {plan, amount, currency, paymentMethod, created_date } = req.body;
 
   try {
     const pool = getPool();
 
     await pool.request()
-      .input('payments_id', payments_id)
       .input('userId', userId)
       .input('plan', plan)
       .input('amount', amount)
@@ -1038,8 +1037,8 @@ router.post('/payments', authenticateToken, async (req, res) => {
       .input('status', status)
       .query(`
         INSERT INTO dbo.payments 
-        (payments_id, userId, [plan], amount, currency, paymentMethod, created_date, status)
-        VALUES (@payments_id, @userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
+        (userId, [plan], amount, currency, paymentMethod, created_date, status)
+        VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
       `);
 
     res.status(200).json({ message: 'Payment added successfully' });
