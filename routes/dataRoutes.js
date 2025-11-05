@@ -1045,9 +1045,14 @@ router.post('/payments', authenticateToken, async (req, res) => {
     res.status(200).json({ message: 'Payment added successfully' });
   } catch (err) {
     console.error('Insert Payment Error:', err);
-    res.status(500).json({ message: 'Failed to insert payment', error: err.message });
-  }
+    res.status(500).json({
+    message: 'Failed to insert payment',
+    sqlMessage: err.originalError?.info?.message || err.message,
+    stack: err.stack
+  });
+}
 });
+  
 
 
 module.exports = router;
