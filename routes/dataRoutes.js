@@ -994,7 +994,7 @@ router.get('/exercises/history/:userId', async (req, res) => {
 router.post('/payments', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const status = "pending";
-    const { payments_id, plan, amount, currency, paymentMethod, created_date} = req.body;
+    const { payments_id, plan, amount} = req.body; //currency, paymentMethod, created_date}
 
     try {
       const pool = getPool();
@@ -1002,14 +1002,16 @@ router.post('/payments', authenticateToken, async (req, res) => {
         .input('payments_id', payments_id)
         .input('plan', plan)
         .input('amount', amount)
-        .input('currency', currency)
-        .input('paymentMethod', paymentMethod)
-        .input('created_date', created_date)
-        .input('status', status)
+        // .input('currency', currency)
+        // .input('paymentMethod', paymentMethod)
+        // .input('created_date', created_date)
+        // .input('status', status)
         .query(`
-          INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status)
-          VALUES (@payments_id, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
+          INSERT INTO dbo.payments (payments_id, plan, amount)
+          VALUES (@payments_id, @plan, @amount)
         `);
+        // INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status)
+        //   VALUES (@payments_id, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
       res.status(200).json({ message: 'Payment added successfully' });
     } catch (err) {
       res.status(500).json({ message: 'Failed to insert Payment' });
