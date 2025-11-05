@@ -1038,7 +1038,7 @@ router.post('/payments', authenticateToken, async (req, res) => {
       .input('status', status)
       .query(`
         INSERT INTO dbo.payments 
-        (payments_id, userId, plan, amount, currency, paymentMethod, created_date, status)
+        (payments_id, userId, [plan], amount, currency, paymentMethod, created_date, status)
         VALUES (@payments_id, @userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
       `);
 
