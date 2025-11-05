@@ -987,35 +987,66 @@ router.get('/exercises/history/:userId', async (req, res) => {
 
 
 
-// PAYMENTS
+// // PAYMENTS
 
 
-// POST 
+// // POST 
+// router.post('/payments', authenticateToken, async (req, res) => {
+//     const userId = req.user.userId;
+//     const status = "pending";
+//     const { payments_id, plan, amount} = req.body; //currency, paymentMethod, created_date}
+
+//     try {
+//       const pool = getPool();
+//       await pool.request()
+//         .input('payments_id', payments_id)
+//         .input('plan', plan)
+//         .input('amount', amount)
+//         // .input('currency', currency)
+//         // .input('paymentMethod', paymentMethod)
+//         // .input('created_date', created_date)
+//         // .input('status', status)
+//         .query(`
+//           INSERT INTO dbo.payments (payments_id, plan, amount)
+//           VALUES (@payments_id, @plan, @amount)
+//         `);
+//         // INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status)
+//         //   VALUES (@payments_id, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
+//       res.status(200).json({ message: 'Payment added successfully' });
+//     } catch (err) {
+//       res.status(500).json({ message: 'Failed to insert Payment' });
+//     }
+// });
+
+// POST /payments
 router.post('/payments', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const status = "pending";
-    const { payments_id, plan, amount} = req.body; //currency, paymentMethod, created_date}
+  const userId = req.user.userId;
+  const status = "pending";
+  const { payments_id, plan, amount, currency, paymentMethod, created_date } = req.body;
 
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('payments_id', payments_id)
-        .input('plan', plan)
-        .input('amount', amount)
-        // .input('currency', currency)
-        // .input('paymentMethod', paymentMethod)
-        // .input('created_date', created_date)
-        // .input('status', status)
-        .query(`
-          INSERT INTO dbo.payments (payments_id, plan, amount)
-          VALUES (@payments_id, @plan, @amount)
-        `);
-        // INSERT INTO dbo.payments (payments_id, plan, amount, currency, paymentMethod, created_date, status)
-        //   VALUES (@payments_id, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
-      res.status(200).json({ message: 'Payment added successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to insert Payment' });
-    }
+  try {
+    const pool = getPool();
+
+    await pool.request()
+      .input('payments_id', payments_id)
+      .input('userId', userId)
+      .input('plan', plan)
+      .input('amount', amount)
+      .input('currency', currency || 'USD') // default currency
+      .input('paymentMethod', paymentMethod || 'unknown')
+      .input('created_date', created_date || new Date())
+      .input('status', status)
+      .query(`
+        INSERT INTO dbo.payments 
+        (payments_id, userId, plan, amount, currency, paymentMethod, created_date, status)
+        VALUES (@payments_id, @userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
+      `);
+
+    res.status(200).json({ message: 'Payment added successfully' });
+  } catch (err) {
+    console.error('Insert Payment Error:', err);
+    res.status(500).json({ message: 'Failed to insert payment', error: err.message });
+  }
 });
 
 
