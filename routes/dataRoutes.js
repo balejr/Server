@@ -1019,41 +1019,179 @@ router.get('/exercises/history/:userId', async (req, res) => {
 // });
 
 // POST /payments
-router.post('/payments', authenticateToken, async (req, res) => {
-  const userId = req.user.userId;
-  const status = "pending";
-  const {plan, amount, currency, paymentMethod, created_date } = req.body;
+// router.post('/payments', authenticateToken, async (req, res) => {
+//   const userId = req.user.userId;
+//   const status = "pending";
+//   const {plan, amount, currency, paymentMethod, created_date } = req.body;
 
-  try {
-    const pool = getPool();
+//   try {
+//     const pool = getPool();
 
-    await pool.request()
-      .input('userId', userId)
-      .input('plan', plan)
-      .input('amount', amount)
-      .input('currency', currency || 'USD') // default currency
-      .input('paymentMethod', paymentMethod || 'unknown')
-      .input('created_date', created_date || new Date())
-      .input('status', status)
-      .query(`
-        INSERT INTO dbo.payments 
-        (userId, [plan], amount, currency, paymentMethod, created_date, status)
-        VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
-      `);
+//     await pool.request()
+//       .input('userId', userId)
+//       .input('plan', plan)
+//       .input('amount', amount)
+//       .input('currency', currency || 'USD') // default currency
+//       .input('paymentMethod', paymentMethod || 'unknown')
+//       .input('created_date', created_date || new Date())
+//       .input('status', status)
+//       .query(`
+//         INSERT INTO dbo.payments 
+//         (userId, [plan], amount, currency, paymentMethod, created_date, status)
+//         VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @created_date, @status)
+//       `);
 
-    res.status(200).json({ message: 'Payment added successfully' });
-  } catch (err) {
-    console.error('Insert Payment Error:', err);
-    res.status(500).json({
-    message: 'Failed to insert payment',
-    sqlMessage: err.originalError?.info?.message || err.message,
-    stack: err.stack
-  });
-}
-});
+//     res.status(200).json({ message: 'Payment added successfully' });
+//   } catch (err) {
+//     console.error('Insert Payment Error:', err);
+//     res.status(500).json({
+//     message: 'Failed to insert payment',
+//     sqlMessage: err.originalError?.info?.message || err.message,
+//     stack: err.stack
+//   });
+// }
+// });
   
 
 
-module.exports = router;
+// module.exports = router;
 
 
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// POST /api/payments/initialize
+router.post('/payments/initialize', authenticateToken, async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
+    }
+
+    const userId = req.user.userId;
+    const { plan = 'premium', amount = 9.99, currency = 'USD', paymentMethod = 'stripe' } = req.body || {};
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const cents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    // Create PaymentIntent in Stripe
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: cents,
+      currency: currency.toLowerCase(),
+      automatic_payment_methods: { enabled: true },
+      description: `FitNext ${plan} subscription`,
+      metadata: { 
+        userId: String(userId), 
+        plan, 
+        paymentMethod 
+      },
+    });
+
+    res.status(200).json({ 
+      clientSecret: paymentIntent.client_secret, 
+      paymentIntentId: paymentIntent.id 
+    });
+  } catch (err) {
+    console.error('Initialize payment error:', err);
+    res.status(500).json({
+      message: 'Failed to initialize payment',
+      error: err?.message || 'Stripe initialize failed',
+      stack: err.stack
+    });
+  }
+});
+
+// POST /api/payments/confirm
+router.post('/payments/confirm', authenticateToken, async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
+    }
+
+    const { paymentIntentId } = req.body || {};
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'paymentIntentId required' });
+    }
+
+    // Retrieve PaymentIntent from Stripe
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    
+    res.status(200).json({ 
+      id: pi.id, 
+      status: pi.status, 
+      amount: pi.amount, 
+      currency: pi.currency 
+    });
+  } catch (err) {
+    console.error('Confirm payment error:', err);
+    res.status(500).json({
+      message: 'Failed to confirm payment',
+      error: err?.message || 'Stripe confirm failed',
+      stack: err.stack
+    });
+  }
+});
+
+// POST /api/users/updateSubscription
+router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { subscriptionStatus = 'active', plan = 'premium', paymentIntentId } = req.body || {};
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: 'paymentIntentId is required' });
+    }
+
+    const pool = getPool();
+
+    // Update payment record with payment_intent_id and status
+    await pool.request()
+      .input('userId', userId)
+      .input('paymentIntentId', paymentIntentId)
+      .input('status', subscriptionStatus === 'active' ? 'succeeded' : subscriptionStatus)
+      .query(`
+        UPDATE [dbo].[payments]
+        SET payment_intent_id = @paymentIntentId,
+            status = @status,
+            confirmed_date = GETDATE()
+        WHERE UserId = @userId 
+          AND payment_intent_id IS NULL
+          AND status = 'pending'
+        ORDER BY created_date DESC
+      `);
+
+    // Update UserProfile.UserType to 'Premium' when subscription is active
+    if (subscriptionStatus === 'active' && plan === 'premium') {
+      await pool.request()
+        .input('userId', userId)
+        .query(`
+          UPDATE [dbo].[UserProfile]
+          SET UserType = 'Premium'
+          WHERE UserID = @userId
+        `);
+    }
+
+    res.status(200).json({ 
+      ok: true, 
+      userId, 
+      subscriptionStatus, 
+      plan, 
+      paymentIntentId 
+    });
+  } catch (err) {
+    console.error('Update subscription error:', err);
+    res.status(500).json({
+      message: 'Failed to update subscription',
+      sqlMessage: err.originalError?.info?.message || err.message,
+      stack: err.stack
+    });
+  }
+});
