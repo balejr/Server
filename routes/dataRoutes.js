@@ -1057,7 +1057,19 @@ router.get('/exercises/history/:userId', async (req, res) => {
 // module.exports = router;
 
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+// Safe initialization that won't crash the app
+let stripe = null;
+try {
+  if (process.env.STRIPE_SECRET_KEY) {
+    stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    console.log('Stripe initialized');
+  } else {
+    console.warn('STRIPE_SECRET_KEY not set - Stripe features disabled');
+  }
+} catch (err) {
+  console.error('Failed to initialize Stripe:', err);
+  // Don't crash - just log the error
+}
 
 // POST /api/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
