@@ -1079,7 +1079,22 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     }
 
     const userId = req.user.userId;
+    
+    // Log the entire request body to see what's being sent
+    console.log('Payment initialize request body:', JSON.stringify(req.body, null, 2));
+    
     const { plan = 'premium', amount = 9.99, currency = 'USD', paymentMethod = 'stripe' } = req.body || {};
+    
+    // Check if a PaymentMethod ID is being sent
+    const paymentMethodId = req.body.paymentMethodId || req.body.payment_method_id || req.body.payment_method;
+    
+    console.log('Extracted values:', {
+      plan,
+      amount,
+      currency,
+      paymentMethod, // This is likely "stripe" (string)
+      paymentMethodId // This would be "pm_xxxxx" if present
+    });
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
