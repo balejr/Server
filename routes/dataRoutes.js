@@ -1238,27 +1238,31 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     }
 
     // 2. Check if user_subscriptions record exists, then UPDATE or INSERT
-    console.log(`📝 Step 2: Checking user_subscriptions for user ${userIdInt}`);
+    console.log(`📝 Step 2: Checking [dbo].[user_subscriptions] for user ${userIdInt}`);
     const existingSub = await pool.request()
       .input('userId', mssql.Int, userIdInt)
-      .query(`SELECT UserId FROM dbo.user_subscriptions WHERE UserId = @userId`);
+      .query(`SELECT UserId FROM [dbo].[user_subscriptions] WHERE UserId = @userId`);
 
     if (existingSub.recordset.length > 0) {
       console.log(`📝 Step 2a: Updating existing subscription`);
+      const updateQuery = `UPDATE [dbo].[user_subscriptions] SET [plan] = @plan, status = @status, payment_intent_id = @paymentIntentId, updated_at = SYSDATETIMEOFFSET() WHERE UserId = @userId`;
+      console.log(`🔍 UPDATE query: ${updateQuery}`);
       await pool.request()
         .input('userId', mssql.Int, userIdInt)
         .input('plan', mssql.NVarChar(32), capitalizedPlan)
         .input('status', mssql.NVarChar(32), subscriptionStatus)
         .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
-        .query(`UPDATE dbo.user_subscriptions SET [plan] = @plan, status = @status, payment_intent_id = @paymentIntentId, updated_at = SYSDATETIMEOFFSET() WHERE UserId = @userId`);
+        .query(updateQuery);
     } else {
       console.log(`📝 Step 2b: Inserting new subscription`);
+      const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (UserId, [plan], status, payment_intent_id, started_at, updated_at) VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`;
+      console.log(`🔍 INSERT query: ${insertQuery}`);
       await pool.request()
         .input('userId', mssql.Int, userIdInt)
         .input('plan', mssql.NVarChar(32), capitalizedPlan)
         .input('status', mssql.NVarChar(32), subscriptionStatus)
         .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
-        .query(`INSERT INTO dbo.user_subscriptions (UserId, [plan], status, payment_intent_id, started_at, updated_at) VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`);
+        .query(insertQuery);
     }
     console.log(`✅ Step 2 complete: user_subscriptions updated`);
 
@@ -1266,12 +1270,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     console.log(`📝 Step 3: Checking if payment already exists for payment_intent_id: ${paymentIntentId}`);
     const existingPayment = await pool.request()
       .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
-      .query(`SELECT payment_intent_id FROM dbo.payments WHERE payment_intent_id = @paymentIntentId`);
+      .query(`SELECT payment_intent_id FROM [dbo].[payments] WHERE payment_intent_id = @paymentIntentId`);
 
     if (existingPayment.recordset.length > 0) {
       console.log(`⚠️ Payment already exists, skipping insert`);
     } else {
       console.log(`📝 Step 3: Inserting payment record with status: "${paymentStatus}" (from Stripe: "${stripeStatus}")`);
+      const paymentInsertQuery = `INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`;
+      console.log(`🔍 Payment INSERT query: ${paymentInsertQuery}`);
       await pool.request()
         .input('userId', mssql.Int, userIdInt)
         .input('plan', mssql.VarChar(32), capitalizedPlan)
@@ -1280,7 +1286,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
         .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
         .input('status', mssql.VarChar(32), paymentStatus)
-        .query(`INSERT INTO dbo.payments (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`);
+        .query(paymentInsertQuery);
       console.log(`✅ Step 3 complete: Payment recorded`);
     }
 
@@ -1306,22 +1312,34 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
 // POST /api/data/users/updateSubscription
 router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
+  console.log('🚀 updateSubscription endpoint called');
+  console.log('📥 Request body:', JSON.stringify(req.body));
+  console.log('👤 User from token:', req.user?.userId);
+  
   try {
     const userId = req.user.userId || req.body.userId;
     const { subscriptionStatus = 'active', plan = 'premium', paymentIntentId, paymentMethod = 'stripe' } = req.body || {};
     
+    console.log(`📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}, paymentIntentId=${paymentIntentId}`);
+    
     if (!userId) {
+      console.error('❌ Missing userId');
       return res.status(400).json({ error: 'userId is required' });
     }
     
     if (!paymentIntentId) {
+      console.error('❌ Missing paymentIntentId');
       return res.status(400).json({ error: 'paymentIntentId is required' });
     }
 
+    console.log('🔄 Calling updateSubscriptionInDatabase...');
     const result = await updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod);
+    console.log('✅ updateSubscriptionInDatabase completed successfully');
     return res.json(result);
   } catch (err) {
-    console.error('updateSubscription error', err);
+    console.error('❌ updateSubscription error:', err.message);
+    console.error('❌ Error stack:', err.stack);
+    console.error('❌ Error code:', err.code);
     
     if (err.code === 'EREQUEST') {
       return res.status(500).json({ 
