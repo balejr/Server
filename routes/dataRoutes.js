@@ -1,6 +1,7 @@
 // cd /home/site// routes/dataRoutes.js
 const express = require('express');
 const axios = require('axios');
+const mssql = require('mssql');
 const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const router = express.Router();
@@ -1071,7 +1072,7 @@ try {
   // Don't crash - just log the error
 }
 
-// POST /api/payments/initialize
+// POST /api/data/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -1132,7 +1133,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/payments/confirm
+// POST /api/data/payments/confirm
 router.post('/payments/confirm', authenticateToken, async (req, res) => {
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -1163,11 +1164,117 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/users/updateSubscription
+// Helper function to update subscription in database
+async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod) {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY missing on server');
+  }
+
+  // Retrieve PaymentIntent from Stripe to get amount, currency, and status
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  
+  // Extract payment details
+  const amount = paymentIntent.amount / 100; // Convert cents to dollars
+  const currency = paymentIntent.currency.toUpperCase(); // Ensure uppercase
+  const paymentStatus = paymentIntent.status; // e.g., "succeeded"
+  
+  // Get paymentMethod from metadata or use provided/default
+  const paymentMethodFromMetadata = paymentIntent.metadata?.paymentMethod;
+  const finalPaymentMethod = paymentMethod || paymentMethodFromMetadata || 'stripe';
+
+  // Capitalize plan name
+  const capitalizedPlan = plan === 'premium' ? 'Premium' : plan === 'free' ? 'Free' : plan.charAt(0).toUpperCase() + plan.slice(1);
+
+  // Convert userId to integer
+  const userIdInt = parseInt(userId, 10);
+  if (isNaN(userIdInt)) {
+    throw new Error(`Invalid userId: ${userId} - must be a number`);
+  }
+
+  const pool = getPool();
+  if (!pool) {
+    throw new Error('Database connection not available');
+  }
+
+  const transaction = new mssql.Transaction(pool);
+
+  try {
+    await transaction.begin();
+
+    // 1. Update UserProfile.UserType to "Premium" if subscription is active and plan is premium
+    if (subscriptionStatus === 'active' && plan === 'premium') {
+      const userProfileRequest = new mssql.Request(transaction);
+      await userProfileRequest
+        .input('userId', mssql.Int, userIdInt)
+        .query(`
+          UPDATE [dbo].[UserProfile]
+          SET UserType = 'Premium'
+          WHERE UserID = @userId
+        `);
+    }
+
+    // 2. Upsert user_subscriptions table
+    const subscriptionRequest = new mssql.Request(transaction);
+    await subscriptionRequest
+      .input('userId', mssql.Int, userIdInt)
+      .input('plan', mssql.NVarChar(32), capitalizedPlan)
+      .input('status', mssql.NVarChar(32), subscriptionStatus)
+      .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
+      .query(`
+        MERGE [dbo].[user_subscriptions] AS target
+        USING (SELECT @userId AS UserId) AS source
+        ON target.UserId = source.UserId
+        WHEN MATCHED THEN
+          UPDATE SET 
+            plan = @plan,
+            status = @status,
+            payment_intent_id = @paymentIntentId,
+            updated_at = SYSDATETIMEOFFSET()
+        WHEN NOT MATCHED THEN
+          INSERT (UserId, plan, status, payment_intent_id, started_at, updated_at)
+          VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
+      `);
+
+    // 3. Insert payment record into payments table
+    const paymentRequest = new mssql.Request(transaction);
+    await paymentRequest
+      .input('userId', mssql.Int, userIdInt)
+      .input('plan', mssql.VarChar(32), capitalizedPlan)
+      .input('amount', mssql.Decimal(10, 2), amount)
+      .input('currency', mssql.VarChar(3), currency)
+      .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
+      .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
+      .input('status', mssql.VarChar(32), paymentStatus)
+      .query(`
+        INSERT INTO [dbo].[payments] 
+        (UserId, plan, amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date)
+        VALUES 
+        (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())
+      `);
+
+    await transaction.commit();
+    console.log(`✅ Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
+    console.log(`   Payment recorded: ${currency} ${amount}, Status: ${paymentStatus}`);
+
+    return { 
+      ok: true, 
+      userId: userIdInt, 
+      subscriptionStatus, 
+      plan: capitalizedPlan, 
+      paymentIntentId 
+    };
+  } catch (dbErr) {
+    await transaction.rollback();
+    console.error('Database transaction error:', dbErr);
+    throw dbErr;
+  }
+}
+
+// POST /api/data/users/updateSubscription
 router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const { subscriptionStatus = 'active', plan = 'premium', paymentIntentId } = req.body || {};
+    const userId = req.user.userId || req.body.userId;
+    const { subscriptionStatus = 'active', plan = 'premium', paymentIntentId, paymentMethod = 'stripe' } = req.body || {};
     
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
@@ -1177,53 +1284,22 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       return res.status(400).json({ error: 'paymentIntentId is required' });
     }
 
-    const pool = getPool();
-    
-    // Update the most recent pending payment record
-    await pool.request()
-      .input('userId', userId)
-      .input('paymentIntentId', paymentIntentId)
-      .input('status', subscriptionStatus === 'active' ? 'succeeded' : subscriptionStatus)
-      .query(`
-        UPDATE p
-        SET payment_intent_id = @paymentIntentId, 
-            status = @status, 
-            confirmed_date = GETDATE()
-        FROM [dbo].[payments] p
-        INNER JOIN (
-          SELECT TOP 1 payments_id
-          FROM [dbo].[payments]
-          WHERE UserId = @userId 
-            AND payment_intent_id IS NULL 
-            AND status = 'pending'
-          ORDER BY created_date DESC
-        ) latest ON p.payments_id = latest.payments_id
-      `);
-
-    // Update UserProfile.UserType to 'Premium' when subscription is active
-    if (subscriptionStatus === 'active' && plan === 'premium') {
-      await pool.request()
-        .input('userId', userId)
-        .query(`
-          UPDATE [dbo].[UserProfile]
-          SET UserType = 'Premium'
-          WHERE UserID = @userId
-        `);
-    }
-
-    res.status(200).json({ 
-      ok: true, 
-      userId, 
-      subscriptionStatus, 
-      plan, 
-      paymentIntentId 
-    });
+    const result = await updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod);
+    return res.json(result);
   } catch (err) {
-    console.error('Update subscription error:', err);
-    res.status(500).json({ 
-      message: 'Failed to update subscription', 
-      sqlMessage: err.originalError?.info?.message || err.message, 
-      stack: err.stack 
+    console.error('updateSubscription error', err);
+    
+    if (err.code === 'EREQUEST') {
+      return res.status(500).json({ 
+        error: 'Database error', 
+        message: err.message,
+        details: 'Check if tables exist and schema is correct'
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: 'Failed to update subscription',
+      message: err.message 
     });
   }
 });
