@@ -1174,6 +1174,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     throw new Error('Stripe not initialized - check STRIPE_SECRET_KEY configuration');
   }
 
+  console.log(`🔄 Processing subscription update for user ${userId}, plan: ${plan}, paymentIntentId: ${paymentIntentId}`);
+
   // Retrieve PaymentIntent from Stripe to get amount, currency, and status
   const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
   
@@ -1183,14 +1185,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   
   // Map Stripe payment status to database payment status
   // Database CHECK constraint CK_payments_status allows: "pending", "succeeded", "failed", "canceled"
-  const stripeStatus = paymentIntent.status; // e.g., "succeeded", "processing", "requires_payment_method"
+  const stripeStatus = paymentIntent.status;
   let paymentStatus;
   switch (stripeStatus) {
     case 'succeeded':
       paymentStatus = 'succeeded';
       break;
     case 'processing':
-      paymentStatus = 'pending'; // Processing payments are still pending
+      paymentStatus = 'pending';
       break;
     case 'requires_payment_method':
     case 'requires_confirmation':
@@ -1198,17 +1200,16 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       paymentStatus = 'pending';
       break;
     case 'canceled':
-      paymentStatus = 'canceled'; // Must match database constraint exactly
+      paymentStatus = 'canceled';
       break;
     case 'payment_failed':
       paymentStatus = 'failed';
       break;
     default:
-      paymentStatus = 'pending'; // Default to pending for unknown statuses
+      paymentStatus = 'pending';
       console.warn(`Unknown Stripe status: ${stripeStatus}, defaulting to 'pending'`);
   }
   
-  // Get paymentMethod from metadata or use provided/default
   const paymentMethodFromMetadata = paymentIntent.metadata?.paymentMethod;
   const finalPaymentMethod = paymentMethod || paymentMethodFromMetadata || 'stripe';
 
@@ -1226,74 +1227,65 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     throw new Error('Database connection not available');
   }
 
-  const transaction = new mssql.Transaction(pool);
-
   try {
-    console.log(`🔄 Starting database transaction for user ${userIdInt}, plan: ${capitalizedPlan}, status: ${subscriptionStatus}`);
-    await transaction.begin();
-
     // 1. Update UserProfile.UserType to "Premium" if subscription is active and plan is premium
     if (subscriptionStatus === 'active' && plan === 'premium') {
-      console.log(`📝 Updating UserProfile.UserType to Premium for user ${userIdInt}`);
-      const userProfileRequest = new mssql.Request(transaction);
-      await userProfileRequest
+      console.log(`📝 Step 1: Updating UserProfile.UserType to Premium for user ${userIdInt}`);
+      await pool.request()
         .input('userId', mssql.Int, userIdInt)
-        .query(`
-          UPDATE [dbo].[UserProfile]
-          SET UserType = 'Premium'
-          WHERE UserID = @userId
-        `);
-      console.log(`✅ UserProfile updated`);
+        .query(`UPDATE dbo.UserProfile SET UserType = 'Premium' WHERE UserID = @userId`);
+      console.log(`✅ Step 1 complete: UserProfile updated`);
     }
 
-    // 2. Upsert user_subscriptions table
-    console.log(`📝 Upserting user_subscriptions for user ${userIdInt}, plan: ${capitalizedPlan}`);
-    const subscriptionRequest = new mssql.Request(transaction);
-    await subscriptionRequest
+    // 2. Check if user_subscriptions record exists, then UPDATE or INSERT
+    console.log(`📝 Step 2: Checking user_subscriptions for user ${userIdInt}`);
+    const existingSub = await pool.request()
       .input('userId', mssql.Int, userIdInt)
-      .input('plan', mssql.NVarChar(32), capitalizedPlan)
-      .input('status', mssql.NVarChar(32), subscriptionStatus)
-      .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
-      .query(`
-        MERGE [dbo].[user_subscriptions] AS target
-        USING (SELECT @userId AS UserId) AS source
-        ON target.UserId = source.UserId
-        WHEN MATCHED THEN
-          UPDATE SET 
-            [plan] = @plan,
-            status = @status,
-            payment_intent_id = @paymentIntentId,
-            updated_at = SYSDATETIMEOFFSET()
-        WHEN NOT MATCHED THEN
-          INSERT (UserId, [plan], status, payment_intent_id, started_at, updated_at)
-          VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
-      `);
-    console.log(`✅ user_subscriptions upserted`);
+      .query(`SELECT UserId FROM dbo.user_subscriptions WHERE UserId = @userId`);
 
-    // 3. Insert payment record into payments table
-    const paymentRequest = new mssql.Request(transaction);
-    
-    // Log the status before inserting for debugging
-    console.log(`🔍 Inserting payment with status: "${paymentStatus}" (mapped from Stripe status: "${stripeStatus}")`);
-    
-    await paymentRequest
-      .input('userId', mssql.Int, userIdInt)
-      .input('plan', mssql.VarChar(32), capitalizedPlan)
-      .input('amount', mssql.Decimal(10, 2), amount)
-      .input('currency', mssql.VarChar(3), currency)
-      .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
+    if (existingSub.recordset.length > 0) {
+      console.log(`📝 Step 2a: Updating existing subscription`);
+      await pool.request()
+        .input('userId', mssql.Int, userIdInt)
+        .input('plan', mssql.NVarChar(32), capitalizedPlan)
+        .input('status', mssql.NVarChar(32), subscriptionStatus)
+        .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
+        .query(`UPDATE dbo.user_subscriptions SET [plan] = @plan, status = @status, payment_intent_id = @paymentIntentId, updated_at = SYSDATETIMEOFFSET() WHERE UserId = @userId`);
+    } else {
+      console.log(`📝 Step 2b: Inserting new subscription`);
+      await pool.request()
+        .input('userId', mssql.Int, userIdInt)
+        .input('plan', mssql.NVarChar(32), capitalizedPlan)
+        .input('status', mssql.NVarChar(32), subscriptionStatus)
+        .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
+        .query(`INSERT INTO dbo.user_subscriptions (UserId, [plan], status, payment_intent_id, started_at, updated_at) VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`);
+    }
+    console.log(`✅ Step 2 complete: user_subscriptions updated`);
+
+    // 3. Check if payment already exists (avoid duplicate key error)
+    console.log(`📝 Step 3: Checking if payment already exists for payment_intent_id: ${paymentIntentId}`);
+    const existingPayment = await pool.request()
       .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
-      .input('status', mssql.VarChar(32), paymentStatus)
-      .query(`
-        INSERT INTO [dbo].[payments] 
-        (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date)
-        VALUES 
-        (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())
-      `);
+      .query(`SELECT payment_intent_id FROM dbo.payments WHERE payment_intent_id = @paymentIntentId`);
 
-    await transaction.commit();
-    console.log(`✅ Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
-    console.log(`   Payment recorded: ${currency} ${amount}, Status: ${paymentStatus}`);
+    if (existingPayment.recordset.length > 0) {
+      console.log(`⚠️ Payment already exists, skipping insert`);
+    } else {
+      console.log(`📝 Step 3: Inserting payment record with status: "${paymentStatus}" (from Stripe: "${stripeStatus}")`);
+      await pool.request()
+        .input('userId', mssql.Int, userIdInt)
+        .input('plan', mssql.VarChar(32), capitalizedPlan)
+        .input('amount', mssql.Decimal(10, 2), amount)
+        .input('currency', mssql.VarChar(3), currency)
+        .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
+        .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
+        .input('status', mssql.VarChar(32), paymentStatus)
+        .query(`INSERT INTO dbo.payments (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`);
+      console.log(`✅ Step 3 complete: Payment recorded`);
+    }
+
+    console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
+    console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}`);
 
     return { 
       ok: true, 
@@ -1303,9 +1295,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       paymentIntentId 
     };
   } catch (dbErr) {
-    await transaction.rollback();
-    console.error('❌ Database transaction error:', dbErr);
-    console.error('❌ Error message:', dbErr.message);
+    console.error('❌ Database error:', dbErr.message);
     console.error('❌ Error code:', dbErr.code);
     if (dbErr.originalError) {
       console.error('❌ Original error:', dbErr.originalError.message);
