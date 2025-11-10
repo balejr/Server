@@ -1267,6 +1267,10 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
     // 3. Insert payment record into payments table
     const paymentRequest = new mssql.Request(transaction);
+    
+    // Log the status before inserting for debugging
+    console.log(`🔍 Inserting payment with status: "${paymentStatus}" (mapped from Stripe status: "${stripeStatus}")`);
+    
     await paymentRequest
       .input('userId', mssql.Int, userIdInt)
       .input('plan', mssql.VarChar(32), capitalizedPlan)
