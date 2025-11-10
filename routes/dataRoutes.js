@@ -1170,13 +1170,43 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     throw new Error('STRIPE_SECRET_KEY missing on server');
   }
 
+  if (!stripe) {
+    throw new Error('Stripe not initialized - check STRIPE_SECRET_KEY configuration');
+  }
+
   // Retrieve PaymentIntent from Stripe to get amount, currency, and status
   const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
   
   // Extract payment details
   const amount = paymentIntent.amount / 100; // Convert cents to dollars
   const currency = paymentIntent.currency.toUpperCase(); // Ensure uppercase
-  const paymentStatus = paymentIntent.status; // e.g., "succeeded"
+  
+  // Map Stripe payment status to database payment status
+  // Database CHECK constraint CK_payments_status allows: "pending", "succeeded", "failed", "canceled"
+  const stripeStatus = paymentIntent.status; // e.g., "succeeded", "processing", "requires_payment_method"
+  let paymentStatus;
+  switch (stripeStatus) {
+    case 'succeeded':
+      paymentStatus = 'succeeded';
+      break;
+    case 'processing':
+      paymentStatus = 'pending'; // Processing payments are still pending
+      break;
+    case 'requires_payment_method':
+    case 'requires_confirmation':
+    case 'requires_action':
+      paymentStatus = 'pending';
+      break;
+    case 'canceled':
+      paymentStatus = 'canceled'; // Must match database constraint exactly
+      break;
+    case 'payment_failed':
+      paymentStatus = 'failed';
+      break;
+    default:
+      paymentStatus = 'pending'; // Default to pending for unknown statuses
+      console.warn(`Unknown Stripe status: ${stripeStatus}, defaulting to 'pending'`);
+  }
   
   // Get paymentMethod from metadata or use provided/default
   const paymentMethodFromMetadata = paymentIntent.metadata?.paymentMethod;
