@@ -1226,12 +1226,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         ON target.UserId = source.UserId
         WHEN MATCHED THEN
           UPDATE SET 
-            plan = @plan,
+            [plan] = @plan,
             status = @status,
             payment_intent_id = @paymentIntentId,
             updated_at = SYSDATETIMEOFFSET()
         WHEN NOT MATCHED THEN
-          INSERT (UserId, plan, status, payment_intent_id, started_at, updated_at)
+          INSERT (UserId, [plan], status, payment_intent_id, started_at, updated_at)
           VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
       `);
 
@@ -1247,7 +1247,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       .input('status', mssql.VarChar(32), paymentStatus)
       .query(`
         INSERT INTO [dbo].[payments] 
-        (UserId, plan, amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date)
+        (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date)
         VALUES 
         (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())
       `);
