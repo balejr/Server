@@ -1229,10 +1229,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   const transaction = new mssql.Transaction(pool);
 
   try {
+    console.log(`🔄 Starting database transaction for user ${userIdInt}, plan: ${capitalizedPlan}, status: ${subscriptionStatus}`);
     await transaction.begin();
 
     // 1. Update UserProfile.UserType to "Premium" if subscription is active and plan is premium
     if (subscriptionStatus === 'active' && plan === 'premium') {
+      console.log(`📝 Updating UserProfile.UserType to Premium for user ${userIdInt}`);
       const userProfileRequest = new mssql.Request(transaction);
       await userProfileRequest
         .input('userId', mssql.Int, userIdInt)
@@ -1241,9 +1243,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
           SET UserType = 'Premium'
           WHERE UserID = @userId
         `);
+      console.log(`✅ UserProfile updated`);
     }
 
     // 2. Upsert user_subscriptions table
+    console.log(`📝 Upserting user_subscriptions for user ${userIdInt}, plan: ${capitalizedPlan}`);
     const subscriptionRequest = new mssql.Request(transaction);
     await subscriptionRequest
       .input('userId', mssql.Int, userIdInt)
@@ -1264,6 +1268,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
           INSERT (UserId, [plan], status, payment_intent_id, started_at, updated_at)
           VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET());
       `);
+    console.log(`✅ user_subscriptions upserted`);
 
     // 3. Insert payment record into payments table
     const paymentRequest = new mssql.Request(transaction);
@@ -1299,7 +1304,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     };
   } catch (dbErr) {
     await transaction.rollback();
-    console.error('Database transaction error:', dbErr);
+    console.error('❌ Database transaction error:', dbErr);
+    console.error('❌ Error message:', dbErr.message);
+    console.error('❌ Error code:', dbErr.code);
+    if (dbErr.originalError) {
+      console.error('❌ Original error:', dbErr.originalError.message);
+    }
     throw dbErr;
   }
 }
