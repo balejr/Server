@@ -1074,12 +1074,28 @@ try {
 
 // POST /api/data/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
+  // Log immediately when request arrives - use both console.log and process.stdout.write for Azure
+  const timestamp = new Date().toISOString();
+  process.stdout.write(`\n[${timestamp}] 📥 PAYMENT INITIALIZE REQUEST RECEIVED\n`);
+  process.stdout.write(`[${timestamp}] Method: ${req.method}\n`);
+  process.stdout.write(`[${timestamp}] Path: ${req.path}\n`);
+  process.stdout.write(`[${timestamp}] User ID: ${req.user?.userId || req.body?.userId || 'missing'}\n`);
+  process.stdout.write(`[${timestamp}] Body: ${JSON.stringify(req.body)}\n`);
+  console.log(`\n[${timestamp}] 📥 PAYMENT INITIALIZE REQUEST RECEIVED`);
+  console.log(`[${timestamp}] Method: ${req.method}, Path: ${req.path}`);
+  console.log(`[${timestamp}] User ID: ${req.user?.userId || req.body?.userId || 'missing'}`);
+  console.log(`[${timestamp}] Request body:`, req.body);
+  
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
+      console.error('[ERROR] STRIPE_SECRET_KEY missing on server');
+      process.stdout.write(`[${timestamp}] ❌ ERROR: STRIPE_SECRET_KEY missing\n`);
       return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
     }
 
     if (!process.env.STRIPE_PRICE_ID) {
+      console.error('[ERROR] STRIPE_PRICE_ID missing on server');
+      process.stdout.write(`[${timestamp}] ❌ ERROR: STRIPE_PRICE_ID missing\n`);
       return res.status(500).json({ error: 'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.' });
     }
 
@@ -1087,6 +1103,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     
     // Log the entire request body to see what's being sent
     console.log('Payment initialize request body:', JSON.stringify(req.body, null, 2));
+    process.stdout.write(`[${timestamp}] 🔄 Processing payment initialization for userId: ${userId}\n`);
     
     const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
     
@@ -1162,40 +1179,60 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
         expand: ['payment_intent']
       });
-      console.log('📝 Retrieved invoice:', latestInvoice.id, 'Payment intent:', latestInvoice.payment_intent?.id || latestInvoice.payment_intent);
+      console.log('📝 Retrieved invoice:', latestInvoice.id, 'Status:', latestInvoice.status);
     }
+    
+    // Log invoice details for debugging
+    console.log('📋 Invoice details:', {
+      id: latestInvoice?.id,
+      status: latestInvoice?.status,
+      amount_due: latestInvoice?.amount_due,
+      payment_intent: latestInvoice?.payment_intent?.id || latestInvoice?.payment_intent || 'null'
+    });
     
     // Get payment intent from invoice
     paymentIntent = latestInvoice?.payment_intent;
     
-    // If payment_intent is null or a string ID, try to retrieve it
-    if (!paymentIntent) {
-      console.log('⚠️ Payment intent is null, checking invoice status...');
-      console.log('📋 Invoice status:', latestInvoice?.status);
-      console.log('📋 Invoice amount:', latestInvoice?.amount_due);
-      
-      // If invoice has no payment_intent, it might be a $0 invoice (trial) or needs setup
-      if (latestInvoice?.status === 'draft' || latestInvoice?.amount_due === 0) {
-        throw new Error('Invoice has no payment intent. This may be a $0 invoice or requires setup intent.');
+    // If payment_intent is null, try finalizing the invoice first (if it's draft)
+    if (!paymentIntent && latestInvoice?.status === 'draft') {
+      console.log('📝 Invoice is draft, finalizing...');
+      try {
+        latestInvoice = await stripe.invoices.finalizeInvoice(latestInvoice.id, {
+          expand: ['payment_intent']
+        });
+        paymentIntent = latestInvoice?.payment_intent;
+        console.log('✅ Invoice finalized, payment intent:', paymentIntent?.id || 'still null');
+      } catch (finalizeError) {
+        console.error('❌ Error finalizing invoice:', finalizeError.message);
       }
-      
-      // Try to retrieve the subscription again with full expansion
-      console.log('🔄 Retrying subscription retrieval with full expansion...');
+    }
+    
+    // If payment_intent is still null, try retrieving the subscription again
+    if (!paymentIntent) {
+      console.log('⚠️ Payment intent is still null, retrying subscription retrieval...');
       const retriedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
         expand: ['latest_invoice.payment_intent']
       });
-      latestInvoice = retriedSubscription.latest_invoice;
-      paymentIntent = typeof latestInvoice === 'string' 
-        ? (await stripe.invoices.retrieve(latestInvoice, { expand: ['payment_intent'] })).payment_intent
-        : latestInvoice?.payment_intent;
+      const retriedInvoice = retriedSubscription.latest_invoice;
+      
+      if (typeof retriedInvoice === 'string') {
+        latestInvoice = await stripe.invoices.retrieve(retriedInvoice, {
+          expand: ['payment_intent']
+        });
+      } else {
+        latestInvoice = retriedInvoice;
+      }
+      
+      paymentIntent = latestInvoice?.payment_intent;
     }
     
-    // If payment_intent is still a string ID, retrieve it
+    // If payment_intent is a string ID, retrieve it
     if (typeof paymentIntent === 'string') {
       console.log('📝 Payment intent is string ID, retrieving:', paymentIntent);
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
     }
     
+    // Final check - if still no payment intent, log everything for debugging
     if (!paymentIntent || !paymentIntent.client_secret) {
       console.error('❌ Payment intent details:', {
         hasPaymentIntent: !!paymentIntent,
@@ -1205,10 +1242,31 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         latestInvoiceId: latestInvoice?.id,
         latestInvoiceStatus: latestInvoice?.status,
         latestInvoiceAmount: latestInvoice?.amount_due,
+        latestInvoicePaymentIntent: latestInvoice?.payment_intent,
         subscriptionStatus: subscription.status,
         subscriptionLatestInvoice: subscription.latest_invoice
       });
-      throw new Error('Failed to get payment intent client secret from subscription. Subscription created but payment intent not available yet.');
+      
+      // Try one more time - get the invoice payment_intent_id directly
+      if (latestInvoice?.payment_intent) {
+        const paymentIntentId = typeof latestInvoice.payment_intent === 'string' 
+          ? latestInvoice.payment_intent 
+          : latestInvoice.payment_intent.id;
+        
+        if (paymentIntentId) {
+          console.log('🔄 Attempting to retrieve payment intent by ID:', paymentIntentId);
+          try {
+            paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+            console.log('✅ Retrieved payment intent:', paymentIntent.id);
+          } catch (retrieveError) {
+            console.error('❌ Error retrieving payment intent:', retrieveError.message);
+          }
+        }
+      }
+      
+      if (!paymentIntent || !paymentIntent.client_secret) {
+        throw new Error('Failed to get payment intent client secret from subscription. Subscription created but payment intent not available yet.');
+      }
     }
 
     console.log('✅ Payment intent retrieved:', paymentIntent.id);
@@ -1222,7 +1280,10 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       status: subscription.status
     });
   } catch (err) {
-    console.error('Initialize subscription error:', err);
+    const errorTimestamp = new Date().toISOString();
+    console.error(`[${errorTimestamp}] ❌ Initialize subscription error:`, err);
+    process.stdout.write(`[${errorTimestamp}] ❌ ERROR: ${err.message}\n`);
+    process.stdout.write(`[${errorTimestamp}] ❌ Stack: ${err.stack}\n`);
     res.status(500).json({
       message: 'Failed to initialize subscription',
       error: err?.message || 'Stripe subscription creation failed',
