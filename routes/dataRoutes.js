@@ -1149,6 +1149,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     console.log('✅ Created Stripe Subscription:', subscription.id);
     console.log('📋 Subscription status:', subscription.status);
+    console.log('📋 Latest invoice:', subscription.latest_invoice?.id || subscription.latest_invoice);
 
     // Get clientSecret from latest_invoice.payment_intent
     // Handle both expanded object and string ID cases
@@ -1157,18 +1158,41 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     
     // If latest_invoice is a string ID, retrieve it
     if (typeof latestInvoice === 'string') {
-      console.log('📝 Retrieving latest invoice:', latestInvoice);
+      console.log('📝 Latest invoice is string ID, retrieving:', latestInvoice);
       latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
         expand: ['payment_intent']
       });
+      console.log('📝 Retrieved invoice:', latestInvoice.id, 'Payment intent:', latestInvoice.payment_intent?.id || latestInvoice.payment_intent);
     }
     
     // Get payment intent from invoice
     paymentIntent = latestInvoice?.payment_intent;
     
-    // If payment_intent is a string ID, retrieve it
+    // If payment_intent is null or a string ID, try to retrieve it
+    if (!paymentIntent) {
+      console.log('⚠️ Payment intent is null, checking invoice status...');
+      console.log('📋 Invoice status:', latestInvoice?.status);
+      console.log('📋 Invoice amount:', latestInvoice?.amount_due);
+      
+      // If invoice has no payment_intent, it might be a $0 invoice (trial) or needs setup
+      if (latestInvoice?.status === 'draft' || latestInvoice?.amount_due === 0) {
+        throw new Error('Invoice has no payment intent. This may be a $0 invoice or requires setup intent.');
+      }
+      
+      // Try to retrieve the subscription again with full expansion
+      console.log('🔄 Retrying subscription retrieval with full expansion...');
+      const retriedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
+        expand: ['latest_invoice.payment_intent']
+      });
+      latestInvoice = retriedSubscription.latest_invoice;
+      paymentIntent = typeof latestInvoice === 'string' 
+        ? (await stripe.invoices.retrieve(latestInvoice, { expand: ['payment_intent'] })).payment_intent
+        : latestInvoice?.payment_intent;
+    }
+    
+    // If payment_intent is still a string ID, retrieve it
     if (typeof paymentIntent === 'string') {
-      console.log('📝 Retrieving payment intent:', paymentIntent);
+      console.log('📝 Payment intent is string ID, retrieving:', paymentIntent);
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
     }
     
@@ -1179,10 +1203,16 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         paymentIntentId: paymentIntent?.id,
         hasClientSecret: !!paymentIntent?.client_secret,
         latestInvoiceId: latestInvoice?.id,
-        subscriptionStatus: subscription.status
+        latestInvoiceStatus: latestInvoice?.status,
+        latestInvoiceAmount: latestInvoice?.amount_due,
+        subscriptionStatus: subscription.status,
+        subscriptionLatestInvoice: subscription.latest_invoice
       });
       throw new Error('Failed to get payment intent client secret from subscription. Subscription created but payment intent not available yet.');
     }
+
+    console.log('✅ Payment intent retrieved:', paymentIntent.id);
+    console.log('✅ Client secret available');
 
     res.status(200).json({ 
       clientSecret: paymentIntent.client_secret,
