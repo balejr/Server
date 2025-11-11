@@ -1151,11 +1151,37 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     console.log('📋 Subscription status:', subscription.status);
 
     // Get clientSecret from latest_invoice.payment_intent
-    const latestInvoice = subscription.latest_invoice;
-    const paymentIntent = latestInvoice?.payment_intent;
+    // Handle both expanded object and string ID cases
+    let paymentIntent;
+    let latestInvoice = subscription.latest_invoice;
+    
+    // If latest_invoice is a string ID, retrieve it
+    if (typeof latestInvoice === 'string') {
+      console.log('📝 Retrieving latest invoice:', latestInvoice);
+      latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
+        expand: ['payment_intent']
+      });
+    }
+    
+    // Get payment intent from invoice
+    paymentIntent = latestInvoice?.payment_intent;
+    
+    // If payment_intent is a string ID, retrieve it
+    if (typeof paymentIntent === 'string') {
+      console.log('📝 Retrieving payment intent:', paymentIntent);
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+    }
     
     if (!paymentIntent || !paymentIntent.client_secret) {
-      throw new Error('Failed to get payment intent client secret from subscription');
+      console.error('❌ Payment intent details:', {
+        hasPaymentIntent: !!paymentIntent,
+        paymentIntentType: typeof paymentIntent,
+        paymentIntentId: paymentIntent?.id,
+        hasClientSecret: !!paymentIntent?.client_secret,
+        latestInvoiceId: latestInvoice?.id,
+        subscriptionStatus: subscription.status
+      });
+      throw new Error('Failed to get payment intent client secret from subscription. Subscription created but payment intent not available yet.');
     }
 
     res.status(200).json({ 
