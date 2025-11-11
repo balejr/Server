@@ -1221,9 +1221,13 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       }
     }
     
-    // If payment_intent is still null, try retrieving the subscription again
+    // If payment_intent is still null, wait a moment and retry (Stripe might need time to create it)
     if (!paymentIntent) {
-      console.log('⚠️ Payment intent is still null, retrying subscription retrieval...');
+      console.log('⚠️ Payment intent is null, waiting 1 second and retrying...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Retry retrieving the subscription with full expansion
+      console.log('🔄 Retrying subscription retrieval with full expansion...');
       const retriedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
         expand: ['latest_invoice.payment_intent']
       });
@@ -1238,6 +1242,20 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       }
       
       paymentIntent = latestInvoice?.payment_intent;
+    }
+    
+    // If still null, try one more time with a longer wait
+    if (!paymentIntent) {
+      console.log('⚠️ Payment intent still null, waiting 2 more seconds...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Get the invoice directly
+      if (latestInvoice?.id) {
+        latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
+          expand: ['payment_intent']
+        });
+        paymentIntent = latestInvoice?.payment_intent;
+      }
     }
     
     // If payment_intent is a string ID, retrieve it
@@ -1258,7 +1276,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         latestInvoiceAmount: latestInvoice?.amount_due,
         latestInvoicePaymentIntent: latestInvoice?.payment_intent,
         subscriptionStatus: subscription.status,
-        subscriptionLatestInvoice: subscription.latest_invoice
+        subscriptionLatestInvoice: subscription.latest_invoice,
+        subscriptionId: subscription.id
       });
       
       // Try one more time - get the invoice payment_intent_id directly
@@ -1275,6 +1294,20 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           } catch (retrieveError) {
             console.error('❌ Error retrieving payment intent:', retrieveError.message);
           }
+        }
+      }
+      
+      // If still no payment intent, check if we can use the subscription's pending_setup_intent
+      if (!paymentIntent || !paymentIntent.client_secret) {
+        console.log('⚠️ Checking for pending_setup_intent...');
+        const fullSubscription = await stripe.subscriptions.retrieve(subscription.id, {
+          expand: ['pending_setup_intent']
+        });
+        
+        if (fullSubscription.pending_setup_intent) {
+          console.log('📝 Found pending_setup_intent:', fullSubscription.pending_setup_intent);
+          // For subscriptions, we need a payment intent, not a setup intent
+          // But let's log this for debugging
         }
       }
       
