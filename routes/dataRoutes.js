@@ -1072,6 +1072,20 @@ try {
   // Don't crash - just log the error
 }
 
+// TEST endpoint - no auth required to verify requests reach Azure
+router.get('/payments/test', (req, res) => {
+  const timestamp = new Date().toISOString();
+  process.stdout.write(`\n[${timestamp}] ✅ TEST ENDPOINT HIT!\n`);
+  console.log(`[${timestamp}] ✅ TEST ENDPOINT HIT!`);
+  res.json({ 
+    success: true, 
+    message: 'Azure backend is reachable!',
+    timestamp,
+    path: req.path,
+    method: req.method
+  });
+});
+
 // POST /api/data/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
   // Log immediately when request arrives - use both console.log and process.stdout.write for Azure
