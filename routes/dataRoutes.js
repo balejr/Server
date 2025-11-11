@@ -1079,55 +1079,97 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
     }
 
+    if (!process.env.STRIPE_PRICE_ID) {
+      return res.status(500).json({ error: 'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.' });
+    }
+
     const userId = req.user.userId;
     
     // Log the entire request body to see what's being sent
     console.log('Payment initialize request body:', JSON.stringify(req.body, null, 2));
     
-    const { plan = 'premium', amount = 9.99, currency = 'USD', paymentMethod = 'stripe' } = req.body || {};
-    
-    // Check if a PaymentMethod ID is being sent
-    const paymentMethodId = req.body.paymentMethodId || req.body.payment_method_id || req.body.payment_method;
+    const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
     
     console.log('Extracted values:', {
       plan,
-      amount,
-      currency,
-      paymentMethod, // This is likely "stripe" (string)
-      paymentMethodId // This would be "pm_xxxxx" if present
+      paymentMethod,
+      userId
     });
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    const cents = Math.round(Number(amount) * 100);
-    if (!Number.isFinite(cents) || cents <= 0) {
-      return res.status(400).json({ error: 'Invalid amount' });
+    // Get or create Stripe Customer
+    let customer;
+    const pool = getPool();
+    
+    // Check if user already has a customer_id in database
+    if (pool) {
+      try {
+        const existingCustomer = await pool.request()
+          .input('userId', mssql.Int, parseInt(userId, 10))
+          .query(`SELECT customer_id FROM [dbo].[user_subscriptions] WHERE UserId = @userId AND customer_id IS NOT NULL`);
+        
+        if (existingCustomer.recordset.length > 0 && existingCustomer.recordset[0].customer_id) {
+          console.log(`📝 Found existing customer_id: ${existingCustomer.recordset[0].customer_id}`);
+          customer = await stripe.customers.retrieve(existingCustomer.recordset[0].customer_id);
+        }
+      } catch (dbErr) {
+        console.warn('⚠️ Could not check for existing customer:', dbErr.message);
+      }
     }
 
-    // Create PaymentIntent in Stripe
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: cents,
-      currency: currency.toLowerCase(),
-      automatic_payment_methods: { enabled: true },
-      description: `FitNext ${plan} subscription`,
-      metadata: { 
-        userId: String(userId), 
-        plan, 
-        paymentMethod 
-      },
+    // Create new customer if doesn't exist
+    if (!customer) {
+      console.log('🔄 Creating new Stripe Customer for user:', userId);
+      customer = await stripe.customers.create({
+        metadata: {
+          userId: String(userId),
+          plan: plan
+        }
+      });
+      console.log('✅ Created Stripe Customer:', customer.id);
+    }
+
+    // Create Subscription with monthly Price
+    console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
+    const subscription = await stripe.subscriptions.create({
+      customer: customer.id,
+      items: [{ price: process.env.STRIPE_PRICE_ID }],
+      payment_behavior: 'default_incomplete',
+      payment_settings: { save_default_payment_method: 'on_subscription' },
+      expand: ['latest_invoice.payment_intent'],
+      metadata: {
+        userId: String(userId),
+        plan: plan,
+        paymentMethod: paymentMethod
+      }
     });
 
+    console.log('✅ Created Stripe Subscription:', subscription.id);
+    console.log('📋 Subscription status:', subscription.status);
+
+    // Get clientSecret from latest_invoice.payment_intent
+    const latestInvoice = subscription.latest_invoice;
+    const paymentIntent = latestInvoice?.payment_intent;
+    
+    if (!paymentIntent || !paymentIntent.client_secret) {
+      throw new Error('Failed to get payment intent client secret from subscription');
+    }
+
     res.status(200).json({ 
-      clientSecret: paymentIntent.client_secret, 
-      paymentIntentId: paymentIntent.id 
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      subscriptionId: subscription.id,
+      customerId: customer.id,
+      status: subscription.status
     });
   } catch (err) {
-    console.error('Initialize payment error:', err);
+    console.error('Initialize subscription error:', err);
     res.status(500).json({
-      message: 'Failed to initialize payment',
-      error: err?.message || 'Stripe initialize failed',
+      message: 'Failed to initialize subscription',
+      error: err?.message || 'Stripe subscription creation failed',
       stack: err.stack
     });
   }
@@ -1140,24 +1182,71 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
     }
 
-    const { paymentIntentId } = req.body || {};
-    if (!paymentIntentId) {
-      return res.status(400).json({ error: 'paymentIntentId required' });
+    const { paymentIntentId, subscriptionId } = req.body || {};
+    
+    // Support both subscriptionId and paymentIntentId for backward compatibility
+    if (!paymentIntentId && !subscriptionId) {
+      return res.status(400).json({ error: 'paymentIntentId or subscriptionId required' });
     }
 
-    // Retrieve PaymentIntent from Stripe
-    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-    
-    res.status(200).json({ 
-      id: pi.id, 
-      status: pi.status, 
-      amount: pi.amount, 
-      currency: pi.currency 
-    });
+    let subscription;
+    let paymentIntent;
+
+    // If subscriptionId is provided, retrieve subscription
+    if (subscriptionId) {
+      subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ['latest_invoice.payment_intent']
+      });
+      paymentIntent = subscription.latest_invoice?.payment_intent;
+    } else {
+      // Fallback: retrieve payment intent and find associated subscription
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      
+      // Try to find subscription from payment intent metadata or invoices
+      if (paymentIntent.metadata?.subscriptionId) {
+        subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId);
+      } else {
+        // Search for subscription by customer and status
+        const customerId = paymentIntent.metadata?.customerId;
+        if (customerId) {
+          const subscriptions = await stripe.subscriptions.list({
+            customer: customerId,
+            limit: 1
+          });
+          if (subscriptions.data.length > 0) {
+            subscription = subscriptions.data[0];
+          }
+        }
+      }
+    }
+
+    // Return subscription details if available, otherwise payment intent details
+    if (subscription) {
+      res.status(200).json({ 
+        id: subscription.id,
+        status: subscription.status, // active, trialing, past_due, canceled, incomplete, etc.
+        paymentIntentId: paymentIntent?.id || paymentIntentId,
+        amount: subscription.items.data[0]?.price?.unit_amount || paymentIntent?.amount,
+        currency: subscription.items.data[0]?.price?.currency || paymentIntent?.currency || 'usd',
+        customerId: subscription.customer,
+        currentPeriodStart: subscription.current_period_start,
+        currentPeriodEnd: subscription.current_period_end,
+        paymentIntentStatus: paymentIntent?.status
+      });
+    } else {
+      // Fallback to payment intent if subscription not found
+      res.status(200).json({ 
+        id: paymentIntent.id, 
+        status: paymentIntent.status, 
+        amount: paymentIntent.amount, 
+        currency: paymentIntent.currency,
+        paymentIntentId: paymentIntent.id
+      });
+    }
   } catch (err) {
-    console.error('Confirm payment error:', err);
+    console.error('Confirm subscription error:', err);
     res.status(500).json({
-      message: 'Failed to confirm payment',
+      message: 'Failed to confirm subscription',
       error: err?.message || 'Stripe confirm failed',
       stack: err.stack
     });
@@ -1165,7 +1254,8 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 });
 
 // Helper function to update subscription in database
-async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod) {
+// Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
+async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd) {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new Error('STRIPE_SECRET_KEY missing on server');
   }
@@ -1174,44 +1264,97 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     throw new Error('Stripe not initialized - check STRIPE_SECRET_KEY configuration');
   }
 
-  console.log(`🔄 Processing subscription update for user ${userId}, plan: ${plan}, paymentIntentId: ${paymentIntentId}`);
+  console.log(`🔄 Processing subscription update for user ${userId}, plan: ${plan}`);
+  console.log(`   subscriptionId: ${subscriptionId || 'N/A'}, paymentIntentId: ${paymentIntentId || 'N/A'}`);
 
-  // Retrieve PaymentIntent from Stripe to get amount, currency, and status
-  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-  
-  // Extract payment details
-  const amount = paymentIntent.amount / 100; // Convert cents to dollars
-  const currency = paymentIntent.currency.toUpperCase(); // Ensure uppercase
-  
-  // Map Stripe payment status to database payment status
-  // Database CHECK constraint CK_payments_status allows: "pending", "succeeded", "failed", "canceled"
-  const stripeStatus = paymentIntent.status;
-  let paymentStatus;
-  switch (stripeStatus) {
-    case 'succeeded':
-      paymentStatus = 'succeeded';
-      break;
-    case 'processing':
-      paymentStatus = 'pending';
-      break;
-    case 'requires_payment_method':
-    case 'requires_confirmation':
-    case 'requires_action':
-      paymentStatus = 'pending';
-      break;
-    case 'canceled':
-      paymentStatus = 'canceled';
-      break;
-    case 'payment_failed':
-      paymentStatus = 'failed';
-      break;
-    default:
-      paymentStatus = 'pending';
-      console.warn(`Unknown Stripe status: ${stripeStatus}, defaulting to 'pending'`);
+  let subscription;
+  let paymentIntent;
+  let amount = 9.99; // Default amount
+  let currency = 'USD';
+  let paymentStatus = 'pending';
+  let finalPaymentMethod = paymentMethod || 'stripe';
+
+  // If subscriptionId is provided, retrieve subscription (new flow)
+  if (subscriptionId) {
+    console.log(`📝 Retrieving Stripe Subscription: ${subscriptionId}`);
+    subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['latest_invoice.payment_intent']
+    });
+    
+    // Extract subscription details
+    subscriptionStatus = subscription.status; // Override with actual subscription status
+    customerId = subscription.customer;
+    currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+    currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+    
+    // Get amount and currency from subscription price
+    if (subscription.items.data.length > 0) {
+      const price = subscription.items.data[0].price;
+      amount = price.unit_amount / 100;
+      currency = price.currency.toUpperCase();
+    }
+    
+    // Get payment intent from latest invoice
+    paymentIntent = subscription.latest_invoice?.payment_intent;
+    if (paymentIntent) {
+      paymentIntentId = paymentIntent.id;
+      // Map payment intent status to payment status
+      switch (paymentIntent.status) {
+        case 'succeeded':
+          paymentStatus = 'succeeded';
+          break;
+        case 'processing':
+          paymentStatus = 'pending';
+          break;
+        case 'requires_payment_method':
+        case 'requires_confirmation':
+        case 'requires_action':
+          paymentStatus = 'pending';
+          break;
+        case 'canceled':
+          paymentStatus = 'canceled';
+          break;
+        case 'payment_failed':
+          paymentStatus = 'failed';
+          break;
+        default:
+          paymentStatus = 'pending';
+      }
+      finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+    }
+  } else if (paymentIntentId) {
+    // Legacy flow: retrieve payment intent only
+    console.log(`📝 Retrieving PaymentIntent (legacy): ${paymentIntentId}`);
+    paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    amount = paymentIntent.amount / 100;
+    currency = paymentIntent.currency.toUpperCase();
+    
+    // Map payment intent status
+    switch (paymentIntent.status) {
+      case 'succeeded':
+        paymentStatus = 'succeeded';
+        break;
+      case 'processing':
+        paymentStatus = 'pending';
+        break;
+      case 'requires_payment_method':
+      case 'requires_confirmation':
+      case 'requires_action':
+        paymentStatus = 'pending';
+        break;
+      case 'canceled':
+        paymentStatus = 'canceled';
+        break;
+      case 'payment_failed':
+        paymentStatus = 'failed';
+        break;
+      default:
+        paymentStatus = 'pending';
+    }
+    finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+  } else {
+    throw new Error('Either subscriptionId or paymentIntentId must be provided');
   }
-  
-  const paymentMethodFromMetadata = paymentIntent.metadata?.paymentMethod;
-  const finalPaymentMethod = paymentMethod || paymentMethodFromMetadata || 'stripe';
 
   // Capitalize plan name
   const capitalizedPlan = plan === 'premium' ? 'Premium' : plan === 'free' ? 'Free' : plan.charAt(0).toUpperCase() + plan.slice(1);
@@ -1228,66 +1371,141 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   }
 
   try {
-    // 1. Update UserProfile.UserType to "Premium" if subscription is active and plan is premium
-    if (subscriptionStatus === 'active' && plan === 'premium') {
+    // Map subscription status to determine if user should be Premium
+    // active, trialing = Premium; canceled, past_due, incomplete = check payment status
+    const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
+    const shouldBePremium = isActive && plan === 'premium';
+
+    // 1. Update UserProfile.UserType
+    if (shouldBePremium) {
       console.log(`📝 Step 1: Updating UserProfile.UserType to Premium for user ${userIdInt}`);
       await pool.request()
         .input('userId', mssql.Int, userIdInt)
         .query(`UPDATE dbo.UserProfile SET UserType = 'Premium' WHERE UserID = @userId`);
       console.log(`✅ Step 1 complete: UserProfile updated`);
+    } else if (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') {
+      // Downgrade to Free if subscription is canceled or past due
+      console.log(`📝 Step 1: Downgrading UserProfile.UserType to Free for user ${userIdInt}`);
+      await pool.request()
+        .input('userId', mssql.Int, userIdInt)
+        .query(`UPDATE dbo.UserProfile SET UserType = 'Free' WHERE UserID = @userId`);
+      console.log(`✅ Step 1 complete: UserProfile downgraded`);
     }
 
-    // 2. Check if user_subscriptions record exists, then UPDATE or INSERT
-    console.log(`📝 Step 2: Checking [dbo].[user_subscriptions] for user ${userIdInt}`);
+    // 2. Upsert user_subscriptions table
+    console.log(`📝 Step 2: Upserting [dbo].[user_subscriptions] for user ${userIdInt}`);
     const existingSub = await pool.request()
       .input('userId', mssql.Int, userIdInt)
       .query(`SELECT UserId FROM [dbo].[user_subscriptions] WHERE UserId = @userId`);
 
     if (existingSub.recordset.length > 0) {
       console.log(`📝 Step 2a: Updating existing subscription`);
-      const updateQuery = `UPDATE [dbo].[user_subscriptions] SET [plan] = @plan, status = @status, payment_intent_id = @paymentIntentId, updated_at = SYSDATETIMEOFFSET() WHERE UserId = @userId`;
+      // Build UPDATE query with available fields
+      const updateFields = [
+        '[plan] = @plan',
+        'status = @status',
+        'updated_at = SYSDATETIMEOFFSET()'
+      ];
+      
+      if (subscriptionId) {
+        updateFields.push('subscription_id = @subscriptionId');
+      }
+      if (customerId) {
+        updateFields.push('customer_id = @customerId');
+      }
+      if (currentPeriodStart) {
+        updateFields.push('current_period_start = @currentPeriodStart');
+      }
+      if (currentPeriodEnd) {
+        updateFields.push('current_period_end = @currentPeriodEnd');
+      }
+      if (paymentIntentId) {
+        updateFields.push('payment_intent_id = @paymentIntentId');
+      }
+      
+      const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
       console.log(`🔍 UPDATE query: ${updateQuery}`);
-      await pool.request()
+      
+      const updateRequest = pool.request()
         .input('userId', mssql.Int, userIdInt)
         .input('plan', mssql.NVarChar(32), capitalizedPlan)
-        .input('status', mssql.NVarChar(32), subscriptionStatus)
-        .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
-        .query(updateQuery);
+        .input('status', mssql.NVarChar(32), subscriptionStatus);
+      
+      if (subscriptionId) updateRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
+      if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
+      if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
+      if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
+      if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
+      
+      await updateRequest.query(updateQuery);
     } else {
       console.log(`📝 Step 2b: Inserting new subscription`);
-      const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (UserId, [plan], status, payment_intent_id, started_at, updated_at) VALUES (@userId, @plan, @status, @paymentIntentId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`;
+      const insertFields = ['UserId', '[plan]', 'status', 'started_at', 'updated_at'];
+      const insertValues = ['@userId', '@plan', '@status', 'SYSDATETIMEOFFSET()', 'SYSDATETIMEOFFSET()'];
+      
+      if (subscriptionId) {
+        insertFields.push('subscription_id');
+        insertValues.push('@subscriptionId');
+      }
+      if (customerId) {
+        insertFields.push('customer_id');
+        insertValues.push('@customerId');
+      }
+      if (currentPeriodStart) {
+        insertFields.push('current_period_start');
+        insertValues.push('@currentPeriodStart');
+      }
+      if (currentPeriodEnd) {
+        insertFields.push('current_period_end');
+        insertValues.push('@currentPeriodEnd');
+      }
+      if (paymentIntentId) {
+        insertFields.push('payment_intent_id');
+        insertValues.push('@paymentIntentId');
+      }
+      
+      const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
       console.log(`🔍 INSERT query: ${insertQuery}`);
-      await pool.request()
+      
+      const insertRequest = pool.request()
         .input('userId', mssql.Int, userIdInt)
         .input('plan', mssql.NVarChar(32), capitalizedPlan)
-        .input('status', mssql.NVarChar(32), subscriptionStatus)
-        .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
-        .query(insertQuery);
+        .input('status', mssql.NVarChar(32), subscriptionStatus);
+      
+      if (subscriptionId) insertRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
+      if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
+      if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
+      if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
+      if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
+      
+      await insertRequest.query(insertQuery);
     }
     console.log(`✅ Step 2 complete: user_subscriptions updated`);
 
-    // 3. Check if payment already exists (avoid duplicate key error)
-    console.log(`📝 Step 3: Checking if payment already exists for payment_intent_id: ${paymentIntentId}`);
-    const existingPayment = await pool.request()
-      .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
-      .query(`SELECT payment_intent_id FROM [dbo].[payments] WHERE payment_intent_id = @paymentIntentId`);
-
-    if (existingPayment.recordset.length > 0) {
-      console.log(`⚠️ Payment already exists, skipping insert`);
-    } else {
-      console.log(`📝 Step 3: Inserting payment record with status: "${paymentStatus}" (from Stripe: "${stripeStatus}")`);
-      const paymentInsertQuery = `INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`;
-      console.log(`🔍 Payment INSERT query: ${paymentInsertQuery}`);
-      await pool.request()
-        .input('userId', mssql.Int, userIdInt)
-        .input('plan', mssql.VarChar(32), capitalizedPlan)
-        .input('amount', mssql.Decimal(10, 2), amount)
-        .input('currency', mssql.VarChar(3), currency)
-        .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
+    // 3. Insert payment record (if paymentIntentId exists)
+    if (paymentIntentId) {
+      console.log(`📝 Step 3: Checking if payment already exists for payment_intent_id: ${paymentIntentId}`);
+      const existingPayment = await pool.request()
         .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
-        .input('status', mssql.VarChar(32), paymentStatus)
-        .query(paymentInsertQuery);
-      console.log(`✅ Step 3 complete: Payment recorded`);
+        .query(`SELECT payment_intent_id FROM [dbo].[payments] WHERE payment_intent_id = @paymentIntentId`);
+
+      if (existingPayment.recordset.length > 0) {
+        console.log(`⚠️ Payment already exists, skipping insert`);
+      } else {
+        console.log(`📝 Step 3: Inserting payment record with status: "${paymentStatus}"`);
+        const paymentInsertQuery = `INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`;
+        console.log(`🔍 Payment INSERT query: ${paymentInsertQuery}`);
+        await pool.request()
+          .input('userId', mssql.Int, userIdInt)
+          .input('plan', mssql.VarChar(32), capitalizedPlan)
+          .input('amount', mssql.Decimal(10, 2), amount)
+          .input('currency', mssql.VarChar(3), currency)
+          .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
+          .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
+          .input('status', mssql.VarChar(32), paymentStatus)
+          .query(paymentInsertQuery);
+        console.log(`✅ Step 3 complete: Payment recorded`);
+      }
     }
 
     console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
@@ -1298,7 +1516,9 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       userId: userIdInt, 
       subscriptionStatus, 
       plan: capitalizedPlan, 
-      paymentIntentId 
+      paymentIntentId: paymentIntentId || null,
+      subscriptionId: subscriptionId || null,
+      customerId: customerId || null
     };
   } catch (dbErr) {
     console.error('❌ Database error:', dbErr.message);
@@ -1318,22 +1538,43 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
   
   try {
     const userId = req.user.userId || req.body.userId;
-    const { subscriptionStatus = 'active', plan = 'premium', paymentIntentId, paymentMethod = 'stripe' } = req.body || {};
+    const { 
+      subscriptionStatus = 'active', 
+      plan = 'premium', 
+      paymentIntentId, 
+      paymentMethod = 'stripe',
+      subscriptionId,
+      customerId,
+      currentPeriodStart,
+      currentPeriodEnd
+    } = req.body || {};
     
-    console.log(`📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}, paymentIntentId=${paymentIntentId}`);
+    console.log(`📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
+    console.log(`   subscriptionId=${subscriptionId || 'N/A'}, paymentIntentId=${paymentIntentId || 'N/A'}`);
     
     if (!userId) {
       console.error('❌ Missing userId');
       return res.status(400).json({ error: 'userId is required' });
     }
     
-    if (!paymentIntentId) {
-      console.error('❌ Missing paymentIntentId');
-      return res.status(400).json({ error: 'paymentIntentId is required' });
+    // Require either subscriptionId or paymentIntentId (for backward compatibility)
+    if (!subscriptionId && !paymentIntentId) {
+      console.error('❌ Missing subscriptionId or paymentIntentId');
+      return res.status(400).json({ error: 'subscriptionId or paymentIntentId is required' });
     }
 
     console.log('🔄 Calling updateSubscriptionInDatabase...');
-    const result = await updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod);
+    const result = await updateSubscriptionInDatabase(
+      userId, 
+      subscriptionStatus, 
+      plan, 
+      paymentIntentId, 
+      paymentMethod,
+      subscriptionId,
+      customerId,
+      currentPeriodStart,
+      currentPeriodEnd
+    );
     console.log('✅ updateSubscriptionInDatabase completed successfully');
     return res.json(result);
   } catch (err) {
@@ -1414,5 +1655,186 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
 //     });
 //   }
 // });
+
+// Stripe Webhook endpoint for subscription lifecycle events
+// This endpoint does NOT use authenticateToken - Stripe signs webhooks with a secret
+// Note: server.js must use express.raw() middleware for this route before express.json()
+router.post('/webhooks/stripe', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.warn('⚠️ STRIPE_WEBHOOK_SECRET not set - webhook verification skipped');
+    // In development, you might want to skip verification
+    // In production, always verify webhooks
+  }
+
+  let event;
+
+  try {
+    // req.body should be a Buffer if express.raw() middleware is configured correctly
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+    
+    if (webhookSecret) {
+      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+    } else {
+      // Development mode: parse without verification (NOT recommended for production)
+      event = JSON.parse(rawBody.toString());
+      console.warn('⚠️ Webhook verification skipped - development mode');
+    }
+  } catch (err) {
+    console.error('❌ Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  console.log(`📥 Webhook received: ${event.type}`);
+
+  try {
+    switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        {
+          const subscription = event.data.object;
+          const userId = subscription.metadata?.userId;
+          
+          if (!userId) {
+            console.warn('⚠️ Subscription webhook missing userId in metadata');
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing subscription ${event.type} for user ${userId}`);
+          
+          // Update subscription in database
+          await updateSubscriptionInDatabase(
+            userId,
+            subscription.status,
+            subscription.metadata?.plan || 'premium',
+            subscription.latest_invoice?.payment_intent?.id || null,
+            subscription.metadata?.paymentMethod || 'stripe',
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
+            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
+          );
+          
+          console.log(`✅ Subscription ${event.type} processed successfully`);
+        }
+        break;
+
+      case 'customer.subscription.deleted':
+        {
+          const subscription = event.data.object;
+          const userId = subscription.metadata?.userId;
+          
+          if (!userId) {
+            console.warn('⚠️ Subscription deletion webhook missing userId in metadata');
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing subscription deletion for user ${userId}`);
+          
+          // Update subscription status to canceled
+          await updateSubscriptionInDatabase(
+            userId,
+            'canceled',
+            subscription.metadata?.plan || 'premium',
+            null,
+            subscription.metadata?.paymentMethod || 'stripe',
+            subscription.id,
+            subscription.customer,
+            null,
+            null
+          );
+          
+          console.log(`✅ Subscription deletion processed successfully`);
+        }
+        break;
+
+      case 'invoice.payment_succeeded':
+        {
+          const invoice = event.data.object;
+          const subscriptionId = invoice.subscription;
+          
+          if (!subscriptionId) {
+            console.warn('⚠️ Invoice payment_succeeded webhook missing subscription ID');
+            return res.json({ received: true });
+          }
+
+          // Retrieve subscription to get userId
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const userId = subscription.metadata?.userId;
+          
+          if (!userId) {
+            console.warn('⚠️ Invoice payment_succeeded webhook missing userId');
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing invoice payment succeeded for user ${userId}, subscription ${subscriptionId}`);
+          
+          // Update subscription - payment succeeded means subscription should be active
+          await updateSubscriptionInDatabase(
+            userId,
+            subscription.status,
+            subscription.metadata?.plan || 'premium',
+            invoice.payment_intent?.id || null,
+            subscription.metadata?.paymentMethod || 'stripe',
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
+            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
+          );
+          
+          console.log(`✅ Invoice payment succeeded processed successfully`);
+        }
+        break;
+
+      case 'invoice.payment_failed':
+        {
+          const invoice = event.data.object;
+          const subscriptionId = invoice.subscription;
+          
+          if (!subscriptionId) {
+            console.warn('⚠️ Invoice payment_failed webhook missing subscription ID');
+            return res.json({ received: true });
+          }
+
+          // Retrieve subscription to get userId
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const userId = subscription.metadata?.userId;
+          
+          if (!userId) {
+            console.warn('⚠️ Invoice payment_failed webhook missing userId');
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing invoice payment failed for user ${userId}, subscription ${subscriptionId}`);
+          
+          // Update subscription status - payment failed might set status to past_due
+          await updateSubscriptionInDatabase(
+            userId,
+            subscription.status, // Could be 'past_due' or 'unpaid'
+            subscription.metadata?.plan || 'premium',
+            invoice.payment_intent?.id || null,
+            subscription.metadata?.paymentMethod || 'stripe',
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
+            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
+          );
+          
+          console.log(`✅ Invoice payment failed processed successfully`);
+        }
+        break;
+
+      default:
+        console.log(`ℹ️ Unhandled webhook event type: ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (err) {
+    console.error('❌ Webhook processing error:', err);
+    res.status(500).json({ error: 'Webhook processing failed', message: err.message });
+  }
+});
 
 module.exports = router;

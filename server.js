@@ -18,6 +18,8 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
+// Webhook endpoint needs raw body for Stripe signature verification
+app.use('/api/data/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 // Connect to the database
