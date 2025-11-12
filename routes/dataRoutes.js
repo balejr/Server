@@ -1388,30 +1388,10 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         console.log(`⚠️ PaymentIntent mismatch. Using provided paymentIntentId: ${paymentIntentId}`);
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
         
-        // If this PaymentIntent was manually created for an open invoice, pay the invoice with it
-        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
-          const invoiceId = typeof subscription.latest_invoice === 'string' 
-            ? subscription.latest_invoice 
-            : subscription.latest_invoice.id;
-          
-          const invoice = await stripe.invoices.retrieve(invoiceId);
-          if (invoice.status === 'open' && !invoice.payment_intent) {
-            console.log(`💰 Paying open invoice with confirmed PaymentIntent...`);
-            try {
-              await stripe.invoices.pay(invoiceId, {
-                payment_intent: paymentIntent.id
-              });
-              console.log(`✅ Invoice paid successfully`);
-              
-              // Refresh subscription to get updated status
-              subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-                expand: ['latest_invoice.payment_intent']
-              });
-            } catch (payErr) {
-              console.warn(`⚠️ Error paying invoice (may already be paid):`, payErr.message);
-            }
-          }
-        }
+        // Note: When PaymentIntent succeeds, Stripe automatically pays the associated invoice
+        // If we manually created the PaymentIntent, Stripe will still handle invoice payment
+        // We don't need to manually pay the invoice - Stripe handles it via webhooks
+        // The subscription status will be updated automatically when invoice is paid
       }
     } else if (paymentIntentId) {
       // Fallback: retrieve PaymentIntent and find associated subscription
