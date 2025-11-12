@@ -1146,6 +1146,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     // Create Subscription with payment_behavior: 'default_incomplete'
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
+    // Note: Apple Pay is automatically supported via PaymentIntent's automatic_payment_methods
+    // It should NOT be included in payment_method_types for subscriptions
     console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
@@ -1153,8 +1155,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       payment_behavior: 'default_incomplete',
       payment_settings: { 
         save_default_payment_method: 'on_subscription',
-        // Allow both card and Apple Pay payment methods
-        payment_method_types: ['card', 'apple_pay']
+        payment_method_types: ['card']
       },
       expand: ['latest_invoice.payment_intent'],
       metadata: {
