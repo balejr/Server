@@ -1205,8 +1205,44 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           }
         }
 
-        // Step 3: Get PaymentIntent from invoice
-        paymentIntent = latestInvoice?.payment_intent;
+        // Step 2b: Handle 'open' invoice without PaymentIntent
+        // When invoice is 'open' but has no PaymentIntent, we need to create one manually
+        if (latestInvoice && latestInvoice.status === 'open' && !latestInvoice.payment_intent) {
+          console.log(`📝 Attempt ${attempt + 1}: Invoice is 'open' but has no PaymentIntent, creating one...`);
+          try {
+            // Get amount from invoice
+            const amount = latestInvoice.amount_due;
+            const currency = latestInvoice.currency || 'usd';
+            
+            // Create PaymentIntent for this invoice
+            paymentIntent = await stripe.paymentIntents.create({
+              amount: amount,
+              currency: currency,
+              customer: customer.id,
+              payment_method_types: ['card'],
+              metadata: {
+                userId: String(userId),
+                subscriptionId: subscription.id,
+                invoiceId: latestInvoice.id,
+                plan: plan,
+                paymentMethod: paymentMethod
+              },
+              description: `Subscription payment for ${plan} plan`
+            });
+            
+            // Attach PaymentIntent to invoice by paying the invoice with it
+            // Note: We can't directly attach, but we'll use it when confirming payment
+            console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
+          } catch (createErr) {
+            console.error(`❌ Failed to create PaymentIntent for open invoice:`, createErr.message);
+            // Continue to try retrieving PaymentIntent from invoice
+          }
+        }
+
+        // Step 3: Get PaymentIntent from invoice (only if we haven't created one manually)
+        if (!paymentIntent) {
+          paymentIntent = latestInvoice?.payment_intent;
+        }
 
         // Step 4: If PaymentIntent is a string ID, retrieve it
         if (typeof paymentIntent === 'string') {
@@ -1351,6 +1387,31 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       if (paymentIntentId && paymentIntent?.id !== paymentIntentId) {
         console.log(`⚠️ PaymentIntent mismatch. Using provided paymentIntentId: ${paymentIntentId}`);
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        
+        // If this PaymentIntent was manually created for an open invoice, pay the invoice with it
+        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
+          const invoiceId = typeof subscription.latest_invoice === 'string' 
+            ? subscription.latest_invoice 
+            : subscription.latest_invoice.id;
+          
+          const invoice = await stripe.invoices.retrieve(invoiceId);
+          if (invoice.status === 'open' && !invoice.payment_intent) {
+            console.log(`💰 Paying open invoice with confirmed PaymentIntent...`);
+            try {
+              await stripe.invoices.pay(invoiceId, {
+                payment_intent: paymentIntent.id
+              });
+              console.log(`✅ Invoice paid successfully`);
+              
+              // Refresh subscription to get updated status
+              subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+                expand: ['latest_invoice.payment_intent']
+              });
+            } catch (payErr) {
+              console.warn(`⚠️ Error paying invoice (may already be paid):`, payErr.message);
+            }
+          }
+        }
       }
     } else if (paymentIntentId) {
       // Fallback: retrieve PaymentIntent and find associated subscription
