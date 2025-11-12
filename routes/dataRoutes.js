@@ -1327,17 +1327,45 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         }
       }
       
-      // If still no payment intent, check if we can use the subscription's pending_setup_intent
+      // If still no payment intent, create one manually for the subscription
+      // This happens when invoice is finalized but payment_intent doesn't exist yet
       if (!paymentIntent || !paymentIntent.client_secret) {
-        console.log('⚠️ Checking for pending_setup_intent...');
-        const fullSubscription = await stripe.subscriptions.retrieve(subscription.id, {
-          expand: ['pending_setup_intent']
-        });
-        
-        if (fullSubscription.pending_setup_intent) {
-          console.log('📝 Found pending_setup_intent:', fullSubscription.pending_setup_intent);
-          // For subscriptions, we need a payment intent, not a setup intent
-          // But let's log this for debugging
+        console.log('⚠️ No payment intent found, creating one manually for the subscription...');
+        try {
+          // Get the amount from the subscription price
+          let paymentAmount = 999; // Default $9.99
+          let paymentCurrency = 'usd';
+          
+          if (subscription.items.data.length > 0) {
+            paymentAmount = subscription.items.data[0].price.unit_amount;
+            paymentCurrency = subscription.items.data[0].price.currency;
+          }
+          
+          // Create a PaymentIntent for this subscription
+          paymentIntent = await stripe.paymentIntents.create({
+            amount: paymentAmount,
+            currency: paymentCurrency,
+            customer: customer.id,
+            payment_method_types: ['card'],
+            metadata: {
+              userId: String(userId),
+              subscriptionId: subscription.id,
+              invoiceId: latestInvoice?.id,
+              plan: plan,
+              paymentMethod: paymentMethod
+            },
+            // Link to the subscription
+            description: `Subscription payment for ${plan} plan`
+          });
+          
+          console.log('✅ Created PaymentIntent manually:', paymentIntent.id);
+          console.log('📋 PaymentIntent amount:', paymentAmount, paymentCurrency);
+          
+          // Update the invoice to use this payment intent (optional, but helps with tracking)
+          // Note: We can't directly attach payment_intent to invoice, but metadata helps
+        } catch (createError) {
+          console.error('❌ Error creating PaymentIntent manually:', createError.message);
+          throw new Error(`Failed to create payment intent: ${createError.message}`);
         }
       }
       
