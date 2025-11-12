@@ -1438,15 +1438,30 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           console.log('💰 Paying invoice with confirmed PaymentIntent...');
           try {
             // Get payment_method from PaymentIntent (it's attached after confirmation)
-            const paymentMethodId = paymentIntent.payment_method;
+            // Handle both string ID and expanded object
+            let paymentMethodId = paymentIntent.payment_method;
+            if (typeof paymentMethodId === 'object' && paymentMethodId?.id) {
+              paymentMethodId = paymentMethodId.id;
+            } else if (typeof paymentMethodId !== 'string') {
+              // If payment_method is not a string, try to get it from the payment intent directly
+              paymentMethodId = paymentIntent.payment_method?.id || paymentIntent.payment_method;
+            }
             
-            if (paymentMethodId) {
+            if (paymentMethodId && typeof paymentMethodId === 'string') {
+              console.log('📝 Using payment_method:', paymentMethodId);
               await stripe.invoices.pay(invoiceId, {
                 payment_method: paymentMethodId
               });
               console.log('✅ Invoice paid successfully');
             } else {
-              console.warn('⚠️ PaymentIntent has no payment_method attached');
+              console.warn('⚠️ PaymentIntent has no valid payment_method attached:', paymentIntent.payment_method);
+              // Try alternative: pay invoice without payment_method (uses default)
+              try {
+                await stripe.invoices.pay(invoiceId);
+                console.log('✅ Invoice paid using default payment method');
+              } catch (altError) {
+                console.warn('⚠️ Could not pay invoice:', altError.message);
+              }
             }
             
             // Retrieve subscription again to get updated status
