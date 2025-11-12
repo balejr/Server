@@ -1166,41 +1166,137 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     console.log('✅ Created Stripe Subscription:', subscription.id);
     console.log('📋 Subscription status:', subscription.status);
 
-    // Get PaymentIntent from latest_invoice
-    // With payment_behavior: 'default_incomplete', Stripe creates a PaymentIntent automatically
-    let paymentIntent = subscription.latest_invoice?.payment_intent;
+    // Get PaymentIntent from latest_invoice with retry logic
+    // Stripe may need time to create the PaymentIntent, especially if invoice is draft
+    let paymentIntent = null;
     let latestInvoice = subscription.latest_invoice;
+    const maxRetries = 3;
+    const retryDelays = [500, 1000, 2000]; // Exponential backoff in milliseconds
 
-    // If latest_invoice is a string ID, retrieve it with expansion
-    if (typeof latestInvoice === 'string') {
-      console.log('📝 Retrieving invoice:', latestInvoice);
-      latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
-        expand: ['payment_intent']
-      });
-      paymentIntent = latestInvoice?.payment_intent;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Step 1: Get invoice (retrieve if it's a string ID)
+        if (typeof latestInvoice === 'string') {
+          console.log(`📝 Attempt ${attempt + 1}: Retrieving invoice: ${latestInvoice}`);
+          latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
+            expand: ['payment_intent']
+          });
+        }
+
+        // Step 2: Check invoice status and finalize if needed
+        if (latestInvoice && latestInvoice.status === 'draft') {
+          console.log(`📝 Attempt ${attempt + 1}: Invoice is draft, finalizing...`);
+          try {
+            latestInvoice = await stripe.invoices.finalizeInvoice(latestInvoice.id, {
+              expand: ['payment_intent']
+            });
+            console.log(`✅ Invoice finalized, status: ${latestInvoice.status}`);
+          } catch (finalizeErr) {
+            // Invoice might already be finalized or in a state that can't be finalized
+            if (finalizeErr.code === 'invoice_already_finalized' || 
+                finalizeErr.message?.includes('already finalized')) {
+              console.log('📝 Invoice already finalized, retrieving latest state...');
+              latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
+                expand: ['payment_intent']
+              });
+            } else {
+              throw finalizeErr;
+            }
+          }
+        }
+
+        // Step 3: Get PaymentIntent from invoice
+        paymentIntent = latestInvoice?.payment_intent;
+
+        // Step 4: If PaymentIntent is a string ID, retrieve it
+        if (typeof paymentIntent === 'string') {
+          console.log(`📝 Attempt ${attempt + 1}: PaymentIntent is string ID, retrieving: ${paymentIntent}`);
+          paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+        }
+
+        // Step 5: Validate PaymentIntent has client_secret
+        if (paymentIntent && paymentIntent.client_secret) {
+          console.log(`✅ PaymentIntent retrieved on attempt ${attempt + 1}:`, paymentIntent.id);
+          break; // Success, exit retry loop
+        }
+
+        // Step 6: If no PaymentIntent yet, retry with delay (except on last attempt)
+        if (attempt < maxRetries) {
+          const delay = retryDelays[attempt] || 2000;
+          console.log(`⚠️ Attempt ${attempt + 1}: PaymentIntent not ready, retrying in ${delay}ms...`);
+          console.log(`   Invoice status: ${latestInvoice?.status}, Invoice ID: ${latestInvoice?.id}`);
+          
+          // Also try refreshing the subscription to get latest invoice
+          const refreshedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
+            expand: ['latest_invoice.payment_intent']
+          });
+          latestInvoice = refreshedSubscription.latest_invoice;
+          
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      } catch (retryErr) {
+        console.error(`❌ Attempt ${attempt + 1} error:`, retryErr.message);
+        if (attempt === maxRetries) {
+          throw retryErr; // Re-throw on final attempt
+        }
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, retryDelays[attempt] || 2000));
+      }
     }
 
-    // If payment_intent is still a string ID, retrieve it
-    if (typeof paymentIntent === 'string') {
-      console.log('📝 Retrieving PaymentIntent:', paymentIntent);
-      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
-    }
-
-    // Validate PaymentIntent exists and has client_secret
+    // Final validation
     if (!paymentIntent || !paymentIntent.client_secret) {
-      console.error('❌ PaymentIntent not found or missing client_secret', {
+      // Log comprehensive debug information
+      console.error('❌ PaymentIntent retrieval failed after all retries', {
         subscriptionId: subscription.id,
+        subscriptionStatus: subscription.status,
         invoiceId: latestInvoice?.id,
         invoiceStatus: latestInvoice?.status,
-        hasPaymentIntent: !!paymentIntent
+        invoiceAmountDue: latestInvoice?.amount_due,
+        invoiceCurrency: latestInvoice?.currency,
+        hasPaymentIntent: !!paymentIntent,
+        paymentIntentId: paymentIntent?.id,
+        paymentIntentStatus: paymentIntent?.status,
+        hasClientSecret: !!paymentIntent?.client_secret,
+        latestInvoicePaymentIntent: latestInvoice?.payment_intent
       });
-      return res.status(500).json({ 
-        error: 'Failed to create payment intent. Please try again.',
-        details: 'PaymentIntent was not created with the subscription. This may be a temporary issue.'
-      });
+
+      // Try one final approach: retrieve subscription again with full expansion
+      try {
+        console.log('🔄 Final attempt: Retrieving subscription with full expansion...');
+        const finalSubscription = await stripe.subscriptions.retrieve(subscription.id, {
+          expand: ['latest_invoice.payment_intent']
+        });
+        
+        if (finalSubscription.latest_invoice) {
+          const finalInvoice = typeof finalSubscription.latest_invoice === 'string'
+            ? await stripe.invoices.retrieve(finalSubscription.latest_invoice, { expand: ['payment_intent'] })
+            : finalSubscription.latest_invoice;
+          
+          if (finalInvoice.payment_intent) {
+            paymentIntent = typeof finalInvoice.payment_intent === 'string'
+              ? await stripe.paymentIntents.retrieve(finalInvoice.payment_intent)
+              : finalInvoice.payment_intent;
+          }
+        }
+      } catch (finalErr) {
+        console.error('❌ Final retrieval attempt failed:', finalErr.message);
+      }
+
+      // If still no PaymentIntent, return detailed error
+      if (!paymentIntent || !paymentIntent.client_secret) {
+        return res.status(500).json({ 
+          error: 'Failed to create payment intent',
+          details: 'PaymentIntent was not created with the subscription. This may be a temporary Stripe issue.',
+          subscriptionId: subscription.id,
+          invoiceId: latestInvoice?.id,
+          invoiceStatus: latestInvoice?.status,
+          suggestion: 'Please try again in a moment. If the issue persists, contact support.'
+        });
+      }
     }
 
-    console.log('✅ PaymentIntent retrieved:', paymentIntent.id);
+    console.log('✅ PaymentIntent retrieved successfully:', paymentIntent.id);
     console.log('✅ Client secret available');
 
     res.status(200).json({ 
