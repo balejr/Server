@@ -1637,22 +1637,47 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
     const shouldBePremium = isActive && plan === 'premium';
 
-    // 1. Update UserProfile.UserType
+    // 1. Update UserProfile.UserType and track changes
+    // First, get current UserType to detect changes
+    const currentUserTypeRequest = new mssql.Request(transaction);
+    const currentUserTypeResult = await currentUserTypeRequest
+      .input('userId', mssql.Int, userIdInt)
+      .query(`SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId`);
+    
+    const currentUserType = currentUserTypeResult.recordset[0]?.UserType || 'Free';
+    const newUserType = shouldBePremium ? 'Premium' : 
+                       (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ? 'Free' : currentUserType;
+    
+    // Only update if UserType is actually changing
+    const userTypeChanged = currentUserType !== newUserType;
+    
     if (shouldBePremium) {
-      console.log(`📝 Step 1: Updating UserProfile.UserType to Premium for user ${userIdInt}`);
-      const userProfileRequest = new mssql.Request(transaction);
-      await userProfileRequest
-        .input('userId', mssql.Int, userIdInt)
-        .query(`UPDATE dbo.UserProfile SET UserType = 'Premium' WHERE UserID = @userId`);
-      console.log(`✅ Step 1 complete: UserProfile updated`);
+      if (userTypeChanged) {
+        console.log(`📝 Step 1: Updating UserProfile.UserType from '${currentUserType}' to 'Premium' for user ${userIdInt}`);
+        const userProfileRequest = new mssql.Request(transaction);
+        await userProfileRequest
+          .input('userId', mssql.Int, userIdInt)
+          .query(`UPDATE dbo.UserProfile SET UserType = 'Premium', UserTypeChangedDate = SYSDATETIMEOFFSET() WHERE UserID = @userId`);
+        console.log(`✅ Step 1 complete: UserProfile updated to Premium, UserTypeChangedDate set`);
+      } else {
+        console.log(`📝 Step 1: UserProfile.UserType already 'Premium' for user ${userIdInt}, preserving UserTypeChangedDate`);
+        // UserType unchanged, don't update UserTypeChangedDate
+      }
     } else if (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') {
       // Downgrade to Free if subscription is canceled or past due
-      console.log(`📝 Step 1: Downgrading UserProfile.UserType to Free for user ${userIdInt}`);
-      const userProfileRequest = new mssql.Request(transaction);
-      await userProfileRequest
-        .input('userId', mssql.Int, userIdInt)
-        .query(`UPDATE dbo.UserProfile SET UserType = 'Free' WHERE UserID = @userId`);
-      console.log(`✅ Step 1 complete: UserProfile downgraded`);
+      if (userTypeChanged) {
+        console.log(`📝 Step 1: Downgrading UserProfile.UserType from '${currentUserType}' to 'Free' for user ${userIdInt}`);
+        const userProfileRequest = new mssql.Request(transaction);
+        await userProfileRequest
+          .input('userId', mssql.Int, userIdInt)
+          .query(`UPDATE dbo.UserProfile SET UserType = 'Free', UserTypeChangedDate = SYSDATETIMEOFFSET() WHERE UserID = @userId`);
+        console.log(`✅ Step 1 complete: UserProfile downgraded to Free, UserTypeChangedDate updated`);
+      } else {
+        console.log(`📝 Step 1: UserProfile.UserType already 'Free' for user ${userIdInt}, preserving UserTypeChangedDate`);
+        // UserType unchanged, don't update UserTypeChangedDate
+      }
+    } else {
+      console.log(`📝 Step 1: UserProfile.UserType remains '${currentUserType}' for user ${userIdInt}, no update needed`);
     }
 
     // 2. Upsert user_subscriptions table
