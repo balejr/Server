@@ -1489,9 +1489,41 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       expand: ['latest_invoice.payment_intent']
     });
     
-    // Extract subscription details
-    subscriptionStatus = subscription.status; // Override with actual subscription status
+    // Get payment intent from latest invoice or retrieve separately if paymentIntentId provided
+    paymentIntent = subscription.latest_invoice?.payment_intent;
+    
+    // If paymentIntentId was provided, retrieve it to get accurate status
+    if (paymentIntentId) {
+      console.log(`📝 Retrieving PaymentIntent for status check: ${paymentIntentId}`);
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    } else if (typeof paymentIntent === 'string') {
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+    }
+    
+    // If PaymentIntent succeeded, refresh subscription to get updated status
+    // Stripe may need a moment to update subscription status after PaymentIntent succeeds
+    if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
+      console.log(`📝 PaymentIntent status: ${paymentIntent.status}, refreshing subscription...`);
+      // Wait a moment for Stripe to process
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Refresh subscription to get latest status
+      subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ['latest_invoice.payment_intent']
+      });
+      console.log(`📝 Refreshed subscription status: ${subscription.status}`);
+    }
+    
+    // Extract subscription details (use refreshed status)
+    subscriptionStatus = subscription.status;
     customerId = subscription.customer;
+    
+    // If PaymentIntent succeeded but subscription is still incomplete, update to active
+    // This handles the case where Stripe hasn't updated subscription status yet
+    if (paymentIntent && paymentIntent.status === 'succeeded' && subscriptionStatus === 'incomplete') {
+      console.log(`⚠️ PaymentIntent succeeded but subscription still incomplete, updating to active`);
+      subscriptionStatus = 'active';
+    }
     
     // Safely convert period dates - check if they exist and are valid
     if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
@@ -1513,11 +1545,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       currency = price.currency.toUpperCase();
     }
     
-    // Get payment intent from latest invoice
-    paymentIntent = subscription.latest_invoice?.payment_intent;
+    // Map payment intent status to payment status
     if (paymentIntent) {
-      paymentIntentId = paymentIntent.id;
-      // Map payment intent status to payment status
+      if (!paymentIntentId) {
+        paymentIntentId = paymentIntent.id;
+      }
+      
       switch (paymentIntent.status) {
         case 'succeeded':
           paymentStatus = 'succeeded';
