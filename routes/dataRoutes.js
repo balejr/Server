@@ -1207,26 +1207,30 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     // Get payment intent from invoice
     paymentIntent = latestInvoice?.payment_intent;
     
-    // CRITICAL FIX: If invoice is "open" but has no payment_intent, we need to finalize it first
-    // When using payment_behavior: 'default_incomplete', Stripe creates the invoice but doesn't
-    // attach a payment_intent until the invoice is finalized
-    if (!paymentIntent && latestInvoice?.status === 'open' && latestInvoice?.auto_advance === false) {
-      console.log('📝 Invoice is open but has no payment_intent, finalizing invoice...');
+    // Check if invoice is already finalized (can't finalize again)
+    const isInvoiceFinalized = latestInvoice?.status_transitions?.finalized_at !== null || 
+                                latestInvoice?.status === 'paid' || 
+                                latestInvoice?.status === 'open';
+    
+    // CRITICAL FIX: If invoice is finalized but has no payment_intent, we need to retrieve it differently
+    // When using payment_behavior: 'default_incomplete', Stripe may finalize the invoice
+    // but the payment_intent might not be immediately available in the expanded response
+    if (!paymentIntent && isInvoiceFinalized) {
+      console.log('📝 Invoice is finalized but payment_intent not in response, retrieving invoice directly...');
       try {
-        latestInvoice = await stripe.invoices.finalizeInvoice(latestInvoice.id, {
+        // Retrieve the invoice again with full expansion
+        latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
           expand: ['payment_intent']
         });
         paymentIntent = latestInvoice?.payment_intent;
-        console.log('✅ Invoice finalized, payment intent:', paymentIntent?.id || 'still null');
-        console.log('📋 Invoice status after finalization:', latestInvoice.status);
-      } catch (finalizeError) {
-        console.error('❌ Error finalizing invoice:', finalizeError.message);
-        // If finalization fails, continue with retry logic below
+        console.log('✅ Retrieved invoice, payment intent:', paymentIntent?.id || 'still null');
+      } catch (retrieveError) {
+        console.error('❌ Error retrieving invoice:', retrieveError.message);
       }
     }
     
-    // If payment_intent is null, try finalizing the invoice first (if it's draft)
-    if (!paymentIntent && latestInvoice?.status === 'draft') {
+    // Only try to finalize if invoice is NOT already finalized
+    if (!paymentIntent && !isInvoiceFinalized && latestInvoice?.status === 'draft') {
       console.log('📝 Invoice is draft, finalizing...');
       try {
         latestInvoice = await stripe.invoices.finalizeInvoice(latestInvoice.id, {
@@ -1236,6 +1240,14 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         console.log('✅ Invoice finalized, payment intent:', paymentIntent?.id || 'still null');
       } catch (finalizeError) {
         console.error('❌ Error finalizing invoice:', finalizeError.message);
+        // If finalization fails because invoice is already finalized, retrieve it instead
+        if (finalizeError.message?.includes('already finalized')) {
+          console.log('📝 Invoice already finalized, retrieving instead...');
+          latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
+            expand: ['payment_intent']
+          });
+          paymentIntent = latestInvoice?.payment_intent;
+        }
       }
     }
     
