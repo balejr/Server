@@ -1088,44 +1088,25 @@ router.get('/payments/test', (req, res) => {
 
 // POST /api/data/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
-  // Log immediately when request arrives - use both console.log and process.stdout.write for Azure
   const timestamp = new Date().toISOString();
-  process.stdout.write(`\n[${timestamp}] 📥 PAYMENT INITIALIZE REQUEST RECEIVED\n`);
-  process.stdout.write(`[${timestamp}] Method: ${req.method}\n`);
-  process.stdout.write(`[${timestamp}] Path: ${req.path}\n`);
-  process.stdout.write(`[${timestamp}] User ID: ${req.user?.userId || req.body?.userId || 'missing'}\n`);
-  process.stdout.write(`[${timestamp}] Body: ${JSON.stringify(req.body)}\n`);
-  console.log(`\n[${timestamp}] 📥 PAYMENT INITIALIZE REQUEST RECEIVED`);
-  console.log(`[${timestamp}] Method: ${req.method}, Path: ${req.path}`);
-  console.log(`[${timestamp}] User ID: ${req.user?.userId || req.body?.userId || 'missing'}`);
-  console.log(`[${timestamp}] Request body:`, req.body);
+  console.log(`[${timestamp}] 📥 Payment initialization request received`);
   
   try {
+    // Validate environment variables
     if (!process.env.STRIPE_SECRET_KEY) {
       console.error('[ERROR] STRIPE_SECRET_KEY missing on server');
-      process.stdout.write(`[${timestamp}] ❌ ERROR: STRIPE_SECRET_KEY missing\n`);
       return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
     }
 
     if (!process.env.STRIPE_PRICE_ID) {
       console.error('[ERROR] STRIPE_PRICE_ID missing on server');
-      process.stdout.write(`[${timestamp}] ❌ ERROR: STRIPE_PRICE_ID missing\n`);
-      return res.status(500).json({ error: 'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.' });
+      return res.status(500).json({ 
+        error: 'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.' 
+      });
     }
 
     const userId = req.user.userId;
-    
-    // Log the entire request body to see what's being sent
-    console.log('Payment initialize request body:', JSON.stringify(req.body, null, 2));
-    process.stdout.write(`[${timestamp}] 🔄 Processing payment initialization for userId: ${userId}\n`);
-    
     const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
-    
-    console.log('Extracted values:', {
-      plan,
-      paymentMethod,
-      userId
-    });
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
@@ -1163,13 +1144,17 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       console.log('✅ Created Stripe Customer:', customer.id);
     }
 
-    // Create Subscription with monthly Price
+    // Create Subscription with payment_behavior: 'default_incomplete'
+    // This creates an incomplete subscription and returns a PaymentIntent for the first payment
     console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: process.env.STRIPE_PRICE_ID }],
       payment_behavior: 'default_incomplete',
-      payment_settings: { save_default_payment_method: 'on_subscription' },
+      payment_settings: { 
+        save_default_payment_method: 'on_subscription',
+        payment_method_types: ['card']
+      },
       expand: ['latest_invoice.payment_intent'],
       metadata: {
         userId: String(userId),
@@ -1180,201 +1165,42 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     console.log('✅ Created Stripe Subscription:', subscription.id);
     console.log('📋 Subscription status:', subscription.status);
-    console.log('📋 Latest invoice:', subscription.latest_invoice?.id || subscription.latest_invoice);
 
-    // Get clientSecret from latest_invoice.payment_intent
-    // Handle both expanded object and string ID cases
-    let paymentIntent;
+    // Get PaymentIntent from latest_invoice
+    // With payment_behavior: 'default_incomplete', Stripe creates a PaymentIntent automatically
+    let paymentIntent = subscription.latest_invoice?.payment_intent;
     let latestInvoice = subscription.latest_invoice;
-    
-    // If latest_invoice is a string ID, retrieve it
+
+    // If latest_invoice is a string ID, retrieve it with expansion
     if (typeof latestInvoice === 'string') {
-      console.log('📝 Latest invoice is string ID, retrieving:', latestInvoice);
+      console.log('📝 Retrieving invoice:', latestInvoice);
       latestInvoice = await stripe.invoices.retrieve(latestInvoice, {
         expand: ['payment_intent']
       });
-      console.log('📝 Retrieved invoice:', latestInvoice.id, 'Status:', latestInvoice.status);
-    }
-    
-    // Log invoice details for debugging
-    console.log('📋 Invoice details:', {
-      id: latestInvoice?.id,
-      status: latestInvoice?.status,
-      amount_due: latestInvoice?.amount_due,
-      payment_intent: latestInvoice?.payment_intent?.id || latestInvoice?.payment_intent || 'null'
-    });
-    
-    // Get payment intent from invoice
-    paymentIntent = latestInvoice?.payment_intent;
-    
-    // Check if invoice is already finalized (can't finalize again)
-    const isInvoiceFinalized = latestInvoice?.status_transitions?.finalized_at !== null || 
-                                latestInvoice?.status === 'paid' || 
-                                latestInvoice?.status === 'open';
-    
-    // CRITICAL FIX: If invoice is finalized but has no payment_intent, we need to retrieve it differently
-    // When using payment_behavior: 'default_incomplete', Stripe may finalize the invoice
-    // but the payment_intent might not be immediately available in the expanded response
-    if (!paymentIntent && isInvoiceFinalized) {
-      console.log('📝 Invoice is finalized but payment_intent not in response, retrieving invoice directly...');
-      try {
-        // Retrieve the invoice again with full expansion
-        latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
-          expand: ['payment_intent']
-        });
-        paymentIntent = latestInvoice?.payment_intent;
-        console.log('✅ Retrieved invoice, payment intent:', paymentIntent?.id || 'still null');
-      } catch (retrieveError) {
-        console.error('❌ Error retrieving invoice:', retrieveError.message);
-      }
-    }
-    
-    // Only try to finalize if invoice is NOT already finalized
-    if (!paymentIntent && !isInvoiceFinalized && latestInvoice?.status === 'draft') {
-      console.log('📝 Invoice is draft, finalizing...');
-      try {
-        latestInvoice = await stripe.invoices.finalizeInvoice(latestInvoice.id, {
-          expand: ['payment_intent']
-        });
-        paymentIntent = latestInvoice?.payment_intent;
-        console.log('✅ Invoice finalized, payment intent:', paymentIntent?.id || 'still null');
-      } catch (finalizeError) {
-        console.error('❌ Error finalizing invoice:', finalizeError.message);
-        // If finalization fails because invoice is already finalized, retrieve it instead
-        if (finalizeError.message?.includes('already finalized')) {
-          console.log('📝 Invoice already finalized, retrieving instead...');
-          latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
-            expand: ['payment_intent']
-          });
-          paymentIntent = latestInvoice?.payment_intent;
-        }
-      }
-    }
-    
-    // If payment_intent is still null, wait a moment and retry (Stripe might need time to create it)
-    if (!paymentIntent) {
-      console.log('⚠️ Payment intent is null, waiting 1 second and retrying...');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Retry retrieving the subscription with full expansion
-      console.log('🔄 Retrying subscription retrieval with full expansion...');
-      const retriedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
-        expand: ['latest_invoice.payment_intent']
-      });
-      const retriedInvoice = retriedSubscription.latest_invoice;
-      
-      if (typeof retriedInvoice === 'string') {
-        latestInvoice = await stripe.invoices.retrieve(retriedInvoice, {
-          expand: ['payment_intent']
-        });
-      } else {
-        latestInvoice = retriedInvoice;
-      }
-      
       paymentIntent = latestInvoice?.payment_intent;
     }
-    
-    // If still null, try one more time with a longer wait
-    if (!paymentIntent) {
-      console.log('⚠️ Payment intent still null, waiting 2 more seconds...');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Get the invoice directly
-      if (latestInvoice?.id) {
-        latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
-          expand: ['payment_intent']
-        });
-        paymentIntent = latestInvoice?.payment_intent;
-      }
-    }
-    
-    // If payment_intent is a string ID, retrieve it
+
+    // If payment_intent is still a string ID, retrieve it
     if (typeof paymentIntent === 'string') {
-      console.log('📝 Payment intent is string ID, retrieving:', paymentIntent);
+      console.log('📝 Retrieving PaymentIntent:', paymentIntent);
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
     }
-    
-    // Final check - if still no payment intent, log everything for debugging
+
+    // Validate PaymentIntent exists and has client_secret
     if (!paymentIntent || !paymentIntent.client_secret) {
-      console.error('❌ Payment intent details:', {
-        hasPaymentIntent: !!paymentIntent,
-        paymentIntentType: typeof paymentIntent,
-        paymentIntentId: paymentIntent?.id,
-        hasClientSecret: !!paymentIntent?.client_secret,
-        latestInvoiceId: latestInvoice?.id,
-        latestInvoiceStatus: latestInvoice?.status,
-        latestInvoiceAmount: latestInvoice?.amount_due,
-        latestInvoicePaymentIntent: latestInvoice?.payment_intent,
-        subscriptionStatus: subscription.status,
-        subscriptionLatestInvoice: subscription.latest_invoice,
-        subscriptionId: subscription.id
+      console.error('❌ PaymentIntent not found or missing client_secret', {
+        subscriptionId: subscription.id,
+        invoiceId: latestInvoice?.id,
+        invoiceStatus: latestInvoice?.status,
+        hasPaymentIntent: !!paymentIntent
       });
-      
-      // Try one more time - get the invoice payment_intent_id directly
-      if (latestInvoice?.payment_intent) {
-        const paymentIntentId = typeof latestInvoice.payment_intent === 'string' 
-          ? latestInvoice.payment_intent 
-          : latestInvoice.payment_intent.id;
-        
-        if (paymentIntentId) {
-          console.log('🔄 Attempting to retrieve payment intent by ID:', paymentIntentId);
-          try {
-            paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-            console.log('✅ Retrieved payment intent:', paymentIntent.id);
-          } catch (retrieveError) {
-            console.error('❌ Error retrieving payment intent:', retrieveError.message);
-          }
-        }
-      }
-      
-      // If still no payment intent, create one manually for the subscription
-      // This happens when invoice is finalized but payment_intent doesn't exist yet
-      if (!paymentIntent || !paymentIntent.client_secret) {
-        console.log('⚠️ No payment intent found, creating one manually for the subscription...');
-        try {
-          // Get the amount from the subscription price
-          let paymentAmount = 999; // Default $9.99
-          let paymentCurrency = 'usd';
-          
-          if (subscription.items.data.length > 0) {
-            paymentAmount = subscription.items.data[0].price.unit_amount;
-            paymentCurrency = subscription.items.data[0].price.currency;
-          }
-          
-          // Create a PaymentIntent for this subscription
-          paymentIntent = await stripe.paymentIntents.create({
-            amount: paymentAmount,
-            currency: paymentCurrency,
-            customer: customer.id,
-            payment_method_types: ['card'],
-            metadata: {
-              userId: String(userId),
-              subscriptionId: subscription.id,
-              invoiceId: latestInvoice?.id,
-              plan: plan,
-              paymentMethod: paymentMethod
-            },
-            // Link to the subscription
-            description: `Subscription payment for ${plan} plan`
-          });
-          
-          console.log('✅ Created PaymentIntent manually:', paymentIntent.id);
-          console.log('📋 PaymentIntent amount:', paymentAmount, paymentCurrency);
-          
-          // Update the invoice to use this payment intent (optional, but helps with tracking)
-          // Note: We can't directly attach payment_intent to invoice, but metadata helps
-        } catch (createError) {
-          console.error('❌ Error creating PaymentIntent manually:', createError.message);
-          throw new Error(`Failed to create payment intent: ${createError.message}`);
-        }
-      }
-      
-      if (!paymentIntent || !paymentIntent.client_secret) {
-        throw new Error('Failed to get payment intent client secret from subscription. Subscription created but payment intent not available yet.');
-      }
+      return res.status(500).json({ 
+        error: 'Failed to create payment intent. Please try again.',
+        details: 'PaymentIntent was not created with the subscription. This may be a temporary issue.'
+      });
     }
 
-    console.log('✅ Payment intent retrieved:', paymentIntent.id);
+    console.log('✅ PaymentIntent retrieved:', paymentIntent.id);
     console.log('✅ Client secret available');
 
     res.status(200).json({ 
@@ -1387,12 +1213,9 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
   } catch (err) {
     const errorTimestamp = new Date().toISOString();
     console.error(`[${errorTimestamp}] ❌ Initialize subscription error:`, err);
-    process.stdout.write(`[${errorTimestamp}] ❌ ERROR: ${err.message}\n`);
-    process.stdout.write(`[${errorTimestamp}] ❌ Stack: ${err.stack}\n`);
     res.status(500).json({
-      message: 'Failed to initialize subscription',
-      error: err?.message || 'Stripe subscription creation failed',
-      stack: err.stack
+      error: 'Failed to initialize subscription',
+      message: err?.message || 'Stripe subscription creation failed'
     });
   }
 });
@@ -1406,7 +1229,6 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
     const { paymentIntentId, subscriptionId } = req.body || {};
     
-    // Support both subscriptionId and paymentIntentId for backward compatibility
     if (!paymentIntentId && !subscriptionId) {
       return res.status(400).json({ error: 'paymentIntentId or subscriptionId required' });
     }
@@ -1414,100 +1236,39 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
     let subscription;
     let paymentIntent;
 
-    // If subscriptionId is provided, retrieve subscription
+    // Primary path: retrieve subscription if subscriptionId provided
     if (subscriptionId) {
+      console.log(`📝 Retrieving subscription: ${subscriptionId}`);
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
         expand: ['latest_invoice.payment_intent']
       });
+      
+      // Get PaymentIntent from latest invoice
       paymentIntent = subscription.latest_invoice?.payment_intent;
       
-      // If paymentIntentId is provided but subscription's invoice doesn't have it,
-      // it means we created the PaymentIntent manually - we need to pay the invoice with it
-      if (paymentIntentId && !paymentIntent && subscription.latest_invoice) {
-        console.log('📝 PaymentIntent was created manually, retrieving it...');
-        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-          expand: ['payment_method']
-        });
-        
-        // If PaymentIntent is succeeded, pay the invoice with it
-        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
-          const invoiceId = typeof subscription.latest_invoice === 'string' 
-            ? subscription.latest_invoice 
-            : subscription.latest_invoice.id;
-          
-          console.log('💰 Paying invoice with confirmed PaymentIntent...');
-          try {
-            // Get payment_method from PaymentIntent (it's attached after confirmation)
-            // Handle both string ID and expanded object
-            let paymentMethodId = paymentIntent.payment_method;
-            if (typeof paymentMethodId === 'object' && paymentMethodId?.id) {
-              paymentMethodId = paymentMethodId.id;
-            } else if (typeof paymentMethodId !== 'string') {
-              // If payment_method is not a string, try to get it from the payment intent directly
-              paymentMethodId = paymentIntent.payment_method?.id || paymentIntent.payment_method;
-            }
-            
-            if (paymentMethodId && typeof paymentMethodId === 'string') {
-              console.log('📝 Using payment_method:', paymentMethodId);
-              await stripe.invoices.pay(invoiceId, {
-                payment_method: paymentMethodId
-              });
-              console.log('✅ Invoice paid successfully');
-            } else {
-              console.warn('⚠️ PaymentIntent has no valid payment_method attached:', paymentIntent.payment_method);
-              // Try alternative: pay invoice without payment_method (uses default)
-              try {
-                await stripe.invoices.pay(invoiceId);
-                console.log('✅ Invoice paid using default payment method');
-              } catch (altError) {
-                console.warn('⚠️ Could not pay invoice:', altError.message);
-              }
-            }
-            
-            // Retrieve subscription again to get updated status
-            subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-              expand: ['latest_invoice.payment_intent']
-            });
-          } catch (payError) {
-            console.warn('⚠️ Error paying invoice (may already be paid):', payError.message);
-            // Continue anyway - invoice might already be paid
-          }
-        }
+      // If paymentIntent is a string ID, retrieve it
+      if (typeof paymentIntent === 'string') {
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
       }
-    } else {
-      // Fallback: retrieve payment intent and find associated subscription
-      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ['payment_method']
-      });
       
-      // Try to find subscription from payment intent metadata or invoices
+      // If paymentIntentId was provided separately, use it to verify
+      if (paymentIntentId && paymentIntent?.id !== paymentIntentId) {
+        console.log(`⚠️ PaymentIntent mismatch. Using provided paymentIntentId: ${paymentIntentId}`);
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      }
+    } else if (paymentIntentId) {
+      // Fallback: retrieve PaymentIntent and find associated subscription
+      console.log(`📝 Retrieving PaymentIntent: ${paymentIntentId}`);
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      
+      // Try to find subscription from PaymentIntent metadata
       if (paymentIntent.metadata?.subscriptionId) {
-        subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId);
-        
-        // If PaymentIntent is succeeded, pay the invoice
-        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
-          const invoiceId = typeof subscription.latest_invoice === 'string' 
-            ? subscription.latest_invoice 
-            : subscription.latest_invoice.id;
-          
-          console.log('💰 Paying invoice with confirmed PaymentIntent...');
-          try {
-            await stripe.invoices.pay(invoiceId, {
-              payment_intent: paymentIntent.id
-            });
-            console.log('✅ Invoice paid successfully');
-            
-            // Retrieve subscription again to get updated status
-            subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId, {
-              expand: ['latest_invoice.payment_intent']
-            });
-          } catch (payError) {
-            console.warn('⚠️ Error paying invoice (may already be paid):', payError.message);
-          }
-        }
+        subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId, {
+          expand: ['latest_invoice.payment_intent']
+        });
       } else {
-        // Search for subscription by customer and status
-        const customerId = paymentIntent.metadata?.customerId || paymentIntent.customer;
+        // Search by customer for incomplete subscriptions
+        const customerId = paymentIntent.customer;
         if (customerId) {
           const subscriptions = await stripe.subscriptions.list({
             customer: customerId,
@@ -1516,62 +1277,49 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           });
           if (subscriptions.data.length > 0) {
             subscription = subscriptions.data[0];
-            
-            // Pay the invoice if PaymentIntent is succeeded
-            if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
-              const invoiceId = typeof subscription.latest_invoice === 'string' 
-                ? subscription.latest_invoice 
-                : subscription.latest_invoice.id;
-              
-              console.log('💰 Paying invoice with confirmed PaymentIntent...');
-              try {
-                await stripe.invoices.pay(invoiceId, {
-                  payment_method: paymentIntent.payment_method
-                });
-                console.log('✅ Invoice paid successfully');
-                
-                // Retrieve subscription again
-                subscription = await stripe.subscriptions.retrieve(subscription.id, {
-                  expand: ['latest_invoice.payment_intent']
-                });
-              } catch (payError) {
-                console.warn('⚠️ Error paying invoice:', payError.message);
-              }
-            }
           }
         }
       }
     }
 
-    // Return subscription details if available, otherwise payment intent details
+    // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
+      // Get amount and currency from subscription price
+      const price = subscription.items.data[0]?.price;
+      const amount = price?.unit_amount || paymentIntent?.amount || 0;
+      const currency = price?.currency || paymentIntent?.currency || 'usd';
+      
       res.status(200).json({ 
         id: subscription.id,
         status: subscription.status, // active, trialing, past_due, canceled, incomplete, etc.
         paymentIntentId: paymentIntent?.id || paymentIntentId,
-        amount: subscription.items.data[0]?.price?.unit_amount || paymentIntent?.amount,
-        currency: subscription.items.data[0]?.price?.currency || paymentIntent?.currency || 'usd',
+        amount: amount,
+        currency: currency,
         customerId: subscription.customer,
         currentPeriodStart: subscription.current_period_start,
         currentPeriodEnd: subscription.current_period_end,
         paymentIntentStatus: paymentIntent?.status
       });
-    } else {
-      // Fallback to payment intent if subscription not found
+    } else if (paymentIntent) {
+      // Fallback: return PaymentIntent details only
       res.status(200).json({ 
         id: paymentIntent.id, 
         status: paymentIntent.status, 
         amount: paymentIntent.amount, 
         currency: paymentIntent.currency,
-        paymentIntentId: paymentIntent.id
+        paymentIntentId: paymentIntent.id,
+        paymentIntentStatus: paymentIntent.status
+      });
+    } else {
+      return res.status(404).json({ 
+        error: 'Subscription or PaymentIntent not found' 
       });
     }
   } catch (err) {
     console.error('Confirm subscription error:', err);
     res.status(500).json({
-      message: 'Failed to confirm subscription',
-      error: err?.message || 'Stripe confirm failed',
-      stack: err.stack
+      error: 'Failed to confirm subscription',
+      message: err?.message || 'Stripe confirm failed'
     });
   }
 });
@@ -1704,7 +1452,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     throw new Error('Database connection not available');
   }
 
+  // Use transaction to ensure atomicity
+  const transaction = new mssql.Transaction(pool);
+
   try {
+    await transaction.begin();
+    console.log('📝 Transaction started');
+
     // Map subscription status to determine if user should be Premium
     // active, trialing = Premium; canceled, past_due, incomplete = check payment status
     const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
@@ -1713,14 +1467,16 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // 1. Update UserProfile.UserType
     if (shouldBePremium) {
       console.log(`📝 Step 1: Updating UserProfile.UserType to Premium for user ${userIdInt}`);
-      await pool.request()
+      const userProfileRequest = new mssql.Request(transaction);
+      await userProfileRequest
         .input('userId', mssql.Int, userIdInt)
         .query(`UPDATE dbo.UserProfile SET UserType = 'Premium' WHERE UserID = @userId`);
       console.log(`✅ Step 1 complete: UserProfile updated`);
     } else if (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') {
       // Downgrade to Free if subscription is canceled or past due
       console.log(`📝 Step 1: Downgrading UserProfile.UserType to Free for user ${userIdInt}`);
-      await pool.request()
+      const userProfileRequest = new mssql.Request(transaction);
+      await userProfileRequest
         .input('userId', mssql.Int, userIdInt)
         .query(`UPDATE dbo.UserProfile SET UserType = 'Free' WHERE UserID = @userId`);
       console.log(`✅ Step 1 complete: UserProfile downgraded`);
@@ -1728,7 +1484,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
     // 2. Upsert user_subscriptions table
     console.log(`📝 Step 2: Upserting [dbo].[user_subscriptions] for user ${userIdInt}`);
-    const existingSub = await pool.request()
+    const checkSubRequest = new mssql.Request(transaction);
+    const existingSub = await checkSubRequest
       .input('userId', mssql.Int, userIdInt)
       .query(`SELECT UserId FROM [dbo].[user_subscriptions] WHERE UserId = @userId`);
 
@@ -1758,12 +1515,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       }
       
       const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
-      console.log(`🔍 UPDATE query: ${updateQuery}`);
       
-      const updateRequest = pool.request()
-        .input('userId', mssql.Int, userIdInt)
-        .input('plan', mssql.NVarChar(32), capitalizedPlan)
-        .input('status', mssql.NVarChar(32), subscriptionStatus);
+      const updateRequest = new mssql.Request(transaction);
+      updateRequest.input('userId', mssql.Int, userIdInt);
+      updateRequest.input('plan', mssql.NVarChar(32), capitalizedPlan);
+      updateRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) updateRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
@@ -1799,12 +1555,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       }
       
       const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
-      console.log(`🔍 INSERT query: ${insertQuery}`);
       
-      const insertRequest = pool.request()
-        .input('userId', mssql.Int, userIdInt)
-        .input('plan', mssql.NVarChar(32), capitalizedPlan)
-        .input('status', mssql.NVarChar(32), subscriptionStatus);
+      const insertRequest = new mssql.Request(transaction);
+      insertRequest.input('userId', mssql.Int, userIdInt);
+      insertRequest.input('plan', mssql.NVarChar(32), capitalizedPlan);
+      insertRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) insertRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
@@ -1816,10 +1571,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     }
     console.log(`✅ Step 2 complete: user_subscriptions updated`);
 
-    // 3. Insert payment record (if paymentIntentId exists)
+    // 3. Insert payment record (if paymentIntentId exists and not already recorded)
     if (paymentIntentId) {
       console.log(`📝 Step 3: Checking if payment already exists for payment_intent_id: ${paymentIntentId}`);
-      const existingPayment = await pool.request()
+      const checkPaymentRequest = new mssql.Request(transaction);
+      const existingPayment = await checkPaymentRequest
         .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
         .query(`SELECT payment_intent_id FROM [dbo].[payments] WHERE payment_intent_id = @paymentIntentId`);
 
@@ -1827,9 +1583,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         console.log(`⚠️ Payment already exists, skipping insert`);
       } else {
         console.log(`📝 Step 3: Inserting payment record with status: "${paymentStatus}"`);
-        const paymentInsertQuery = `INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`;
-        console.log(`🔍 Payment INSERT query: ${paymentInsertQuery}`);
-        await pool.request()
+        const paymentRequest = new mssql.Request(transaction);
+        await paymentRequest
           .input('userId', mssql.Int, userIdInt)
           .input('plan', mssql.VarChar(32), capitalizedPlan)
           .input('amount', mssql.Decimal(10, 2), amount)
@@ -1837,10 +1592,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
           .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
           .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
           .input('status', mssql.VarChar(32), paymentStatus)
-          .query(paymentInsertQuery);
+          .query(`INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`);
         console.log(`✅ Step 3 complete: Payment recorded`);
       }
     }
+
+    // Commit transaction
+    await transaction.commit();
+    console.log('✅ Transaction committed');
 
     console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
     console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}`);
@@ -1855,6 +1614,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       customerId: customerId || null
     };
   } catch (dbErr) {
+    // Rollback transaction on error
+    try {
+      await transaction.rollback();
+      console.log('❌ Transaction rolled back');
+    } catch (rollbackErr) {
+      console.error('❌ Error rolling back transaction:', rollbackErr.message);
+    }
+    
     console.error('❌ Database error:', dbErr.message);
     console.error('❌ Error code:', dbErr.code);
     if (dbErr.originalError) {
