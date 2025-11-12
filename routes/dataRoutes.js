@@ -1478,8 +1478,19 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // Extract subscription details
     subscriptionStatus = subscription.status; // Override with actual subscription status
     customerId = subscription.customer;
-    currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
-    currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+    
+    // Safely convert period dates - check if they exist and are valid
+    if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
+      currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+    } else {
+      currentPeriodStart = null;
+    }
+    
+    if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
+      currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+    } else {
+      currentPeriodEnd = null;
+    }
     
     // Get amount and currency from subscription price
     if (subscription.items.data.length > 0) {
@@ -1899,17 +1910,21 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing subscription ${event.type} for user ${userId}`);
           
           // Update subscription in database
-          await updateSubscriptionInDatabase(
-            userId,
-            subscription.status,
-            subscription.metadata?.plan || 'premium',
-            subscription.latest_invoice?.payment_intent?.id || null,
-            subscription.metadata?.paymentMethod || 'stripe',
-            subscription.id,
-            subscription.customer,
-            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
-            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
-          );
+                  await updateSubscriptionInDatabase(
+                    userId,
+                    subscription.status,
+                    subscription.metadata?.plan || 'premium',
+                    subscription.latest_invoice?.payment_intent?.id || null,
+                    subscription.metadata?.paymentMethod || 'stripe',
+                    subscription.id,
+                    subscription.customer,
+                    subscription.current_period_start && typeof subscription.current_period_start === 'number' 
+                      ? new Date(subscription.current_period_start * 1000).toISOString() 
+                      : null,
+                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
+                      ? new Date(subscription.current_period_end * 1000).toISOString()
+                      : null
+                  );
           
           console.log(`✅ Subscription ${event.type} processed successfully`);
         }
@@ -1928,17 +1943,21 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing subscription deletion for user ${userId}`);
           
           // Update subscription status to canceled
-          await updateSubscriptionInDatabase(
-            userId,
-            'canceled',
-            subscription.metadata?.plan || 'premium',
-            null,
-            subscription.metadata?.paymentMethod || 'stripe',
-            subscription.id,
-            subscription.customer,
-            null,
-            null
-          );
+                  await updateSubscriptionInDatabase(
+                    userId,
+                    'canceled',
+                    subscription.metadata?.plan || 'premium',
+                    null,
+                    subscription.metadata?.paymentMethod || 'stripe',
+                    subscription.id,
+                    subscription.customer,
+                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
+                      ? new Date(subscription.current_period_start * 1000).toISOString()
+                      : null,
+                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
+                      ? new Date(subscription.current_period_end * 1000).toISOString()
+                      : null
+                  );
           
           console.log(`✅ Subscription deletion processed successfully`);
         }
@@ -1966,17 +1985,21 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing invoice payment succeeded for user ${userId}, subscription ${subscriptionId}`);
           
           // Update subscription - payment succeeded means subscription should be active
-          await updateSubscriptionInDatabase(
-            userId,
-            subscription.status,
-            subscription.metadata?.plan || 'premium',
-            invoice.payment_intent?.id || null,
-            subscription.metadata?.paymentMethod || 'stripe',
-            subscription.id,
-            subscription.customer,
-            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
-            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
-          );
+                  await updateSubscriptionInDatabase(
+                    userId,
+                    subscription.status,
+                    subscription.metadata?.plan || 'premium',
+                    invoice.payment_intent?.id || null,
+                    subscription.metadata?.paymentMethod || 'stripe',
+                    subscription.id,
+                    subscription.customer,
+                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
+                      ? new Date(subscription.current_period_start * 1000).toISOString()
+                      : null,
+                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
+                      ? new Date(subscription.current_period_end * 1000).toISOString()
+                      : null
+                  );
           
           console.log(`✅ Invoice payment succeeded processed successfully`);
         }
@@ -2004,17 +2027,21 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing invoice payment failed for user ${userId}, subscription ${subscriptionId}`);
           
           // Update subscription status - payment failed might set status to past_due
-          await updateSubscriptionInDatabase(
-            userId,
-            subscription.status, // Could be 'past_due' or 'unpaid'
-            subscription.metadata?.plan || 'premium',
-            invoice.payment_intent?.id || null,
-            subscription.metadata?.paymentMethod || 'stripe',
-            subscription.id,
-            subscription.customer,
-            subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null,
-            subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null
-          );
+                  await updateSubscriptionInDatabase(
+                    userId,
+                    subscription.status, // Could be 'past_due' or 'unpaid'
+                    subscription.metadata?.plan || 'premium',
+                    invoice.payment_intent?.id || null,
+                    subscription.metadata?.paymentMethod || 'stripe',
+                    subscription.id,
+                    subscription.customer,
+                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
+                      ? new Date(subscription.current_period_start * 1000).toISOString()
+                      : null,
+                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
+                      ? new Date(subscription.current_period_end * 1000).toISOString()
+                      : null
+                  );
           
           console.log(`✅ Invoice payment failed processed successfully`);
         }
