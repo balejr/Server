@@ -1153,7 +1153,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       payment_behavior: 'default_incomplete',
       payment_settings: { 
         save_default_payment_method: 'on_subscription',
-        payment_method_types: ['card']
+        // Allow both card and Apple Pay payment methods
+        payment_method_types: ['card', 'apple_pay']
       },
       expand: ['latest_invoice.payment_intent'],
       metadata: {
@@ -1215,11 +1216,12 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             const currency = latestInvoice.currency || 'usd';
             
             // Create PaymentIntent for this invoice
+            // Use automatic_payment_methods to support Apple Pay and other payment methods
             paymentIntent = await stripe.paymentIntents.create({
               amount: amount,
               currency: currency,
               customer: customer.id,
-              payment_method_types: ['card'],
+              automatic_payment_methods: { enabled: true },
               metadata: {
                 userId: String(userId),
                 subscriptionId: subscription.id,
