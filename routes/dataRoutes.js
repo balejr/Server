@@ -1425,7 +1425,9 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       // it means we created the PaymentIntent manually - we need to pay the invoice with it
       if (paymentIntentId && !paymentIntent && subscription.latest_invoice) {
         console.log('📝 PaymentIntent was created manually, retrieving it...');
-        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+          expand: ['payment_method']
+        });
         
         // If PaymentIntent is succeeded, pay the invoice with it
         if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
@@ -1435,10 +1437,17 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           
           console.log('💰 Paying invoice with confirmed PaymentIntent...');
           try {
-            await stripe.invoices.pay(invoiceId, {
-              payment_intent: paymentIntent.id
-            });
-            console.log('✅ Invoice paid successfully');
+            // Get payment_method from PaymentIntent (it's attached after confirmation)
+            const paymentMethodId = paymentIntent.payment_method;
+            
+            if (paymentMethodId) {
+              await stripe.invoices.pay(invoiceId, {
+                payment_method: paymentMethodId
+              });
+              console.log('✅ Invoice paid successfully');
+            } else {
+              console.warn('⚠️ PaymentIntent has no payment_method attached');
+            }
             
             // Retrieve subscription again to get updated status
             subscription = await stripe.subscriptions.retrieve(subscriptionId, {
@@ -1452,7 +1461,9 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       }
     } else {
       // Fallback: retrieve payment intent and find associated subscription
-      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ['payment_method']
+      });
       
       // Try to find subscription from payment intent metadata or invoices
       if (paymentIntent.metadata?.subscriptionId) {
