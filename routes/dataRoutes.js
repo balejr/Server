@@ -1420,6 +1420,36 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         expand: ['latest_invoice.payment_intent']
       });
       paymentIntent = subscription.latest_invoice?.payment_intent;
+      
+      // If paymentIntentId is provided but subscription's invoice doesn't have it,
+      // it means we created the PaymentIntent manually - we need to pay the invoice with it
+      if (paymentIntentId && !paymentIntent && subscription.latest_invoice) {
+        console.log('📝 PaymentIntent was created manually, retrieving it...');
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        
+        // If PaymentIntent is succeeded, pay the invoice with it
+        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
+          const invoiceId = typeof subscription.latest_invoice === 'string' 
+            ? subscription.latest_invoice 
+            : subscription.latest_invoice.id;
+          
+          console.log('💰 Paying invoice with confirmed PaymentIntent...');
+          try {
+            await stripe.invoices.pay(invoiceId, {
+              payment_intent: paymentIntent.id
+            });
+            console.log('✅ Invoice paid successfully');
+            
+            // Retrieve subscription again to get updated status
+            subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+              expand: ['latest_invoice.payment_intent']
+            });
+          } catch (payError) {
+            console.warn('⚠️ Error paying invoice (may already be paid):', payError.message);
+            // Continue anyway - invoice might already be paid
+          }
+        }
+      }
     } else {
       // Fallback: retrieve payment intent and find associated subscription
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
@@ -1427,16 +1457,61 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       // Try to find subscription from payment intent metadata or invoices
       if (paymentIntent.metadata?.subscriptionId) {
         subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId);
+        
+        // If PaymentIntent is succeeded, pay the invoice
+        if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
+          const invoiceId = typeof subscription.latest_invoice === 'string' 
+            ? subscription.latest_invoice 
+            : subscription.latest_invoice.id;
+          
+          console.log('💰 Paying invoice with confirmed PaymentIntent...');
+          try {
+            await stripe.invoices.pay(invoiceId, {
+              payment_intent: paymentIntent.id
+            });
+            console.log('✅ Invoice paid successfully');
+            
+            // Retrieve subscription again to get updated status
+            subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId, {
+              expand: ['latest_invoice.payment_intent']
+            });
+          } catch (payError) {
+            console.warn('⚠️ Error paying invoice (may already be paid):', payError.message);
+          }
+        }
       } else {
         // Search for subscription by customer and status
-        const customerId = paymentIntent.metadata?.customerId;
+        const customerId = paymentIntent.metadata?.customerId || paymentIntent.customer;
         if (customerId) {
           const subscriptions = await stripe.subscriptions.list({
             customer: customerId,
-            limit: 1
+            limit: 1,
+            status: 'incomplete'
           });
           if (subscriptions.data.length > 0) {
             subscription = subscriptions.data[0];
+            
+            // Pay the invoice if PaymentIntent is succeeded
+            if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
+              const invoiceId = typeof subscription.latest_invoice === 'string' 
+                ? subscription.latest_invoice 
+                : subscription.latest_invoice.id;
+              
+              console.log('💰 Paying invoice with confirmed PaymentIntent...');
+              try {
+                await stripe.invoices.pay(invoiceId, {
+                  payment_method: paymentIntent.payment_method
+                });
+                console.log('✅ Invoice paid successfully');
+                
+                // Retrieve subscription again
+                subscription = await stripe.subscriptions.retrieve(subscription.id, {
+                  expand: ['latest_invoice.payment_intent']
+                });
+              } catch (payError) {
+                console.warn('⚠️ Error paying invoice:', payError.message);
+              }
+            }
           }
         }
       }
