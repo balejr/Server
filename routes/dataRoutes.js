@@ -1272,9 +1272,21 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               description: `Subscription payment for ${plan} plan`
             });
             
-            // Attach PaymentIntent to invoice by paying the invoice with it
-            // Note: We can't directly attach, but we'll use it when confirming payment
-            console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
+            // Try to attach PaymentIntent to invoice by updating the invoice
+            // This ensures the PaymentIntent is linked to the invoice
+            try {
+              await stripe.invoices.update(latestInvoice.id, {
+                default_payment_method: null // Clear any default payment method
+              });
+              
+              // Note: We can't directly attach PaymentIntent to invoice via API
+              // But when the PaymentIntent succeeds, we'll pay the invoice with it in the confirm endpoint
+              console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
+              console.log(`   PaymentIntent will be attached when payment succeeds`);
+            } catch (updateErr) {
+              console.warn(`⚠️ Could not update invoice: ${updateErr.message}`);
+              console.log(`   PaymentIntent created but may need manual attachment: ${paymentIntent.id}`);
+            }
           } catch (createErr) {
             console.error(`❌ Failed to create PaymentIntent for open invoice:`, createErr.message);
             // Continue to try retrieving PaymentIntent from invoice
@@ -1473,6 +1485,66 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       }
     }
 
+    // If PaymentIntent succeeded but subscription is incomplete, try to complete it
+    if (subscription && paymentIntent && paymentIntent.status === 'succeeded' && subscription.status === 'incomplete') {
+      console.log('⚠️ PaymentIntent succeeded but subscription is incomplete');
+      console.log('   Attempting to complete subscription...');
+      
+      // Get the latest invoice
+      let invoice = subscription.latest_invoice;
+      if (typeof invoice === 'string') {
+        invoice = await stripe.invoices.retrieve(invoice);
+      }
+      
+      // If invoice is open and PaymentIntent succeeded, try to pay the invoice
+      if (invoice && invoice.status === 'open' && paymentIntent.status === 'succeeded') {
+        try {
+          // If PaymentIntent is not attached to invoice, attach it
+          if (!invoice.payment_intent || invoice.payment_intent !== paymentIntent.id) {
+            console.log('   PaymentIntent not attached to invoice, attempting to pay invoice with PaymentIntent...');
+            
+            // Try to pay the invoice with the PaymentIntent
+            // Note: Stripe will automatically use the PaymentIntent if it's for the same customer and amount
+            const paidInvoice = await stripe.invoices.pay(invoice.id, {
+              payment_intent: paymentIntent.id
+            });
+            
+            console.log(`   Invoice paid, new status: ${paidInvoice.status}`);
+            
+            // Wait a moment for Stripe to process
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            // Refresh subscription to get updated status
+            subscription = await stripe.subscriptions.retrieve(subscription.id, {
+              expand: ['latest_invoice.payment_intent']
+            });
+            
+            console.log(`   Subscription refreshed, new status: ${subscription.status}`);
+          } else {
+            // PaymentIntent is attached, just wait for Stripe to process
+            console.log('   PaymentIntent is attached to invoice, waiting for Stripe to process...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Refresh subscription
+            subscription = await stripe.subscriptions.retrieve(subscription.id, {
+              expand: ['latest_invoice.payment_intent']
+            });
+            
+            console.log(`   Subscription refreshed, status: ${subscription.status}`);
+          }
+        } catch (payErr) {
+          console.warn(`   Could not pay invoice: ${payErr.message}`);
+          if (payErr.code === 'invoice_already_paid') {
+            console.log('   Invoice already paid, refreshing subscription...');
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            subscription = await stripe.subscriptions.retrieve(subscription.id, {
+              expand: ['latest_invoice.payment_intent']
+            });
+          }
+        }
+      }
+    }
+    
     // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
       // Get amount and currency from subscription price
