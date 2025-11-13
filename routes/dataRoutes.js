@@ -1780,6 +1780,54 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
     // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
+      // Extract dates from subscription for response and database save
+      let currentPeriodStart = null;
+      let currentPeriodEnd = null;
+      
+      if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
+        currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+      }
+      
+      if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
+        currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+      }
+      
+      // Save subscription details to database (including dates) - run in background to avoid blocking response
+      if (subscription.id && req.user?.userId) {
+        (async () => {
+          try {
+            const customerId = typeof subscription.customer === 'string' 
+              ? subscription.customer 
+              : subscription.customer?.id;
+            
+            // Extract payment method ID if available
+            let paymentMethodId = null;
+            if (paymentIntent?.payment_method) {
+              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
+                ? paymentIntent.payment_method 
+                : paymentIntent.payment_method.id;
+            }
+            
+            console.log(`💾 Saving subscription ${subscription.id} to database for user ${req.user.userId}...`);
+            await updateSubscriptionInDatabase(
+              req.user.userId,
+              subscription.status,
+              'premium', // Default plan
+              paymentIntent?.id || paymentIntentId,
+              paymentMethodId || 'stripe',
+              subscription.id,
+              customerId,
+              currentPeriodStart,
+              currentPeriodEnd
+            );
+            console.log(`✅ Subscription details saved to database`);
+          } catch (saveErr) {
+            console.warn('⚠️ Could not save subscription to database (non-critical):', saveErr.message);
+            // Don't fail the response - subscription will be saved via /users/updateSubscription or webhook
+          }
+        })(); // Fire and forget - don't await
+      }
+      
       // If PaymentIntent succeeded, handle invoice payment and payment method attachment
       // Do these operations asynchronously after sending response to avoid timeout
       if (paymentIntent?.status === 'succeeded') {
@@ -2745,7 +2793,53 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       }
     }
 
+    // If subscriptionId is provided but dates are missing, refresh from Stripe
+    if (subscriptionId && (!validatedPeriodStart || !validatedPeriodEnd)) {
+      if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+        console.warn('⚠️ Stripe not initialized, cannot refresh subscription from Stripe');
+      } else {
+        try {
+          console.log(`🔄 Refreshing subscription ${subscriptionId} from Stripe to get billing dates...`);
+          const refreshedSubscription = await stripe.subscriptions.retrieve(subscriptionId, {
+            expand: ['items.data.price']
+          });
+          
+          if (refreshedSubscription.current_period_start && typeof refreshedSubscription.current_period_start === 'number') {
+            const refreshedStart = new Date(refreshedSubscription.current_period_start * 1000).toISOString();
+            currentPeriodStart = refreshedStart;
+            validatedPeriodStart = refreshedStart;
+            console.log(`✅ Retrieved current_period_start from Stripe: ${currentPeriodStart}`);
+          }
+          
+          if (refreshedSubscription.current_period_end && typeof refreshedSubscription.current_period_end === 'number') {
+            const refreshedEnd = new Date(refreshedSubscription.current_period_end * 1000).toISOString();
+            currentPeriodEnd = refreshedEnd;
+            validatedPeriodEnd = refreshedEnd;
+            console.log(`✅ Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
+          }
+          
+          // Also update subscriptionStatus if it changed (e.g., from 'incomplete' to 'active')
+          if (refreshedSubscription.status && refreshedSubscription.status !== subscriptionStatus) {
+            subscriptionStatus = refreshedSubscription.status;
+            console.log(`📝 Updated subscription status to: ${subscriptionStatus}`);
+          }
+          
+          // Update customerId if missing
+          if (!customerId && refreshedSubscription.customer) {
+            customerId = typeof refreshedSubscription.customer === 'string' 
+              ? refreshedSubscription.customer 
+              : refreshedSubscription.customer.id;
+            console.log(`📝 Retrieved customerId from Stripe: ${customerId}`);
+          }
+        } catch (refreshErr) {
+          console.warn('⚠️ Could not refresh subscription from Stripe:', refreshErr.message);
+          // Continue with provided dates (or null if not provided)
+        }
+      }
+    }
+
     console.log(`[${timestamp}] 🔄 Calling updateSubscriptionInDatabase...`);
+    console.log(`   Dates: start=${validatedPeriodStart || currentPeriodStart || 'NULL'}, end=${validatedPeriodEnd || currentPeriodEnd || 'NULL'}`);
     const result = await updateSubscriptionInDatabase(
       userId, 
       subscriptionStatus, 
