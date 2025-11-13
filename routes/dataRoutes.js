@@ -2826,17 +2826,85 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       try {
         if (stripe && process.env.STRIPE_SECRET_KEY) {
           console.log(`📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`);
-          const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id);
+          const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
+            expand: ['latest_invoice', 'items.data.price']
+          });
           
+          // First try to get dates from subscription object
           if (stripeSubscription.current_period_end) {
             nextBillingDate = new Date(stripeSubscription.current_period_end * 1000).toISOString();
             currentPeriodStart = stripeSubscription.current_period_start 
               ? new Date(stripeSubscription.current_period_start * 1000).toISOString()
               : null;
             
-            console.log(`✅ Retrieved dates from Stripe - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
+            console.log(`✅ Retrieved dates from Stripe subscription - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
+          } else {
+            // Fallback: Try to get dates from latest invoice if subscription doesn't have them
+            console.log(`⚠️ Stripe subscription missing billing dates, checking latest invoice...`);
             
-            // Save dates to database to keep them in sync
+            if (stripeSubscription.latest_invoice) {
+              const invoiceId = typeof stripeSubscription.latest_invoice === 'string' 
+                ? stripeSubscription.latest_invoice 
+                : stripeSubscription.latest_invoice.id;
+              
+              try {
+                const invoice = await stripe.invoices.retrieve(invoiceId);
+                
+                if (invoice.period_start && invoice.period_end) {
+                  let periodStart = invoice.period_start;
+                  let periodEnd = invoice.period_end;
+                  
+                  // If dates are the same (invalid for monthly subscription), calculate proper end date
+                  if (periodStart === periodEnd) {
+                    console.log(`⚠️ Invoice has same start/end dates, calculating monthly period_end from subscription...`);
+                    
+                    // Try to get billing interval from subscription items
+                    if (stripeSubscription.items && stripeSubscription.items.data && stripeSubscription.items.data.length > 0) {
+                      const price = stripeSubscription.items.data[0].price;
+                      
+                      // If price has interval, use it; otherwise default to 1 month
+                      const interval = price?.recurring?.interval || 'month';
+                      const intervalCount = price?.recurring?.interval_count || 1;
+                      
+                      // Calculate period_end based on interval
+                      let secondsToAdd = 0;
+                      if (interval === 'month') {
+                        // Approximate: 30.44 days per month on average
+                        secondsToAdd = intervalCount * 30.44 * 24 * 60 * 60;
+                      } else if (interval === 'year') {
+                        secondsToAdd = intervalCount * 365.25 * 24 * 60 * 60;
+                      } else if (interval === 'week') {
+                        secondsToAdd = intervalCount * 7 * 24 * 60 * 60;
+                      } else if (interval === 'day') {
+                        secondsToAdd = intervalCount * 24 * 60 * 60;
+                      }
+                      
+                      periodEnd = periodStart + Math.round(secondsToAdd);
+                      console.log(`   Calculated period_end: ${intervalCount} ${interval}(s) from period_start`);
+                    } else {
+                      // Fallback: add 1 month (30 days)
+                      periodEnd = periodStart + (30 * 24 * 60 * 60);
+                      console.log(`   Using fallback: 30 days from period_start`);
+                    }
+                  }
+                  
+                  currentPeriodStart = new Date(periodStart * 1000).toISOString();
+                  nextBillingDate = new Date(periodEnd * 1000).toISOString();
+                  
+                  console.log(`✅ Retrieved dates from invoice - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
+                }
+              } catch (invoiceErr) {
+                console.warn(`⚠️ Could not retrieve invoice ${invoiceId}:`, invoiceErr.message);
+              }
+            }
+            
+            if (!nextBillingDate) {
+              console.warn(`⚠️ Stripe subscription ${subscription.subscription_id} missing current_period_end and invoice dates unavailable`);
+            }
+          }
+          
+          // Save dates to database if we found them
+          if (nextBillingDate) {
             try {
               const updateRequest = pool.request();
               updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
@@ -2860,8 +2928,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
               console.warn('⚠️ Could not save dates to database (non-critical):', dbErr.message);
               // Continue - dates are still available for this response
             }
-          } else {
-            console.warn(`⚠️ Stripe subscription ${subscription.subscription_id} missing current_period_end`);
           }
         }
       } catch (stripeErr) {
@@ -2871,12 +2937,27 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     }
     
     // Use database values if Stripe fetch didn't work or wasn't needed
+    // Also use database values if they're valid (not NULL and start != end)
     if (!nextBillingDate && subscription.current_period_end) {
       // Handle both DATETIMEOFFSET and string formats
       const periodEnd = subscription.current_period_end instanceof Date 
         ? subscription.current_period_end 
         : new Date(subscription.current_period_end);
-      nextBillingDate = periodEnd.toISOString();
+      
+      // Only use database value if it's valid (not the same as start date)
+      const periodStart = subscription.current_period_start instanceof Date 
+        ? subscription.current_period_start 
+        : subscription.current_period_start 
+          ? new Date(subscription.current_period_start)
+          : null;
+      
+      // Check if dates are valid (not the same)
+      if (!periodStart || periodEnd.getTime() !== periodStart.getTime()) {
+        nextBillingDate = periodEnd.toISOString();
+        console.log(`✅ Using database current_period_end: ${nextBillingDate}`);
+      } else {
+        console.warn(`⚠️ Database has invalid dates (start = end), skipping database value`);
+      }
     }
     
     if (!currentPeriodStart && subscription.current_period_start) {

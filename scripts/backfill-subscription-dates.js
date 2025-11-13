@@ -47,8 +47,8 @@ async function backfillDates() {
     console.log('✅ Connected to database');
     console.log('');
     
-    // Find subscriptions with NULL billing dates
-    console.log('📝 Finding subscriptions with NULL billing dates...');
+    // Find subscriptions with NULL billing dates OR invalid dates (start = end)
+    console.log('📝 Finding subscriptions with NULL or invalid billing dates...');
     const findRequest = pool.request();
     const result = await findRequest.query(`
       SELECT 
@@ -60,8 +60,12 @@ async function backfillDates() {
         current_period_end
       FROM [dbo].[user_subscriptions]
       WHERE subscription_id IS NOT NULL
-        AND (current_period_start IS NULL OR current_period_end IS NULL)
         AND (status = 'active' OR status = 'trialing')
+        AND (
+          current_period_start IS NULL 
+          OR current_period_end IS NULL 
+          OR DATEDIFF(SECOND, current_period_start, current_period_end) = 0
+        )
     `);
     
     const subscriptionsToUpdate = result.recordset;
@@ -81,9 +85,9 @@ async function backfillDates() {
       try {
         console.log(`📝 Processing subscription ${sub.subscription_id} for user ${sub.UserId}...`);
         
-        // Fetch subscription from Stripe with expanded invoice
+        // Fetch subscription from Stripe with expanded invoice and price
         const stripeSubscription = await stripe.subscriptions.retrieve(sub.subscription_id, {
-          expand: ['latest_invoice']
+          expand: ['latest_invoice', 'items.data.price']
         });
         
         console.log(`   Status in Stripe: ${stripeSubscription.status}`);
@@ -105,9 +109,46 @@ async function backfillDates() {
           const invoice = await stripe.invoices.retrieve(invoiceId);
           
           if (invoice.period_start && invoice.period_end) {
-            currentPeriodStart = invoice.period_start;
-            currentPeriodEnd = invoice.period_end;
-            console.log(`   ✅ Found dates in invoice: start=${currentPeriodStart}, end=${currentPeriodEnd}`);
+            let periodStart = invoice.period_start;
+            let periodEnd = invoice.period_end;
+            
+            // If dates are the same (invalid for monthly subscription), calculate proper end date
+            if (periodStart === periodEnd) {
+              console.log(`   ⚠️ Invoice has same start/end dates, calculating monthly period_end...`);
+              
+              // Try to get billing interval from subscription items
+              if (stripeSubscription.items && stripeSubscription.items.data && stripeSubscription.items.data.length > 0) {
+                const price = stripeSubscription.items.data[0].price;
+                
+                // If price has interval, use it; otherwise default to 1 month
+                const interval = price?.recurring?.interval || 'month';
+                const intervalCount = price?.recurring?.interval_count || 1;
+                
+                // Calculate period_end based on interval
+                let secondsToAdd = 0;
+                if (interval === 'month') {
+                  // Approximate: 30.44 days per month on average
+                  secondsToAdd = intervalCount * 30.44 * 24 * 60 * 60;
+                } else if (interval === 'year') {
+                  secondsToAdd = intervalCount * 365.25 * 24 * 60 * 60;
+                } else if (interval === 'week') {
+                  secondsToAdd = intervalCount * 7 * 24 * 60 * 60;
+                } else if (interval === 'day') {
+                  secondsToAdd = intervalCount * 24 * 60 * 60;
+                }
+                
+                periodEnd = periodStart + Math.round(secondsToAdd);
+                console.log(`   Calculated period_end: ${intervalCount} ${interval}(s) from period_start`);
+              } else {
+                // Fallback: add 1 month (30 days)
+                periodEnd = periodStart + (30 * 24 * 60 * 60);
+                console.log(`   Using fallback: 30 days from period_start`);
+              }
+            }
+            
+            currentPeriodStart = periodStart;
+            currentPeriodEnd = periodEnd;
+            console.log(`   ✅ Found dates in invoice: start=${new Date(currentPeriodStart * 1000).toISOString()}, end=${new Date(currentPeriodEnd * 1000).toISOString()}`);
           }
         }
         
