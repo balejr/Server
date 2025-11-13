@@ -1124,64 +1124,25 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           .query(`SELECT customer_id FROM [dbo].[user_subscriptions] WHERE UserId = @userId AND customer_id IS NOT NULL`);
         
         if (existingCustomer.recordset.length > 0 && existingCustomer.recordset[0].customer_id) {
-          const existingCustomerId = existingCustomer.recordset[0].customer_id;
-          console.log(`📝 Found existing customer_id in database: ${existingCustomerId}`);
-          
-          // Try to retrieve customer from Stripe
-          try {
-            customer = await stripe.customers.retrieve(existingCustomerId);
-            console.log(`✅ Retrieved existing Stripe Customer: ${customer.id}`);
-            
-            // Verify customer exists and is valid
-            if (customer.deleted) {
-              console.warn(`⚠️ Customer ${existingCustomerId} was deleted in Stripe, will create new one`);
-              customer = null;
-            }
-          } catch (stripeErr) {
-            // Customer doesn't exist in Stripe (might have been deleted)
-            if (stripeErr.code === 'resource_missing' || stripeErr.statusCode === 404) {
-              console.warn(`⚠️ Customer ${existingCustomerId} not found in Stripe (may have been deleted), will create new one`);
-              customer = null;
-            } else {
-              // Other Stripe error - log and continue to create new customer
-              console.error(`❌ Error retrieving customer from Stripe:`, stripeErr.message);
-              customer = null;
-            }
-          }
+          console.log(`📝 Found existing customer_id: ${existingCustomer.recordset[0].customer_id}`);
+          customer = await stripe.customers.retrieve(existingCustomer.recordset[0].customer_id);
         }
       } catch (dbErr) {
-        console.warn('⚠️ Could not check for existing customer in database:', dbErr.message);
+        console.warn('⚠️ Could not check for existing customer:', dbErr.message);
       }
     }
 
     // Create new customer if doesn't exist
     if (!customer) {
       console.log('🔄 Creating new Stripe Customer for user:', userId);
-      try {
-        customer = await stripe.customers.create({
-          metadata: {
-            userId: String(userId),
-            plan: plan
-          }
-        });
-        console.log('✅ Created Stripe Customer:', customer.id);
-        console.log('   Customer details:', {
-          id: customer.id,
-          created: customer.created,
-          metadata: customer.metadata
-        });
-      } catch (createErr) {
-        console.error('❌ Failed to create Stripe Customer:', createErr.message);
-        throw new Error(`Failed to create Stripe customer: ${createErr.message}`);
-      }
+      customer = await stripe.customers.create({
+        metadata: {
+          userId: String(userId),
+          plan: plan
+        }
+      });
+      console.log('✅ Created Stripe Customer:', customer.id);
     }
-    
-    // Final validation - ensure customer exists
-    if (!customer || !customer.id) {
-      throw new Error('Failed to get or create Stripe customer');
-    }
-    
-    console.log(`✅ Using Stripe Customer: ${customer.id} for user ${userId}`);
 
     // Create Subscription with payment_behavior: 'default_incomplete'
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
@@ -1272,21 +1233,9 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               description: `Subscription payment for ${plan} plan`
             });
             
-            // Try to attach PaymentIntent to invoice by updating the invoice
-            // This ensures the PaymentIntent is linked to the invoice
-            try {
-              await stripe.invoices.update(latestInvoice.id, {
-                default_payment_method: null // Clear any default payment method
-              });
-              
-              // Note: We can't directly attach PaymentIntent to invoice via API
-              // But when the PaymentIntent succeeds, we'll pay the invoice with it in the confirm endpoint
-              console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
-              console.log(`   PaymentIntent will be attached when payment succeeds`);
-            } catch (updateErr) {
-              console.warn(`⚠️ Could not update invoice: ${updateErr.message}`);
-              console.log(`   PaymentIntent created but may need manual attachment: ${paymentIntent.id}`);
-            }
+            // Attach PaymentIntent to invoice by paying the invoice with it
+            // Note: We can't directly attach, but we'll use it when confirming payment
+            console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
           } catch (createErr) {
             console.error(`❌ Failed to create PaymentIntent for open invoice:`, createErr.message);
             // Continue to try retrieving PaymentIntent from invoice
@@ -1389,18 +1338,6 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     console.log('✅ PaymentIntent retrieved successfully:', paymentIntent.id);
     console.log('✅ Client secret available');
 
-    // Final verification: Ensure customer exists in Stripe
-    try {
-      const verifiedCustomer = await stripe.customers.retrieve(customer.id);
-      if (verifiedCustomer.deleted) {
-        throw new Error(`Customer ${customer.id} was deleted in Stripe`);
-      }
-      console.log(`✅ Verified customer exists in Stripe: ${customer.id}`);
-    } catch (verifyErr) {
-      console.error(`❌ Customer verification failed:`, verifyErr.message);
-      throw new Error(`Customer ${customer.id} does not exist in Stripe: ${verifyErr.message}`);
-    }
-
     res.status(200).json({ 
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
@@ -1485,66 +1422,6 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       }
     }
 
-    // If PaymentIntent succeeded but subscription is incomplete, try to complete it
-    if (subscription && paymentIntent && paymentIntent.status === 'succeeded' && subscription.status === 'incomplete') {
-      console.log('⚠️ PaymentIntent succeeded but subscription is incomplete');
-      console.log('   Attempting to complete subscription...');
-      
-      // Get the latest invoice
-      let invoice = subscription.latest_invoice;
-      if (typeof invoice === 'string') {
-        invoice = await stripe.invoices.retrieve(invoice);
-      }
-      
-      // If invoice is open and PaymentIntent succeeded, try to pay the invoice
-      if (invoice && invoice.status === 'open' && paymentIntent.status === 'succeeded') {
-        try {
-          // If PaymentIntent is not attached to invoice, attach it
-          if (!invoice.payment_intent || invoice.payment_intent !== paymentIntent.id) {
-            console.log('   PaymentIntent not attached to invoice, attempting to pay invoice with PaymentIntent...');
-            
-            // Try to pay the invoice with the PaymentIntent
-            // Note: Stripe will automatically use the PaymentIntent if it's for the same customer and amount
-            const paidInvoice = await stripe.invoices.pay(invoice.id, {
-              payment_intent: paymentIntent.id
-            });
-            
-            console.log(`   Invoice paid, new status: ${paidInvoice.status}`);
-            
-            // Wait a moment for Stripe to process
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Refresh subscription to get updated status
-            subscription = await stripe.subscriptions.retrieve(subscription.id, {
-              expand: ['latest_invoice.payment_intent']
-            });
-            
-            console.log(`   Subscription refreshed, new status: ${subscription.status}`);
-          } else {
-            // PaymentIntent is attached, just wait for Stripe to process
-            console.log('   PaymentIntent is attached to invoice, waiting for Stripe to process...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
-            // Refresh subscription
-            subscription = await stripe.subscriptions.retrieve(subscription.id, {
-              expand: ['latest_invoice.payment_intent']
-            });
-            
-            console.log(`   Subscription refreshed, status: ${subscription.status}`);
-          }
-        } catch (payErr) {
-          console.warn(`   Could not pay invoice: ${payErr.message}`);
-          if (payErr.code === 'invoice_already_paid') {
-            console.log('   Invoice already paid, refreshing subscription...');
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            subscription = await stripe.subscriptions.retrieve(subscription.id, {
-              expand: ['latest_invoice.payment_intent']
-            });
-          }
-        }
-      }
-    }
-    
     // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
       // Get amount and currency from subscription price
