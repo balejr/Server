@@ -1804,15 +1804,36 @@ function formatNextInvoice(subscription) {
   }
   
   // Get amount from subscription price
+  // Stripe subscription.items is a List object with a data array
   let amount = null;
-  if (subscription.items && subscription.items.data && subscription.items.data.length > 0) {
-    const price = subscription.items.data[0].price;
-    if (price && price.unit_amount) {
-      amount = price.unit_amount / 100; // Convert cents to dollars
-    }
-  }
   
-  if (!amount) {
+  try {
+    if (subscription.items && subscription.items.data && Array.isArray(subscription.items.data) && subscription.items.data.length > 0) {
+      const firstItem = subscription.items.data[0];
+      const price = firstItem.price;
+      
+      // Price can be an expanded object (with unit_amount) or a string ID
+      if (price && typeof price === 'object' && typeof price.unit_amount === 'number') {
+        // Price is expanded, get unit_amount directly
+        amount = price.unit_amount / 100; // Convert cents to dollars
+      } else if (price && typeof price === 'string') {
+        // Price is not expanded (just an ID), we can't get amount
+        console.warn('⚠️ formatNextInvoice: Price is not expanded. Make sure to expand items.data.price when retrieving subscription.');
+        return null;
+      }
+    }
+    
+    if (!amount || amount <= 0) {
+      console.warn(`⚠️ formatNextInvoice: Could not extract valid amount. Items structure:`, {
+        hasItems: !!subscription.items,
+        hasItemsData: !!subscription.items?.data,
+        itemsDataLength: subscription.items?.data?.length || 0,
+        firstItemPrice: subscription.items?.data?.[0]?.price
+      });
+      return null;
+    }
+  } catch (err) {
+    console.error('❌ formatNextInvoice: Error extracting amount:', err.message);
     return null;
   }
   
@@ -1855,7 +1876,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   if (subscriptionId) {
     console.log(`📝 Retrieving Stripe Subscription: ${subscriptionId}`);
     subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-      expand: ['latest_invoice.payment_intent']
+      expand: ['latest_invoice.payment_intent', 'items.data.price'] // Expand items to get price for next_invoice calculation
     });
     
     // Get payment intent from latest invoice or retrieve separately if paymentIntentId provided
@@ -1878,7 +1899,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       
       // Refresh subscription to get latest status
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-        expand: ['latest_invoice.payment_intent']
+        expand: ['latest_invoice.payment_intent', 'items.data.price'] // Expand items to get price for next_invoice calculation
       });
       console.log(`📝 Refreshed subscription status: ${subscription.status}`);
     }
@@ -2471,7 +2492,9 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       try {
         if (stripe && process.env.STRIPE_SECRET_KEY) {
           console.log(`📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`);
-          const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id);
+          const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
+            expand: ['items.data.price'] // Expand items to get price for next_invoice calculation
+          });
           
           if (stripeSubscription.current_period_end) {
             nextBillingDate = new Date(stripeSubscription.current_period_end * 1000).toISOString();
