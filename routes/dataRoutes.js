@@ -1323,11 +1323,20 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               
               console.log(`📧 Retrieved user email: ${userEmail || 'not found'}`);
               console.log(`👤 Retrieved user name: ${userName || 'not found'}`);
+              
+              if (!userEmail) {
+                console.warn(`⚠️ No email found for user ${userId} in UserLogin table - customer will be created without email`);
+              }
+            } else {
+              console.warn(`⚠️ No user found in database for userId ${userId} - customer will be created without email/name`);
             }
           } catch (profileErr) {
-            console.warn('⚠️ Could not retrieve user profile for customer creation:', profileErr.message);
+            console.error('❌ Error retrieving user info for customer creation:', profileErr.message);
+            console.error('   Stack:', profileErr.stack);
             // Continue without email/name - customer will still be created
           }
+        } else {
+          console.warn('⚠️ Database pool not available - customer will be created without email/name');
         }
         
         // Build customer creation object
@@ -1338,15 +1347,26 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           }
         };
         
-        // Add email if available (critical for Stripe dashboard visibility)
+        // Add email if available (CRITICAL for Stripe dashboard visibility)
+        // Stripe customers without email are harder to find in dashboard
         if (userEmail) {
           customerData.email = userEmail;
+          console.log(`📧 Adding email to customer: ${userEmail}`);
+        } else {
+          console.warn(`⚠️ Creating customer WITHOUT email - customer may not appear in Stripe dashboard easily`);
         }
         
-        // Add name if available
+        // Add name if available (helps with Stripe dashboard visibility)
         if (userName) {
           customerData.name = userName;
+          console.log(`👤 Adding name to customer: ${userName}`);
         }
+        
+        console.log(`🔄 Creating Stripe customer with data:`, {
+          email: customerData.email || 'not set',
+          name: customerData.name || 'not set',
+          metadata: customerData.metadata
+        });
         
         customer = await stripe.customers.create(customerData);
         console.log('✅ Created Stripe Customer:', customer.id);
@@ -1357,6 +1377,44 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           created: customer.created,
           metadata: customer.metadata
         });
+        
+        // IMPORTANT: Save customer_id to database immediately after creation
+        // This ensures customer appears in Stripe dashboard and is linked properly
+        if (pool && customer.id) {
+          try {
+            const saveCustomerRequest = pool.request();
+            saveCustomerRequest.input('userId', mssql.Int, parseInt(userId, 10));
+            saveCustomerRequest.input('customerId', mssql.NVarChar(128), customer.id);
+            
+            // Check if user_subscriptions record exists
+            const checkSub = await saveCustomerRequest.query(`
+              SELECT UserId FROM [dbo].[user_subscriptions] WHERE UserId = @userId
+            `);
+            
+            if (checkSub.recordset.length > 0) {
+              // Update existing record
+              await saveCustomerRequest.query(`
+                UPDATE [dbo].[user_subscriptions] 
+                SET customer_id = @customerId, updated_at = SYSDATETIMEOFFSET()
+                WHERE UserId = @userId
+              `);
+              console.log(`✅ Saved customer_id ${customer.id} to existing user_subscriptions record`);
+            } else {
+              // Create new record with customer_id
+              await saveCustomerRequest
+                .input('plan', mssql.NVarChar(32), plan.charAt(0).toUpperCase() + plan.slice(1))
+                .input('status', mssql.NVarChar(32), 'pending')
+                .query(`
+                  INSERT INTO [dbo].[user_subscriptions] (UserId, [plan], status, customer_id, started_at, updated_at)
+                  VALUES (@userId, @plan, @status, @customerId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())
+                `);
+              console.log(`✅ Created user_subscriptions record with customer_id ${customer.id}`);
+            }
+          } catch (saveErr) {
+            console.warn('⚠️ Could not save customer_id to database immediately:', saveErr.message);
+            // Don't fail - customer_id will be saved when subscription is updated
+          }
+        }
       } catch (createErr) {
         console.error('❌ Failed to create Stripe Customer:', createErr.message);
         throw new Error(`Failed to create Stripe customer: ${createErr.message}`);
@@ -1393,6 +1451,19 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     console.log('✅ Created Stripe Subscription:', subscription.id);
     console.log('📋 Subscription status:', subscription.status);
+    console.log('📋 Subscription customer:', subscription.customer);
+    console.log('📋 Customer ID being used:', customer.id);
+    
+    // Verify customer is properly linked to subscription
+    const subscriptionCustomerId = typeof subscription.customer === 'string' 
+      ? subscription.customer 
+      : subscription.customer?.id;
+    
+    if (subscriptionCustomerId !== customer.id) {
+      console.warn(`⚠️ Customer ID mismatch! Subscription customer: ${subscriptionCustomerId}, Expected: ${customer.id}`);
+    } else {
+      console.log(`✅ Customer ${customer.id} properly linked to subscription ${subscription.id}`);
+    }
 
     // Get PaymentIntent from latest_invoice with retry logic
     // Stripe may need time to create the PaymentIntent, especially if invoice is draft
