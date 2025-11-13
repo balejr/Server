@@ -1086,6 +1086,84 @@ router.get('/payments/test', (req, res) => {
   });
 });
 
+// ========== VALIDATION AND ERROR HANDLING HELPERS ==========
+
+// Helper function for input validation
+function validateUserId(userId) {
+  if (!userId) {
+    throw new Error('userId is required');
+  }
+  const userIdInt = parseInt(userId, 10);
+  if (isNaN(userIdInt) || userIdInt <= 0) {
+    throw new Error(`Invalid userId: ${userId} - must be a positive integer`);
+  }
+  return userIdInt;
+}
+
+function validateSubscriptionId(subscriptionId) {
+  if (!subscriptionId) {
+    throw new Error('subscriptionId is required');
+  }
+  if (typeof subscriptionId !== 'string' || !subscriptionId.startsWith('sub_')) {
+    throw new Error(`Invalid subscriptionId format: ${subscriptionId} - must start with 'sub_'`);
+  }
+  return subscriptionId;
+}
+
+function validateCustomerId(customerId) {
+  if (!customerId) {
+    throw new Error('customerId is required');
+  }
+  if (typeof customerId !== 'string' || !customerId.startsWith('cus_')) {
+    throw new Error(`Invalid customerId format: ${customerId} - must start with 'cus_'`);
+  }
+  return customerId;
+}
+
+function validatePaymentIntentId(paymentIntentId) {
+  if (!paymentIntentId) {
+    throw new Error('paymentIntentId is required');
+  }
+  if (typeof paymentIntentId !== 'string' || !paymentIntentId.startsWith('pi_')) {
+    throw new Error(`Invalid paymentIntentId format: ${paymentIntentId} - must start with 'pi_'`);
+  }
+  return paymentIntentId;
+}
+
+function validateDateString(dateString, fieldName = 'date') {
+  if (!dateString) {
+    return null;
+  }
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    throw new Error(`Invalid ${fieldName} format: ${dateString} - must be a valid ISO date string`);
+  }
+  return date.toISOString();
+}
+
+// Standardized error response helper
+function sendErrorResponse(res, statusCode, error, message, details = null) {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] ❌ Error: ${error} - ${message}`);
+  if (details && process.env.NODE_ENV !== 'production') {
+    console.error(`   Details:`, details);
+  }
+  
+  const response = {
+    error: error,
+    message: message,
+    timestamp: timestamp
+  };
+  
+  if (details && process.env.NODE_ENV !== 'production') {
+    response.details = details;
+  }
+  
+  return res.status(statusCode).json(response);
+}
+
+// ========== PAYMENT ENDPOINTS ==========
+
 // POST /api/data/payments/initialize
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -1094,22 +1172,32 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
   try {
     // Validate environment variables
     if (!process.env.STRIPE_SECRET_KEY) {
-      console.error('[ERROR] STRIPE_SECRET_KEY missing on server');
-      return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
+      return sendErrorResponse(res, 500, 'Configuration Error', 'STRIPE_SECRET_KEY missing on server');
     }
 
     if (!process.env.STRIPE_PRICE_ID) {
-      console.error('[ERROR] STRIPE_PRICE_ID missing on server');
-      return res.status(500).json({ 
-        error: 'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.' 
-      });
+      return sendErrorResponse(res, 500, 'Configuration Error', 
+        'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.');
     }
 
+    // Validate userId
     const userId = req.user.userId;
-    const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+    }
 
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
+    const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
+    
+    // Validate plan
+    if (plan && typeof plan !== 'string') {
+      return sendErrorResponse(res, 400, 'Validation Error', 'plan must be a string');
+    }
+    
+    // Validate paymentMethod
+    if (paymentMethod && typeof paymentMethod !== 'string') {
+      return sendErrorResponse(res, 400, 'Validation Error', 'paymentMethod must be a string');
     }
 
     // Get or create Stripe Customer
@@ -1136,6 +1224,55 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             if (customer.deleted) {
               console.warn(`⚠️ Customer ${existingCustomerId} was deleted in Stripe, will create new one`);
               customer = null;
+            } else {
+              // Sync customer email/name with current user profile if changed
+              if (pool) {
+                try {
+                  const userInfoRequest = pool.request();
+                  userInfoRequest.input('userId', mssql.Int, parseInt(userId, 10));
+                  // Join UserLogin (for email) with UserProfile (for name)
+                  const userInfoResult = await userInfoRequest.query(`
+                    SELECT 
+                      UL.Email,
+                      UP.FirstName,
+                      UP.LastName
+                    FROM [dbo].[UserLogin] UL
+                    LEFT JOIN [dbo].[UserProfile] UP ON UL.UserID = UP.UserID
+                    WHERE UL.UserID = @userId
+                  `);
+                  
+                  if (userInfoResult.recordset.length > 0) {
+                    const userInfo = userInfoResult.recordset[0];
+                    const userEmail = userInfo.Email || null;
+                    const firstName = userInfo.FirstName || '';
+                    const lastName = userInfo.LastName || '';
+                    const userName = `${firstName} ${lastName}`.trim() || null;
+                    
+                    // Check if email or name needs updating
+                    const needsEmailUpdate = userEmail && customer.email !== userEmail;
+                    const needsNameUpdate = userName && customer.name !== userName;
+                    
+                    if (needsEmailUpdate || needsNameUpdate) {
+                      console.log(`🔄 Syncing customer ${customer.id} with updated user profile`);
+                      const updateData = {};
+                      if (needsEmailUpdate) {
+                        updateData.email = userEmail;
+                        console.log(`   📧 Updating email: ${customer.email} → ${userEmail}`);
+                      }
+                      if (needsNameUpdate) {
+                        updateData.name = userName;
+                        console.log(`   👤 Updating name: ${customer.name || 'not set'} → ${userName}`);
+                      }
+                      
+                      customer = await stripe.customers.update(existingCustomerId, updateData);
+                      console.log(`✅ Customer synced successfully`);
+                    }
+                  }
+                } catch (syncErr) {
+                  console.warn('⚠️ Could not sync customer with user profile:', syncErr.message);
+                  // Continue with existing customer - sync failure is not critical
+                }
+              }
             }
           } catch (stripeErr) {
             // Customer doesn't exist in Stripe (might have been deleted)
@@ -1158,15 +1295,65 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     if (!customer) {
       console.log('🔄 Creating new Stripe Customer for user:', userId);
       try {
-        customer = await stripe.customers.create({
+        // Retrieve user email from UserLogin and name from UserProfile for better Stripe dashboard visibility
+        let userEmail = null;
+        let userName = null;
+        
+        if (pool) {
+          try {
+            const userInfoRequest = pool.request();
+            userInfoRequest.input('userId', mssql.Int, parseInt(userId, 10));
+            // Join UserLogin (for email) with UserProfile (for name)
+            const userInfoResult = await userInfoRequest.query(`
+              SELECT 
+                UL.Email,
+                UP.FirstName,
+                UP.LastName
+              FROM [dbo].[UserLogin] UL
+              LEFT JOIN [dbo].[UserProfile] UP ON UL.UserID = UP.UserID
+              WHERE UL.UserID = @userId
+            `);
+            
+            if (userInfoResult.recordset.length > 0) {
+              const userInfo = userInfoResult.recordset[0];
+              userEmail = userInfo.Email || null;
+              const firstName = userInfo.FirstName || '';
+              const lastName = userInfo.LastName || '';
+              userName = `${firstName} ${lastName}`.trim() || null;
+              
+              console.log(`📧 Retrieved user email: ${userEmail || 'not found'}`);
+              console.log(`👤 Retrieved user name: ${userName || 'not found'}`);
+            }
+          } catch (profileErr) {
+            console.warn('⚠️ Could not retrieve user profile for customer creation:', profileErr.message);
+            // Continue without email/name - customer will still be created
+          }
+        }
+        
+        // Build customer creation object
+        const customerData = {
           metadata: {
             userId: String(userId),
             plan: plan
           }
-        });
+        };
+        
+        // Add email if available (critical for Stripe dashboard visibility)
+        if (userEmail) {
+          customerData.email = userEmail;
+        }
+        
+        // Add name if available
+        if (userName) {
+          customerData.name = userName;
+        }
+        
+        customer = await stripe.customers.create(customerData);
         console.log('✅ Created Stripe Customer:', customer.id);
         console.log('   Customer details:', {
           id: customer.id,
+          email: customer.email || 'not set',
+          name: customer.name || 'not set',
           created: customer.created,
           metadata: customer.metadata
         });
@@ -1397,26 +1584,45 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       status: subscription.status
     });
   } catch (err) {
-    const errorTimestamp = new Date().toISOString();
-    console.error(`[${errorTimestamp}] ❌ Initialize subscription error:`, err);
-    res.status(500).json({
-      error: 'Failed to initialize subscription',
-      message: err?.message || 'Stripe subscription creation failed'
-    });
+    return sendErrorResponse(res, 500, 'Initialization Failed', 
+      err?.message || 'Stripe subscription creation failed', 
+      err.stack);
   }
 });
 
 // POST /api/data/payments/confirm
 router.post('/payments/confirm', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Payment confirmation request received`);
+  
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
-      return res.status(500).json({ error: 'STRIPE_SECRET_KEY missing on server' });
+      return sendErrorResponse(res, 500, 'Configuration Error', 'STRIPE_SECRET_KEY missing on server');
     }
 
     const { paymentIntentId, subscriptionId } = req.body || {};
     
+    // Validate that at least one ID is provided
     if (!paymentIntentId && !subscriptionId) {
-      return res.status(400).json({ error: 'paymentIntentId or subscriptionId required' });
+      return sendErrorResponse(res, 400, 'Validation Error', 
+        'paymentIntentId or subscriptionId required');
+    }
+    
+    // Validate format if provided
+    if (paymentIntentId) {
+      try {
+        validatePaymentIntentId(paymentIntentId);
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
+    }
+    
+    if (subscriptionId) {
+      try {
+        validateSubscriptionId(subscriptionId);
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
     }
 
     let subscription;
@@ -1507,11 +1713,9 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('Confirm subscription error:', err);
-    res.status(500).json({
-      error: 'Failed to confirm subscription',
-      message: err?.message || 'Stripe confirm failed'
-    });
+    return sendErrorResponse(res, 500, 'Confirmation Failed', 
+      err?.message || 'Stripe confirm failed', 
+      err.stack);
   }
 });
 
@@ -1591,17 +1795,27 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       subscriptionStatus = 'active';
     }
     
-    // Safely convert period dates - check if they exist and are valid
+    // ALWAYS retrieve period dates from Stripe subscription (source of truth)
+    // Override any passed-in dates with Stripe's authoritative values
     if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
       currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+      console.log(`📅 Retrieved current_period_start from Stripe: ${currentPeriodStart}`);
     } else {
-      currentPeriodStart = null;
+      console.warn(`⚠️ Subscription ${subscriptionId} missing current_period_start in Stripe`);
+      currentPeriodStart = currentPeriodStart || null; // Use passed value if Stripe doesn't have it
     }
     
     if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
       currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+      console.log(`📅 Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
     } else {
-      currentPeriodEnd = null;
+      console.warn(`⚠️ Subscription ${subscriptionId} missing current_period_end in Stripe`);
+      currentPeriodEnd = currentPeriodEnd || null; // Use passed value if Stripe doesn't have it
+    }
+    
+    // If dates are still missing, log warning but continue (will be synced later)
+    if (!currentPeriodStart || !currentPeriodEnd) {
+      console.warn(`⚠️ Missing billing dates for subscription ${subscriptionId}. Status: ${subscription.status}`);
     }
     
     // Get amount and currency from subscription price
@@ -1777,11 +1991,18 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.log(`   ⚠️ customerId is null/undefined, skipping customer_id update`);
       }
+      // ALWAYS update billing dates if we have them (critical for next billing date display)
       if (currentPeriodStart) {
         updateFields.push('current_period_start = @currentPeriodStart');
+        console.log(`   ✅ Will update current_period_start to: ${currentPeriodStart}`);
+      } else {
+        console.warn(`   ⚠️ currentPeriodStart is missing, skipping update`);
       }
       if (currentPeriodEnd) {
         updateFields.push('current_period_end = @currentPeriodEnd');
+        console.log(`   ✅ Will update current_period_end to: ${currentPeriodEnd}`);
+      } else {
+        console.warn(`   ⚠️ currentPeriodEnd is missing, skipping update`);
       }
       if (paymentIntentId) {
         updateFields.push('payment_intent_id = @paymentIntentId');
@@ -1820,13 +2041,20 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.log(`   ⚠️ customerId is null/undefined, subscription will be created without customer_id`);
       }
+      // ALWAYS include billing dates if available (critical for next billing date display)
       if (currentPeriodStart) {
         insertFields.push('current_period_start');
         insertValues.push('@currentPeriodStart');
+        console.log(`   ✅ Including current_period_start: ${currentPeriodStart}`);
+      } else {
+        console.warn(`   ⚠️ currentPeriodStart is missing, subscription will be created without billing start date`);
       }
       if (currentPeriodEnd) {
         insertFields.push('current_period_end');
         insertValues.push('@currentPeriodEnd');
+        console.log(`   ✅ Including current_period_end: ${currentPeriodEnd}`);
+      } else {
+        console.warn(`   ⚠️ currentPeriodEnd is missing, subscription will be created without billing end date`);
       }
       if (paymentIntentId) {
         insertFields.push('payment_intent_id');
@@ -1912,12 +2140,21 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
 // POST /api/data/users/updateSubscription
 router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
-  console.log('🚀 updateSubscription endpoint called');
-  console.log('📥 Request body:', JSON.stringify(req.body));
-  console.log('👤 User from token:', req.user?.userId);
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 🚀 updateSubscription endpoint called`);
+  console.log(`[${timestamp}] 📥 Request body:`, JSON.stringify(req.body));
+  console.log(`[${timestamp}] 👤 User from token:`, req.user?.userId);
   
   try {
     const userId = req.user.userId || req.body.userId;
+    
+    // Validate userId
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+    }
+    
     const { 
       subscriptionStatus = 'active', 
       plan = 'premium', 
@@ -1929,21 +2166,61 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       currentPeriodEnd
     } = req.body || {};
     
-    console.log(`📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
-    console.log(`   subscriptionId=${subscriptionId || 'N/A'}, paymentIntentId=${paymentIntentId || 'N/A'}`);
-    
-    if (!userId) {
-      console.error('❌ Missing userId');
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    console.log(`[${timestamp}] 📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
+    console.log(`[${timestamp}]    subscriptionId=${subscriptionId || 'N/A'}, paymentIntentId=${paymentIntentId || 'N/A'}`);
     
     // Require either subscriptionId or paymentIntentId (for backward compatibility)
     if (!subscriptionId && !paymentIntentId) {
-      console.error('❌ Missing subscriptionId or paymentIntentId');
-      return res.status(400).json({ error: 'subscriptionId or paymentIntentId is required' });
+      return sendErrorResponse(res, 400, 'Validation Error', 
+        'subscriptionId or paymentIntentId is required');
+    }
+    
+    // Validate IDs if provided
+    if (subscriptionId) {
+      try {
+        validateSubscriptionId(subscriptionId);
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
+    }
+    
+    if (paymentIntentId) {
+      try {
+        validatePaymentIntentId(paymentIntentId);
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
+    }
+    
+    if (customerId) {
+      try {
+        validateCustomerId(customerId);
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
+    }
+    
+    // Validate dates if provided
+    let validatedPeriodStart = null;
+    let validatedPeriodEnd = null;
+    
+    if (currentPeriodStart) {
+      try {
+        validatedPeriodStart = validateDateString(currentPeriodStart, 'currentPeriodStart');
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
+    }
+    
+    if (currentPeriodEnd) {
+      try {
+        validatedPeriodEnd = validateDateString(currentPeriodEnd, 'currentPeriodEnd');
+      } catch (validationErr) {
+        return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+      }
     }
 
-    console.log('🔄 Calling updateSubscriptionInDatabase...');
+    console.log(`[${timestamp}] 🔄 Calling updateSubscriptionInDatabase...`);
     const result = await updateSubscriptionInDatabase(
       userId, 
       subscriptionStatus, 
@@ -1952,39 +2229,38 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       paymentMethod,
       subscriptionId,
       customerId,
-      currentPeriodStart,
-      currentPeriodEnd
+      validatedPeriodStart || currentPeriodStart,
+      validatedPeriodEnd || currentPeriodEnd
     );
-    console.log('✅ updateSubscriptionInDatabase completed successfully');
+    console.log(`[${timestamp}] ✅ updateSubscriptionInDatabase completed successfully`);
     return res.json(result);
   } catch (err) {
-    console.error('❌ updateSubscription error:', err.message);
-    console.error('❌ Error stack:', err.stack);
-    console.error('❌ Error code:', err.code);
-    
     if (err.code === 'EREQUEST') {
-      return res.status(500).json({ 
-        error: 'Database error', 
-        message: err.message,
-        details: 'Check if tables exist and schema is correct'
-      });
+      return sendErrorResponse(res, 500, 'Database Error', 
+        err.message, 
+        'Check if tables exist and schema is correct');
     }
     
-    return res.status(500).json({ 
-      error: 'Failed to update subscription',
-      message: err.message 
-    });
+    return sendErrorResponse(res, 500, 'Update Failed', 
+      err.message || 'Failed to update subscription', 
+      err.stack);
   }
 });
 
 // GET /api/data/users/subscription/status
 // Get current subscription status for the authenticated user
 router.get('/users/subscription/status', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Subscription status request received`);
+  
   try {
     const userId = req.user.userId;
     
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
+    // Validate userId
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
     }
 
     const pool = getPool();
@@ -2039,38 +2315,62 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let nextBillingDate = null;
     let currentPeriodStart = null;
     
-    // If current_period_end is missing but we have a subscription_id, try to fetch from Stripe
-    if (!subscription.current_period_end && subscription.subscription_id && subscription.status === 'active') {
+    // If current_period_end is missing but we have a subscription_id, ALWAYS try to fetch from Stripe
+    // This ensures billing dates are always available, even if they weren't saved initially
+    // Check for both 'active' and 'trialing' statuses (both are valid subscription states)
+    const shouldFetchFromStripe = !subscription.current_period_end && 
+                                   subscription.subscription_id && 
+                                   (subscription.status === 'active' || subscription.status === 'trialing');
+    
+    if (shouldFetchFromStripe) {
       try {
         if (stripe && process.env.STRIPE_SECRET_KEY) {
-          console.log(`📝 Fetching subscription details from Stripe: ${subscription.subscription_id}`);
+          console.log(`📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`);
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id);
           
           if (stripeSubscription.current_period_end) {
             nextBillingDate = new Date(stripeSubscription.current_period_end * 1000).toISOString();
-            currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000).toISOString();
+            currentPeriodStart = stripeSubscription.current_period_start 
+              ? new Date(stripeSubscription.current_period_start * 1000).toISOString()
+              : null;
             
-            // Update database with the fetched dates
+            console.log(`✅ Retrieved dates from Stripe - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
+            
+            // Update database with the fetched dates (sync database with Stripe)
             const updateRequest = pool.request();
             updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
             updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
-            updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
+            if (currentPeriodStart) {
+              updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
+              
+              await updateRequest.query(`
+                UPDATE [dbo].[user_subscriptions]
+                SET current_period_end = @periodEnd,
+                    current_period_start = @periodStart,
+                    updated_at = SYSDATETIMEOFFSET()
+                WHERE UserId = @userId
+              `);
+            } else {
+              await updateRequest.query(`
+                UPDATE [dbo].[user_subscriptions]
+                SET current_period_end = @periodEnd,
+                    updated_at = SYSDATETIMEOFFSET()
+                WHERE UserId = @userId
+              `);
+            }
             
-            await updateRequest.query(`
-              UPDATE [dbo].[user_subscriptions]
-              SET current_period_end = @periodEnd,
-                  current_period_start = @periodStart,
-                  updated_at = SYSDATETIMEOFFSET()
-              WHERE UserId = @userId
-            `);
-            
-            console.log(`✅ Updated subscription dates from Stripe`);
+            console.log(`✅ Synced subscription dates from Stripe to database`);
+          } else {
+            console.warn(`⚠️ Stripe subscription ${subscription.subscription_id} missing current_period_end`);
           }
         }
       } catch (stripeErr) {
         console.warn('⚠️ Could not fetch subscription from Stripe:', stripeErr.message);
         // Continue with database values (which may be null)
       }
+    } else if (subscription.subscription_id && !subscription.current_period_end) {
+      // Log when we have subscription_id but dates are missing and status doesn't warrant fetch
+      console.log(`ℹ️ Subscription ${subscription.subscription_id} has status '${subscription.status}' - dates may not be available yet`);
     }
     
     // Use database values if Stripe fetch didn't work or wasn't needed
@@ -2102,11 +2402,9 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
     });
   } catch (err) {
-    console.error('❌ Get subscription status error:', err.message);
-    return res.status(500).json({
-      error: 'Failed to get subscription status',
-      message: err.message
-    });
+    return sendErrorResponse(res, 500, 'Status Retrieval Failed', 
+      err.message || 'Failed to get subscription status', 
+      err.stack);
   }
 });
 
