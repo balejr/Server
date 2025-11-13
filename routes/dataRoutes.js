@@ -1124,25 +1124,64 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           .query(`SELECT customer_id FROM [dbo].[user_subscriptions] WHERE UserId = @userId AND customer_id IS NOT NULL`);
         
         if (existingCustomer.recordset.length > 0 && existingCustomer.recordset[0].customer_id) {
-          console.log(`📝 Found existing customer_id: ${existingCustomer.recordset[0].customer_id}`);
-          customer = await stripe.customers.retrieve(existingCustomer.recordset[0].customer_id);
+          const existingCustomerId = existingCustomer.recordset[0].customer_id;
+          console.log(`📝 Found existing customer_id in database: ${existingCustomerId}`);
+          
+          // Try to retrieve customer from Stripe
+          try {
+            customer = await stripe.customers.retrieve(existingCustomerId);
+            console.log(`✅ Retrieved existing Stripe Customer: ${customer.id}`);
+            
+            // Verify customer exists and is valid
+            if (customer.deleted) {
+              console.warn(`⚠️ Customer ${existingCustomerId} was deleted in Stripe, will create new one`);
+              customer = null;
+            }
+          } catch (stripeErr) {
+            // Customer doesn't exist in Stripe (might have been deleted)
+            if (stripeErr.code === 'resource_missing' || stripeErr.statusCode === 404) {
+              console.warn(`⚠️ Customer ${existingCustomerId} not found in Stripe (may have been deleted), will create new one`);
+              customer = null;
+            } else {
+              // Other Stripe error - log and continue to create new customer
+              console.error(`❌ Error retrieving customer from Stripe:`, stripeErr.message);
+              customer = null;
+            }
+          }
         }
       } catch (dbErr) {
-        console.warn('⚠️ Could not check for existing customer:', dbErr.message);
+        console.warn('⚠️ Could not check for existing customer in database:', dbErr.message);
       }
     }
 
     // Create new customer if doesn't exist
     if (!customer) {
       console.log('🔄 Creating new Stripe Customer for user:', userId);
-      customer = await stripe.customers.create({
-        metadata: {
-          userId: String(userId),
-          plan: plan
-        }
-      });
-      console.log('✅ Created Stripe Customer:', customer.id);
+      try {
+        customer = await stripe.customers.create({
+          metadata: {
+            userId: String(userId),
+            plan: plan
+          }
+        });
+        console.log('✅ Created Stripe Customer:', customer.id);
+        console.log('   Customer details:', {
+          id: customer.id,
+          created: customer.created,
+          metadata: customer.metadata
+        });
+      } catch (createErr) {
+        console.error('❌ Failed to create Stripe Customer:', createErr.message);
+        throw new Error(`Failed to create Stripe customer: ${createErr.message}`);
+      }
     }
+    
+    // Final validation - ensure customer exists
+    if (!customer || !customer.id) {
+      throw new Error('Failed to get or create Stripe customer');
+    }
+    
+    console.log(`✅ Using Stripe Customer: ${customer.id} for user ${userId}`);
 
     // Create Subscription with payment_behavior: 'default_incomplete'
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
@@ -1337,6 +1376,18 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     console.log('✅ PaymentIntent retrieved successfully:', paymentIntent.id);
     console.log('✅ Client secret available');
+
+    // Final verification: Ensure customer exists in Stripe
+    try {
+      const verifiedCustomer = await stripe.customers.retrieve(customer.id);
+      if (verifiedCustomer.deleted) {
+        throw new Error(`Customer ${customer.id} was deleted in Stripe`);
+      }
+      console.log(`✅ Verified customer exists in Stripe: ${customer.id}`);
+    } catch (verifyErr) {
+      console.error(`❌ Customer verification failed:`, verifyErr.message);
+      throw new Error(`Customer ${customer.id} does not exist in Stripe: ${verifyErr.message}`);
+    }
 
     res.status(200).json({ 
       clientSecret: paymentIntent.client_secret,
