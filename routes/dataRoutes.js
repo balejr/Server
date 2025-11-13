@@ -1515,11 +1515,13 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             
             // Create PaymentIntent for this invoice
             // Use automatic_payment_methods to support Apple Pay and other payment methods
+            // CRITICAL: Use setup_future_usage to automatically attach payment method to customer
             paymentIntent = await stripe.paymentIntents.create({
               amount: amount,
               currency: currency,
               customer: customer.id,
               automatic_payment_methods: { enabled: true },
+              setup_future_usage: 'off_session', // Automatically attach payment method to customer when PaymentIntent succeeds
               metadata: {
                 userId: String(userId),
                 subscriptionId: subscription.id,
@@ -1548,6 +1550,21 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         if (typeof paymentIntent === 'string') {
           console.log(`📝 Attempt ${attempt + 1}: PaymentIntent is string ID, retrieving: ${paymentIntent}`);
           paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
+        }
+        
+        // Step 4b: Update PaymentIntent to include setup_future_usage if not already set
+        // This ensures payment method is automatically attached to customer when PaymentIntent succeeds
+        if (paymentIntent && !paymentIntent.setup_future_usage) {
+          try {
+            console.log(`🔄 Updating PaymentIntent ${paymentIntent.id} to include setup_future_usage...`);
+            paymentIntent = await stripe.paymentIntents.update(paymentIntent.id, {
+              setup_future_usage: 'off_session'
+            });
+            console.log(`✅ PaymentIntent updated with setup_future_usage`);
+          } catch (updateErr) {
+            console.warn('⚠️ Could not update PaymentIntent with setup_future_usage:', updateErr.message);
+            // Continue - payment will still work, just might not attach payment method automatically
+          }
         }
 
         // Step 5: Validate PaymentIntent has client_secret
@@ -1782,21 +1799,21 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             }
             
             // IMPORTANT: Payment method attachment is handled automatically by Stripe
-            // via 'save_default_payment_method: on_subscription' setting in subscription creation.
-            // We should NOT try to manually attach payment methods that were used in PaymentIntents
-            // as Stripe doesn't allow attaching payment methods that were already used.
+            // via 'setup_future_usage: off_session' on PaymentIntent and 'save_default_payment_method: on_subscription' on subscription.
+            // When PaymentIntent succeeds with setup_future_usage, Stripe automatically attaches the payment method to the customer.
             
-            // 1. Check if payment method is already attached (from Stripe's automatic attachment)
-            let paymentMethodAttached = false;
+            // 1. Check if payment method is attached and set as default
             if (paymentMethodId && customerId) {
               try {
+                // Wait a moment for Stripe to process the automatic attachment
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
                 const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
                 
                 if (paymentMethod.customer === customerId) {
-                  console.log(`✅ Payment method ${paymentMethodId} already attached to customer ${customerId}`);
-                  paymentMethodAttached = true;
+                  console.log(`✅ Payment method ${paymentMethodId} attached to customer ${customerId}`);
                   
-                  // Ensure it's set as default
+                  // Set as default payment method for customer
                   try {
                     await stripe.customers.update(customerId, {
                       invoice_settings: {
@@ -1808,11 +1825,32 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
                     console.warn('⚠️ Could not set payment method as default:', updateErr.message);
                   }
                 } else {
-                  // Payment method not attached - Stripe should have attached it automatically
-                  // but if it wasn't, we can't attach it now (it was already used)
+                  // Payment method not attached yet - this can happen if setup_future_usage didn't work
+                  // Try to attach it manually (only if it wasn't used in a different PaymentIntent)
                   console.log(`ℹ️ Payment method ${paymentMethodId} not attached to customer ${customerId}`);
-                  console.log(`   This is expected if payment method was used before attachment.`);
-                  console.log(`   Stripe's 'save_default_payment_method: on_subscription' should handle this.`);
+                  console.log(`   Attempting to attach...`);
+                  
+                  try {
+                    await stripe.paymentMethods.attach(paymentMethodId, {
+                      customer: customerId
+                    });
+                    console.log(`✅ Successfully attached payment method to customer`);
+                    
+                    // Set as default
+                    await stripe.customers.update(customerId, {
+                      invoice_settings: {
+                        default_payment_method: paymentMethodId
+                      }
+                    });
+                    console.log(`✅ Payment method set as default`);
+                  } catch (attachErr) {
+                    if (attachErr.message?.includes('previously used') || attachErr.message?.includes('may not be used again')) {
+                      console.log(`ℹ️ Payment method was already used - Stripe will handle attachment automatically`);
+                      console.log(`   This is expected with setup_future_usage - attachment happens asynchronously`);
+                    } else {
+                      console.warn('⚠️ Could not attach payment method:', attachErr.message);
+                    }
+                  }
                 }
               } catch (retrieveErr) {
                 console.warn('⚠️ Could not retrieve payment method:', retrieveErr.message);
@@ -2038,21 +2076,21 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             }
             
             // IMPORTANT: Payment method attachment is handled automatically by Stripe
-            // via 'save_default_payment_method: on_subscription' setting in subscription creation.
-            // We should NOT try to manually attach payment methods that were used in PaymentIntents
-            // as Stripe doesn't allow attaching payment methods that were already used.
+            // via 'setup_future_usage: off_session' on PaymentIntent and 'save_default_payment_method: on_subscription' on subscription.
+            // When PaymentIntent succeeds with setup_future_usage, Stripe automatically attaches the payment method to the customer.
             
-            // 1. Check if payment method is already attached (from Stripe's automatic attachment)
-            let paymentMethodAttached = false;
+            // 1. Check if payment method is attached and set as default
             if (customerId && paymentMethodId) {
               try {
+                // Wait a moment for Stripe to process the automatic attachment
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
                 const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
                 
                 if (paymentMethod.customer === customerId) {
-                  console.log(`✅ Payment method ${paymentMethodId} already attached to customer ${customerId}`);
-                  paymentMethodAttached = true;
+                  console.log(`✅ Payment method ${paymentMethodId} attached to customer ${customerId}`);
                   
-                  // Ensure it's set as default
+                  // Set as default payment method for customer
                   try {
                     await stripe.customers.update(customerId, {
                       invoice_settings: {
@@ -2064,11 +2102,32 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                     console.warn('⚠️ Could not set payment method as default:', updateErr.message);
                   }
                 } else {
-                  // Payment method not attached - Stripe should have attached it automatically
-                  // but if it wasn't, we can't attach it now (it was already used)
+                  // Payment method not attached yet - this can happen if setup_future_usage didn't work
+                  // Try to attach it manually (only if it wasn't used in a different PaymentIntent)
                   console.log(`ℹ️ Payment method ${paymentMethodId} not attached to customer ${customerId}`);
-                  console.log(`   This is expected if payment method was used before attachment.`);
-                  console.log(`   Stripe's 'save_default_payment_method: on_subscription' should handle this.`);
+                  console.log(`   Attempting to attach...`);
+                  
+                  try {
+                    await stripe.paymentMethods.attach(paymentMethodId, {
+                      customer: customerId
+                    });
+                    console.log(`✅ Successfully attached payment method to customer`);
+                    
+                    // Set as default
+                    await stripe.customers.update(customerId, {
+                      invoice_settings: {
+                        default_payment_method: paymentMethodId
+                      }
+                    });
+                    console.log(`✅ Payment method set as default`);
+                  } catch (attachErr) {
+                    if (attachErr.message?.includes('previously used') || attachErr.message?.includes('may not be used again')) {
+                      console.log(`ℹ️ Payment method was already used - Stripe will handle attachment automatically`);
+                      console.log(`   This is expected with setup_future_usage - attachment happens asynchronously`);
+                    } else {
+                      console.warn('⚠️ Could not attach payment method:', attachErr.message);
+                    }
+                  }
                 }
               } catch (retrieveErr) {
                 console.warn('⚠️ Could not retrieve payment method:', retrieveErr.message);
