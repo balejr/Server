@@ -1790,6 +1790,46 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
   }
 });
 
+// Helper function to format next invoice string from Stripe subscription
+// Format: "MMM DD for $X.XX" (e.g., "Dec 12 for $9.99")
+function formatNextInvoice(subscription) {
+  if (!subscription) {
+    return null;
+  }
+  
+  // Get next invoice date from current_period_end
+  const periodEnd = subscription.current_period_end;
+  if (!periodEnd || typeof periodEnd !== 'number') {
+    return null;
+  }
+  
+  // Get amount from subscription price
+  let amount = null;
+  if (subscription.items && subscription.items.data && subscription.items.data.length > 0) {
+    const price = subscription.items.data[0].price;
+    if (price && price.unit_amount) {
+      amount = price.unit_amount / 100; // Convert cents to dollars
+    }
+  }
+  
+  if (!amount) {
+    return null;
+  }
+  
+  // Format date as "MMM DD"
+  const date = new Date(periodEnd * 1000);
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = monthNames[date.getMonth()];
+  const day = date.getDate();
+  const formattedDate = `${month} ${day}`;
+  
+  // Format amount as "$X.XX"
+  const formattedAmount = `$${amount.toFixed(2)}`;
+  
+  // Return combined format: "MMM DD for $X.XX"
+  return `${formattedDate} for ${formattedAmount}`;
+}
+
 // Helper function to update subscription in database
 // Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
 async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd) {
@@ -1887,6 +1927,17 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // If dates are still missing, log warning but continue (will be synced later)
     if (!currentPeriodStart || !currentPeriodEnd) {
       console.warn(`⚠️ Missing billing dates for subscription ${subscriptionId}. Status: ${subscription.status}`);
+    }
+    
+    // Calculate next invoice string (e.g., "Dec 12 for $9.99")
+    let nextInvoice = null;
+    if (subscription && (subscriptionStatus === 'active' || subscriptionStatus === 'trialing')) {
+      nextInvoice = formatNextInvoice(subscription);
+      if (nextInvoice) {
+        console.log(`📋 Formatted next invoice: ${nextInvoice}`);
+      } else {
+        console.warn(`⚠️ Could not format next invoice for subscription ${subscriptionId}`);
+      }
     }
     
     // Get amount and currency from subscription price
@@ -2075,6 +2126,15 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.warn(`   ⚠️ currentPeriodEnd is missing, skipping update`);
       }
+      // Update next_invoice if available (for active/trialing subscriptions)
+      if (nextInvoice) {
+        updateFields.push('next_invoice = @nextInvoice');
+        console.log(`   ✅ Will update next_invoice to: ${nextInvoice}`);
+      } else if (subscriptionStatus === 'active' || subscriptionStatus === 'trialing') {
+        // Clear next_invoice if subscription is active but we couldn't format it
+        updateFields.push('next_invoice = NULL');
+        console.log(`   ⚠️ Clearing next_invoice (could not format)`);
+      }
       if (paymentIntentId) {
         updateFields.push('payment_intent_id = @paymentIntentId');
       }
@@ -2090,6 +2150,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
+      if (nextInvoice) updateRequest.input('nextInvoice', mssql.NVarChar(128), nextInvoice);
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       
       await updateRequest.query(updateQuery);
@@ -2127,6 +2188,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.warn(`   ⚠️ currentPeriodEnd is missing, subscription will be created without billing end date`);
       }
+      // Include next_invoice if available (for active/trialing subscriptions)
+      if (nextInvoice) {
+        insertFields.push('next_invoice');
+        insertValues.push('@nextInvoice');
+        console.log(`   ✅ Including next_invoice: ${nextInvoice}`);
+      }
       if (paymentIntentId) {
         insertFields.push('payment_intent_id');
         insertValues.push('@paymentIntentId');
@@ -2143,6 +2210,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
+      if (nextInvoice) insertRequest.input('nextInvoice', mssql.NVarChar(128), nextInvoice);
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       
       await insertRequest.query(insertQuery);
@@ -2351,6 +2419,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         current_period_end,
         subscription_id,
         customer_id,
+        next_invoice,
         started_at,
         updated_at
       FROM [dbo].[user_subscriptions]
@@ -2386,12 +2455,14 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let nextBillingDate = null;
     let currentPeriodStart = null;
     
-    // If current_period_end is missing but we have a subscription_id, ALWAYS try to fetch from Stripe
-    // This ensures billing dates are always available, even if they weren't saved initially
+    // If current_period_end or next_invoice is missing but we have a subscription_id, ALWAYS try to fetch from Stripe
+    // This ensures billing dates and next invoice are always available, even if they weren't saved initially
     // Check for both 'active' and 'trialing' statuses (both are valid subscription states)
-    const shouldFetchFromStripe = !subscription.current_period_end && 
-                                   subscription.subscription_id && 
-                                   (subscription.status === 'active' || subscription.status === 'trialing');
+    const shouldFetchFromStripe = subscription.subscription_id && 
+                                   (subscription.status === 'active' || subscription.status === 'trialing') &&
+                                   (!subscription.current_period_end || !subscription.next_invoice);
+    
+    let nextInvoice = subscription.next_invoice || null;
     
     if (shouldFetchFromStripe) {
       try {
@@ -2407,30 +2478,38 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
             
             console.log(`✅ Retrieved dates from Stripe - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
             
-            // Update database with the fetched dates (sync database with Stripe)
+            // Format next invoice from Stripe subscription
+            const formattedNextInvoice = formatNextInvoice(stripeSubscription);
+            if (formattedNextInvoice) {
+              nextInvoice = formattedNextInvoice;
+              console.log(`✅ Formatted next invoice from Stripe: ${nextInvoice}`);
+            }
+            
+            // Update database with the fetched dates and next_invoice (sync database with Stripe)
             const updateRequest = pool.request();
             updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
             updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
+            
+            const updateFields = ['current_period_end = @periodEnd', 'updated_at = SYSDATETIMEOFFSET()'];
+            const updateParams = [];
+            
             if (currentPeriodStart) {
               updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
-              
-              await updateRequest.query(`
-                UPDATE [dbo].[user_subscriptions]
-                SET current_period_end = @periodEnd,
-                    current_period_start = @periodStart,
-                    updated_at = SYSDATETIMEOFFSET()
-                WHERE UserId = @userId
-              `);
-            } else {
-              await updateRequest.query(`
-                UPDATE [dbo].[user_subscriptions]
-                SET current_period_end = @periodEnd,
-                    updated_at = SYSDATETIMEOFFSET()
-                WHERE UserId = @userId
-              `);
+              updateFields.push('current_period_start = @periodStart');
             }
             
-            console.log(`✅ Synced subscription dates from Stripe to database`);
+            if (nextInvoice) {
+              updateRequest.input('nextInvoice', mssql.NVarChar(128), nextInvoice);
+              updateFields.push('next_invoice = @nextInvoice');
+            }
+            
+            await updateRequest.query(`
+              UPDATE [dbo].[user_subscriptions]
+              SET ${updateFields.join(', ')}
+              WHERE UserId = @userId
+            `);
+            
+            console.log(`✅ Synced subscription dates and next_invoice from Stripe to database`);
           } else {
             console.warn(`⚠️ Stripe subscription ${subscription.subscription_id} missing current_period_end`);
           }
@@ -2466,6 +2545,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       currentPeriodEnd: nextBillingDate,
       currentPeriodStart: currentPeriodStart,
       nextBillingDate: nextBillingDate,
+      nextInvoice: nextInvoice,
       subscriptionId: subscription.subscription_id || null,
       customerId: subscription.customer_id || null,
       hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
