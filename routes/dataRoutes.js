@@ -1985,108 +1985,6 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
   }
 });
 
-// Helper function to format next invoice string from Stripe subscription
-// Format: "MMM DD for $X.XX" (e.g., "Dec 12 for $9.99")
-// Format next invoice from database current_period_end
-// Format: "Automatically renews on Dec 12, 2024"
-function formatNextInvoiceFromDB(currentPeriodEnd) {
-  if (!currentPeriodEnd) {
-    return null;
-  }
-  
-  try {
-    // Handle DateTimeOffset from database - convert to Date object
-    let date;
-    if (currentPeriodEnd instanceof Date) {
-      date = currentPeriodEnd;
-    } else if (typeof currentPeriodEnd === 'string') {
-      date = new Date(currentPeriodEnd);
-    } else {
-      console.warn('⚠️ formatNextInvoiceFromDB: Invalid date format');
-      return null;
-    }
-    
-    // Validate date
-    if (isNaN(date.getTime())) {
-      console.warn('⚠️ formatNextInvoiceFromDB: Invalid date value');
-      return null;
-    }
-    
-    // Format date as "MMM DD, YYYY"
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const month = monthNames[date.getMonth()];
-    const day = date.getDate();
-    const year = date.getFullYear();
-    const formattedDate = `${month} ${day}, ${year}`;
-    
-    // Return format: "Automatically renews on [formatted date]"
-    return `Automatically renews on ${formattedDate}`;
-  } catch (err) {
-    console.error('❌ formatNextInvoiceFromDB: Error formatting date:', err.message);
-    return null;
-  }
-}
-
-// Legacy function - kept for backward compatibility but deprecated
-function formatNextInvoice(subscription) {
-  if (!subscription) {
-    return null;
-  }
-  
-  // Get next invoice date from current_period_end
-  const periodEnd = subscription.current_period_end;
-  if (!periodEnd || typeof periodEnd !== 'number') {
-    return null;
-  }
-  
-  // Get amount from subscription price
-  // Stripe subscription.items is a List object with a data array
-  let amount = null;
-  
-  try {
-    if (subscription.items && subscription.items.data && Array.isArray(subscription.items.data) && subscription.items.data.length > 0) {
-      const firstItem = subscription.items.data[0];
-      const price = firstItem.price;
-      
-      // Price can be an expanded object (with unit_amount) or a string ID
-      if (price && typeof price === 'object' && typeof price.unit_amount === 'number') {
-        // Price is expanded, get unit_amount directly
-        amount = price.unit_amount / 100; // Convert cents to dollars
-      } else if (price && typeof price === 'string') {
-        // Price is not expanded (just an ID), we can't get amount
-        console.warn('⚠️ formatNextInvoice: Price is not expanded. Make sure to expand items.data.price when retrieving subscription.');
-        return null;
-      }
-    }
-    
-    if (!amount || amount <= 0) {
-      console.warn(`⚠️ formatNextInvoice: Could not extract valid amount. Items structure:`, {
-        hasItems: !!subscription.items,
-        hasItemsData: !!subscription.items?.data,
-        itemsDataLength: subscription.items?.data?.length || 0,
-        firstItemPrice: subscription.items?.data?.[0]?.price
-      });
-      return null;
-    }
-  } catch (err) {
-    console.error('❌ formatNextInvoice: Error extracting amount:', err.message);
-    return null;
-  }
-  
-  // Format date as "MMM DD"
-  const date = new Date(periodEnd * 1000);
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const month = monthNames[date.getMonth()];
-  const day = date.getDate();
-  const formattedDate = `${month} ${day}`;
-  
-  // Format amount as "$X.XX"
-  const formattedAmount = `$${amount.toFixed(2)}`;
-  
-  // Return combined format: "MMM DD for $X.XX"
-  return `${formattedDate} for ${formattedAmount}`;
-}
-
 // Helper function to update subscription in database
 // Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
 async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd) {
@@ -2146,7 +2044,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       
       // Refresh subscription to get latest status
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-        expand: ['latest_invoice.payment_intent', 'items.data.price'] // Expand items to get price for next_invoice calculation
+        expand: ['latest_invoice.payment_intent', 'items.data.price']
       });
       console.log(`📝 Refreshed subscription status: ${subscription.status}`);
       
@@ -2337,10 +2235,6 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       console.log(`✅ Both billing dates available: start=${currentPeriodStart}, end=${currentPeriodEnd}`);
     }
     
-    // NOTE: next_invoice is NOT calculated here during payment processing
-    // It will be calculated on-demand when viewing subscription status
-    // This prevents errors during payment flow and improves performance
-    
     // Get amount and currency from subscription price
     if (subscription.items.data.length > 0) {
       const price = subscription.items.data[0].price;
@@ -2527,7 +2421,6 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.warn(`   ⚠️ currentPeriodEnd is missing, skipping update`);
       }
-      // NOTE: next_invoice is not updated here - it's calculated on-demand in status endpoint
       if (paymentIntentId) {
         updateFields.push('payment_intent_id = @paymentIntentId');
       }
@@ -2543,34 +2436,10 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
-      // NOTE: nextInvoice not included here - calculated on-demand
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       
       await updateRequest.query(updateQuery);
       console.log(`✅ Step 2a complete: Subscription updated`);
-      
-      // Calculate and save next_invoice if we have current_period_end and subscription is active/trialing
-      if (currentPeriodEnd && (subscriptionStatus === 'active' || subscriptionStatus === 'trialing')) {
-        try {
-          const calculatedNextInvoice = formatNextInvoiceFromDB(currentPeriodEnd);
-          if (calculatedNextInvoice) {
-            const nextInvoiceRequest = new mssql.Request(transaction);
-            nextInvoiceRequest.input('userId', mssql.Int, userIdInt);
-            nextInvoiceRequest.input('nextInvoice', mssql.NVarChar(128), calculatedNextInvoice);
-            
-            await nextInvoiceRequest.query(`
-              UPDATE [dbo].[user_subscriptions]
-              SET next_invoice = @nextInvoice, updated_at = SYSDATETIMEOFFSET()
-              WHERE UserId = @userId
-            `);
-            
-            console.log(`✅ Calculated and saved next_invoice: ${calculatedNextInvoice}`);
-          }
-        } catch (nextInvoiceErr) {
-          console.warn('⚠️ Could not calculate/save next_invoice (non-critical):', nextInvoiceErr.message);
-          // Don't fail transaction - next_invoice will be calculated on status check
-        }
-      }
     } else {
       console.log(`📝 Step 2b: Inserting new subscription`);
       const insertFields = ['UserId', '[plan]', 'status', 'started_at', 'updated_at'];
@@ -2604,7 +2473,6 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       } else {
         console.warn(`   ⚠️ currentPeriodEnd is missing, subscription will be created without billing end date`);
       }
-      // NOTE: next_invoice is not inserted here - it's calculated on-demand in status endpoint
       if (paymentIntentId) {
         insertFields.push('payment_intent_id');
         insertValues.push('@paymentIntentId');
@@ -2621,33 +2489,9 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
-      // NOTE: nextInvoice not included here - calculated on-demand
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       
       await insertRequest.query(insertQuery);
-      
-      // Calculate and save next_invoice if we have current_period_end and subscription is active/trialing
-      if (currentPeriodEnd && (subscriptionStatus === 'active' || subscriptionStatus === 'trialing')) {
-        try {
-          const calculatedNextInvoice = formatNextInvoiceFromDB(currentPeriodEnd);
-          if (calculatedNextInvoice) {
-            const nextInvoiceRequest = new mssql.Request(transaction);
-            nextInvoiceRequest.input('userId', mssql.Int, userIdInt);
-            nextInvoiceRequest.input('nextInvoice', mssql.NVarChar(128), calculatedNextInvoice);
-            
-            await nextInvoiceRequest.query(`
-              UPDATE [dbo].[user_subscriptions]
-              SET next_invoice = @nextInvoice, updated_at = SYSDATETIMEOFFSET()
-              WHERE UserId = @userId
-            `);
-            
-            console.log(`✅ Calculated and saved next_invoice: ${calculatedNextInvoice}`);
-          }
-        } catch (nextInvoiceErr) {
-          console.warn('⚠️ Could not calculate/save next_invoice (non-critical):', nextInvoiceErr.message);
-          // Don't fail transaction - next_invoice will be calculated on status check
-        }
-      }
     }
     console.log(`✅ Step 2 complete: user_subscriptions updated`);
 
@@ -2899,7 +2743,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         current_period_end,
         subscription_id,
         customer_id,
-        next_invoice,
         started_at,
         updated_at
       FROM [dbo].[user_subscriptions]
@@ -2927,7 +2770,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         currentPeriodEnd: null,
         currentPeriodStart: null,
         nextBillingDate: null,
-        nextInvoice: null,
         hasActiveSubscription: false
       });
     }
@@ -2935,17 +2777,11 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     // Format dates for response
     let nextBillingDate = null;
     let currentPeriodStart = null;
-    let nextInvoice = null; // Declare early to avoid "not defined" errors
     
-    // Initialize nextInvoice from database first
-    nextInvoice = subscription.next_invoice || null;
-    
-    // If current_period_start or current_period_end is missing but we have a subscription_id, fetch from Stripe
-    // This ensures billing dates are always available, even if they weren't saved initially
-    // Check for both 'active' and 'trialing' statuses (both are valid subscription states)
+    // Always fetch from Stripe for active/trialing subscriptions to ensure we have the latest billing dates
+    // This ensures billing dates are always up-to-date, even if database values exist
     const shouldFetchFromStripe = subscription.subscription_id && 
-                                   (subscription.status === 'active' || subscription.status === 'trialing') &&
-                                   (!subscription.current_period_start || !subscription.current_period_end);
+                                   (subscription.status === 'active' || subscription.status === 'trialing');
     
     if (shouldFetchFromStripe) {
       try {
@@ -2961,10 +2797,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
             
             console.log(`✅ Retrieved dates from Stripe - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
             
-            // Calculate next_invoice from database current_period_end using new function
-            const calculatedNextInvoice = formatNextInvoiceFromDB(nextBillingDate);
-            
-            // Save dates and calculated next_invoice to database
+            // Save dates to database to keep them in sync
             try {
               const updateRequest = pool.request();
               updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
@@ -2977,23 +2810,15 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
                 updateFields.push('current_period_start = @periodStart');
               }
               
-              // Calculate and save next_invoice if we have current_period_end
-              if (calculatedNextInvoice) {
-                updateRequest.input('nextInvoice', mssql.NVarChar(128), calculatedNextInvoice);
-                updateFields.push('next_invoice = @nextInvoice');
-                nextInvoice = calculatedNextInvoice;
-                console.log(`✅ Calculated and saved next_invoice from database: ${nextInvoice}`);
-              }
-              
               await updateRequest.query(`
                 UPDATE [dbo].[user_subscriptions]
                 SET ${updateFields.join(', ')}
                 WHERE UserId = @userId
               `);
               
-              console.log(`✅ Synced subscription dates and next_invoice from Stripe to database`);
+              console.log(`✅ Synced subscription dates from Stripe to database`);
             } catch (dbErr) {
-              console.warn('⚠️ Could not save dates/next_invoice to database (non-critical):', dbErr.message);
+              console.warn('⚠️ Could not save dates to database (non-critical):', dbErr.message);
               // Continue - dates are still available for this response
             }
           } else {
@@ -3003,36 +2828,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       } catch (stripeErr) {
         console.warn('⚠️ Could not fetch subscription from Stripe:', stripeErr.message);
         // Continue with database values (which may be null)
-      }
-    } else if (subscription.subscription_id && !subscription.current_period_end) {
-      // Log when we have subscription_id but dates are missing and status doesn't warrant fetch
-      console.log(`ℹ️ Subscription ${subscription.subscription_id} has status '${subscription.status}' - dates may not be available yet`);
-    }
-    
-    // Calculate next_invoice from database if we have current_period_end but next_invoice is missing
-    if (!nextInvoice && subscription.current_period_end && (subscription.status === 'active' || subscription.status === 'trialing')) {
-      const calculatedNextInvoice = formatNextInvoiceFromDB(subscription.current_period_end);
-      if (calculatedNextInvoice) {
-        nextInvoice = calculatedNextInvoice;
-        console.log(`✅ Calculated next_invoice from database current_period_end: ${nextInvoice}`);
-        
-        // Save calculated next_invoice to database
-        try {
-          const updateRequest = pool.request();
-          updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
-          updateRequest.input('nextInvoice', mssql.NVarChar(128), calculatedNextInvoice);
-          
-          await updateRequest.query(`
-            UPDATE [dbo].[user_subscriptions]
-            SET next_invoice = @nextInvoice, updated_at = SYSDATETIMEOFFSET()
-            WHERE UserId = @userId
-          `);
-          
-          console.log(`✅ Saved calculated next_invoice to database`);
-        } catch (dbErr) {
-          console.warn('⚠️ Could not save calculated next_invoice to database (non-critical):', dbErr.message);
-          // Continue - nextInvoice is still available for this response
-        }
       }
     }
     
@@ -3058,7 +2853,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       currentPeriodEnd: nextBillingDate,
       currentPeriodStart: currentPeriodStart,
       nextBillingDate: nextBillingDate,
-      nextInvoice: nextInvoice,
       subscriptionId: subscription.subscription_id || null,
       customerId: subscription.customer_id || null,
       hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
