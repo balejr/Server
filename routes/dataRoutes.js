@@ -1895,6 +1895,105 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
     });
   }
 });
+
+// GET /api/data/users/subscription/status
+// Get current subscription status for the authenticated user
+router.get('/users/subscription/status', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const pool = getPool();
+    if (!pool) {
+      return res.status(500).json({ error: 'Database connection not available' });
+    }
+
+    // Get subscription data from user_subscriptions table
+    const subscriptionRequest = pool.request();
+    subscriptionRequest.input('userId', mssql.Int, parseInt(userId, 10));
+    
+    const subscriptionResult = await subscriptionRequest.query(`
+      SELECT 
+        [plan],
+        status,
+        current_period_start,
+        current_period_end,
+        subscription_id,
+        customer_id,
+        started_at,
+        updated_at
+      FROM [dbo].[user_subscriptions]
+      WHERE UserId = @userId
+    `);
+
+    // Get UserType from UserProfile
+    const userProfileRequest = pool.request();
+    userProfileRequest.input('userId', mssql.Int, parseInt(userId, 10));
+    
+    const userProfileResult = await userProfileRequest.query(`
+      SELECT UserType, UserTypeChangedDate
+      FROM [dbo].[UserProfile]
+      WHERE UserID = @userId
+    `);
+
+    const subscription = subscriptionResult.recordset[0];
+    const userProfile = userProfileResult.recordset[0];
+
+    // If no subscription record exists, return Free plan
+    if (!subscription) {
+      return res.json({
+        plan: userProfile?.UserType || 'Free',
+        status: 'inactive',
+        currentPeriodEnd: null,
+        currentPeriodStart: null,
+        nextBillingDate: null,
+        hasActiveSubscription: false
+      });
+    }
+
+    // Format dates for response
+    let nextBillingDate = null;
+    let currentPeriodStart = null;
+    
+    if (subscription.current_period_end) {
+      // Handle both DATETIMEOFFSET and string formats
+      const periodEnd = subscription.current_period_end instanceof Date 
+        ? subscription.current_period_end 
+        : new Date(subscription.current_period_end);
+      nextBillingDate = periodEnd.toISOString();
+    }
+    
+    if (subscription.current_period_start) {
+      const periodStart = subscription.current_period_start instanceof Date 
+        ? subscription.current_period_start 
+        : new Date(subscription.current_period_start);
+      currentPeriodStart = periodStart.toISOString();
+    }
+
+    return res.json({
+      plan: subscription.plan || userProfile?.UserType || 'Free',
+      status: subscription.status || 'inactive',
+      currentPeriodEnd: nextBillingDate,
+      currentPeriodStart: currentPeriodStart,
+      nextBillingDate: nextBillingDate,
+      subscriptionId: subscription.subscription_id || null,
+      customerId: subscription.customer_id || null,
+      hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
+      startedAt: subscription.started_at ? (subscription.started_at instanceof Date ? subscription.started_at.toISOString() : new Date(subscription.started_at).toISOString()) : null,
+      updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
+    });
+  } catch (err) {
+    console.error('❌ Get subscription status error:', err.message);
+    return res.status(500).json({
+      error: 'Failed to get subscription status',
+      message: err.message
+    });
+  }
+});
+
 // // POST /api/users/updateSubscription
 // router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
 //   try {
