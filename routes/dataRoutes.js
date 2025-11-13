@@ -1780,6 +1780,30 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
     // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
+      // If PaymentIntent succeeded, refresh subscription to get updated status and billing dates
+      // Stripe may need a moment to update subscription status and set billing dates after PaymentIntent succeeds
+      if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
+        console.log(`📝 PaymentIntent status: ${paymentIntent.status}, refreshing subscription to get billing dates...`);
+        // Wait a moment for Stripe to process
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Refresh subscription to get latest status and billing dates
+        try {
+          subscription = await stripe.subscriptions.retrieve(subscription.id, {
+            expand: ['latest_invoice.payment_intent', 'items.data.price']
+          });
+          console.log(`📝 Refreshed subscription status: ${subscription.status}`);
+          if (subscription.current_period_end) {
+            console.log(`✅ Subscription has billing dates: period_end=${new Date(subscription.current_period_end * 1000).toISOString()}`);
+          } else {
+            console.warn(`⚠️ Subscription still missing billing dates after refresh`);
+          }
+        } catch (refreshErr) {
+          console.warn('⚠️ Could not refresh subscription (non-critical):', refreshErr.message);
+          // Continue with original subscription data
+        }
+      }
+      
       // Extract dates from subscription for response and database save
       let currentPeriodStart = null;
       let currentPeriodEnd = null;
@@ -1809,6 +1833,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             }
             
             console.log(`💾 Saving subscription ${subscription.id} to database for user ${req.user.userId}...`);
+            console.log(`   Billing dates: start=${currentPeriodStart || 'NULL'}, end=${currentPeriodEnd || 'NULL'}`);
             await updateSubscriptionInDatabase(
               req.user.userId,
               subscription.status,
@@ -1952,6 +1977,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       const amount = price?.unit_amount || paymentIntent?.amount || 0;
       const currency = price?.currency || paymentIntent?.currency || 'usd';
       
+      // Convert dates to ISO strings for response (already converted above)
       res.status(200).json({ 
         id: subscription.id,
         status: subscription.status, // active, trialing, past_due, canceled, incomplete, etc.
@@ -1959,8 +1985,8 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         amount: amount,
         currency: currency,
         customerId: subscription.customer,
-        currentPeriodStart: subscription.current_period_start,
-        currentPeriodEnd: subscription.current_period_end,
+        currentPeriodStart: currentPeriodStart || (subscription.current_period_start ? new Date(subscription.current_period_start * 1000).toISOString() : null),
+        currentPeriodEnd: currentPeriodEnd || (subscription.current_period_end ? new Date(subscription.current_period_end * 1000).toISOString() : null),
         paymentIntentStatus: paymentIntent?.status
       });
     } else if (paymentIntent) {
@@ -2035,18 +2061,31 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       });
     }
     
-    // If PaymentIntent succeeded, refresh subscription to get updated status
-    // Stripe may need a moment to update subscription status after PaymentIntent succeeds
-    if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
-      console.log(`📝 PaymentIntent status: ${paymentIntent.status}, refreshing subscription...`);
+    // If PaymentIntent succeeded OR if billing dates are missing, refresh subscription to get updated status and dates
+    // Stripe may need a moment to update subscription status and set billing dates after PaymentIntent succeeds
+    const needsRefresh = (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) ||
+                         !currentPeriodStart || !currentPeriodEnd;
+    
+    if (needsRefresh && subscriptionId) {
+      console.log(`📝 Refreshing subscription to get latest status and billing dates...`);
       // Wait a moment for Stripe to process
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // Refresh subscription to get latest status
+      // Refresh subscription to get latest status and billing dates
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
         expand: ['latest_invoice.payment_intent', 'items.data.price']
       });
       console.log(`📝 Refreshed subscription status: ${subscription.status}`);
+      
+      // Update dates from refreshed subscription if they were missing
+      if (!currentPeriodStart && subscription.current_period_start && typeof subscription.current_period_start === 'number') {
+        currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
+        console.log(`✅ Retrieved current_period_start from Stripe: ${currentPeriodStart}`);
+      }
+      if (!currentPeriodEnd && subscription.current_period_end && typeof subscription.current_period_end === 'number') {
+        currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+        console.log(`✅ Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
+      }
       
       // Explicitly pay invoice and attach payment method if PaymentIntent succeeded
       // These operations are important but shouldn't block the main flow
