@@ -1773,29 +1773,10 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
               ? subscription.customer 
               : subscription.customer.id;
             
-            // 1. Pay invoice if needed
-            if (subscription.latest_invoice) {
-              try {
-                const invoiceId = typeof subscription.latest_invoice === 'string' 
-                  ? subscription.latest_invoice 
-                  : subscription.latest_invoice.id;
-                
-                const invoice = await stripe.invoices.retrieve(invoiceId);
-                
-                if (invoice.status === 'open' || invoice.status === 'draft') {
-                  console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
-                  await stripe.invoices.pay(invoiceId);
-                  console.log(`✅ Invoice ${invoiceId} marked as paid`);
-                }
-              } catch (payErr) {
-                if (payErr.code !== 'invoice_already_paid') {
-                  console.warn('⚠️ Could not pay invoice (non-critical):', payErr.message);
-                }
-              }
-            }
-            
-            // 2. Attach payment method to customer
             const paymentMethodId = paymentIntent.payment_method;
+            
+            // CRITICAL: Attach payment method FIRST, then pay invoice
+            // 1. Attach payment method to customer and set as default
             if (paymentMethodId && customerId) {
               try {
                 console.log(`💳 Attaching payment method ${paymentMethodId} to customer ${customerId}...`);
@@ -1808,9 +1789,41 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
                   }
                 });
                 console.log(`✅ Payment method attached and set as default for customer ${customerId}`);
+                
+                // Wait a moment for Stripe to process the update
+                await new Promise(resolve => setTimeout(resolve, 500));
               } catch (attachErr) {
-                if (attachErr.code !== 'resource_already_exists') {
+                if (attachErr.code === 'resource_already_exists') {
+                  console.log(`✅ Payment method already attached to customer`);
+                } else {
                   console.warn('⚠️ Could not attach payment method (non-critical):', attachErr.message);
+                }
+              }
+            }
+            
+            // 2. Pay invoice AFTER payment method is attached
+            if (subscription.latest_invoice) {
+              try {
+                const invoiceId = typeof subscription.latest_invoice === 'string' 
+                  ? subscription.latest_invoice 
+                  : subscription.latest_invoice.id;
+                
+                const invoice = await stripe.invoices.retrieve(invoiceId);
+                
+                if (invoice.status === 'open' || invoice.status === 'draft') {
+                  console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
+                  
+                  // Pass payment_method parameter to ensure invoice can be paid
+                  await stripe.invoices.pay(invoiceId, {
+                    payment_method: paymentMethodId || undefined // Use payment method if available
+                  });
+                  console.log(`✅ Invoice ${invoiceId} marked as paid`);
+                }
+              } catch (payErr) {
+                if (payErr.code === 'invoice_already_paid') {
+                  console.log(`✅ Invoice already paid`);
+                } else {
+                  console.warn('⚠️ Could not pay invoice (non-critical):', payErr.message);
                 }
               }
             }
@@ -1988,7 +2001,35 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         // Run these operations in background (don't await - continue with main flow)
         (async () => {
           try {
-            // 1. Pay invoice if needed
+            const paymentMethodId = paymentIntent.payment_method;
+            
+            // CRITICAL: Attach payment method FIRST, then pay invoice
+            // 1. Attach payment method to customer and set as default
+            if (customerId && paymentMethodId) {
+              try {
+                console.log(`💳 Attaching payment method ${paymentMethodId} to customer ${customerId}...`);
+                await stripe.paymentMethods.attach(paymentMethodId, {
+                  customer: customerId
+                });
+                await stripe.customers.update(customerId, {
+                  invoice_settings: {
+                    default_payment_method: paymentMethodId
+                  }
+                });
+                console.log(`✅ Payment method attached and set as default for customer ${customerId}`);
+                
+                // Wait a moment for Stripe to process the update
+                await new Promise(resolve => setTimeout(resolve, 500));
+              } catch (attachErr) {
+                if (attachErr.code === 'resource_already_exists') {
+                  console.log(`✅ Payment method already attached to customer`);
+                } else {
+                  console.warn('⚠️ Could not attach payment method (non-critical):', attachErr.message);
+                }
+              }
+            }
+            
+            // 2. Pay invoice AFTER payment method is attached
             if (subscription.latest_invoice) {
               try {
                 const invoiceId = typeof subscription.latest_invoice === 'string' 
@@ -1999,36 +2040,18 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                 
                 if (invoice.status === 'open' || invoice.status === 'draft') {
                   console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
-                  await stripe.invoices.pay(invoiceId);
+                  
+                  // Pass payment_method parameter to ensure invoice can be paid
+                  await stripe.invoices.pay(invoiceId, {
+                    payment_method: paymentMethodId || undefined // Use payment method if available
+                  });
                   console.log(`✅ Invoice ${invoiceId} marked as paid`);
                 }
               } catch (payErr) {
-                if (payErr.code !== 'invoice_already_paid') {
+                if (payErr.code === 'invoice_already_paid') {
+                  console.log(`✅ Invoice already paid`);
+                } else {
                   console.warn('⚠️ Could not pay invoice (non-critical):', payErr.message);
-                }
-              }
-            }
-            
-            // 2. Attach payment method to customer
-            if (customerId) {
-              try {
-                const paymentMethodId = paymentIntent.payment_method;
-                
-                if (paymentMethodId) {
-                  console.log(`💳 Attaching payment method ${paymentMethodId} to customer ${customerId}...`);
-                  await stripe.paymentMethods.attach(paymentMethodId, {
-                    customer: customerId
-                  });
-                  await stripe.customers.update(customerId, {
-                    invoice_settings: {
-                      default_payment_method: paymentMethodId
-                    }
-                  });
-                  console.log(`✅ Payment method attached and set as default for customer ${customerId}`);
-                }
-              } catch (attachErr) {
-                if (attachErr.code !== 'resource_already_exists') {
-                  console.warn('⚠️ Could not attach payment method (non-critical):', attachErr.message);
                 }
               }
             }
