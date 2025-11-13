@@ -1773,7 +1773,13 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
               ? subscription.customer 
               : subscription.customer.id;
             
-            const paymentMethodId = paymentIntent.payment_method;
+            // Extract payment method ID - handle both string ID and expanded object
+            let paymentMethodId = null;
+            if (paymentIntent.payment_method) {
+              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
+                ? paymentIntent.payment_method 
+                : paymentIntent.payment_method.id;
+            }
             
             // CRITICAL: Attach payment method FIRST, then pay invoice
             // 1. Attach payment method to customer and set as default
@@ -1813,10 +1819,13 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
                 if (invoice.status === 'open' || invoice.status === 'draft') {
                   console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
                   
-                  // Pass payment_method parameter to ensure invoice can be paid
-                  await stripe.invoices.pay(invoiceId, {
-                    payment_method: paymentMethodId || undefined // Use payment method if available
-                  });
+                  // Pass payment_method ID (string only) to ensure invoice can be paid
+                  const payOptions = {};
+                  if (paymentMethodId) {
+                    payOptions.payment_method = paymentMethodId; // Ensure it's a string ID
+                  }
+                  
+                  await stripe.invoices.pay(invoiceId, payOptions);
                   console.log(`✅ Invoice ${invoiceId} marked as paid`);
                 }
               } catch (payErr) {
@@ -2001,7 +2010,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         // Run these operations in background (don't await - continue with main flow)
         (async () => {
           try {
-            const paymentMethodId = paymentIntent.payment_method;
+            // Extract payment method ID - handle both string ID and expanded object
+            let paymentMethodId = null;
+            if (paymentIntent.payment_method) {
+              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
+                ? paymentIntent.payment_method 
+                : paymentIntent.payment_method.id;
+            }
             
             // CRITICAL: Attach payment method FIRST, then pay invoice
             // 1. Attach payment method to customer and set as default
@@ -2041,10 +2056,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                 if (invoice.status === 'open' || invoice.status === 'draft') {
                   console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
                   
-                  // Pass payment_method parameter to ensure invoice can be paid
-                  await stripe.invoices.pay(invoiceId, {
-                    payment_method: paymentMethodId || undefined // Use payment method if available
-                  });
+                  // Pass payment_method ID (string only) to ensure invoice can be paid
+                  const payOptions = {};
+                  if (paymentMethodId) {
+                    payOptions.payment_method = paymentMethodId; // Ensure it's a string ID
+                  }
+                  
+                  await stripe.invoices.pay(invoiceId, payOptions);
                   console.log(`✅ Invoice ${invoiceId} marked as paid`);
                 }
               } catch (payErr) {
