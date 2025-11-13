@@ -2447,6 +2447,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         currentPeriodEnd: null,
         currentPeriodStart: null,
         nextBillingDate: null,
+        nextInvoice: null,
         hasActiveSubscription: false
       });
     }
@@ -2454,6 +2455,10 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     // Format dates for response
     let nextBillingDate = null;
     let currentPeriodStart = null;
+    let nextInvoice = null; // Declare early to avoid "not defined" errors
+    
+    // Initialize nextInvoice from database first
+    nextInvoice = subscription.next_invoice || null;
     
     // If current_period_end or next_invoice is missing but we have a subscription_id, ALWAYS try to fetch from Stripe
     // This ensures billing dates and next invoice are always available, even if they weren't saved initially
@@ -2461,8 +2466,6 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     const shouldFetchFromStripe = subscription.subscription_id && 
                                    (subscription.status === 'active' || subscription.status === 'trialing') &&
                                    (!subscription.current_period_end || !subscription.next_invoice);
-    
-    let nextInvoice = subscription.next_invoice || null;
     
     if (shouldFetchFromStripe) {
       try {
@@ -2540,7 +2543,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     }
 
     return res.json({
-      plan: subscription.plan || userProfile?.UserType || 'Free',
+      plan: userProfile?.UserType || subscription.plan || 'Free', // Use UserType from UserProfile first, then fallback to subscription.plan
       status: subscription.status || 'inactive',
       currentPeriodEnd: nextBillingDate,
       currentPeriodStart: currentPeriodStart,
