@@ -1752,6 +1752,34 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
     // Return subscription details if available, otherwise PaymentIntent details
     if (subscription) {
+      // If PaymentIntent succeeded, explicitly pay the invoice
+      if (paymentIntent?.status === 'succeeded' && subscription.latest_invoice) {
+        try {
+          const invoiceId = typeof subscription.latest_invoice === 'string' 
+            ? subscription.latest_invoice 
+            : subscription.latest_invoice.id;
+          
+          // Retrieve invoice to check status
+          const invoice = await stripe.invoices.retrieve(invoiceId);
+          
+          // Only pay if invoice is still open/unpaid
+          if (invoice.status === 'open' || invoice.status === 'draft') {
+            console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
+            const paidInvoice = await stripe.invoices.pay(invoiceId);
+            console.log(`✅ Invoice ${invoiceId} marked as paid: ${paidInvoice.status}`);
+          } else if (invoice.status === 'paid') {
+            console.log(`✅ Invoice ${invoiceId} already paid`);
+          }
+        } catch (payErr) {
+          // If invoice is already paid or can't be paid, log but don't fail
+          if (payErr.code === 'invoice_already_paid') {
+            console.log(`✅ Invoice already paid`);
+          } else {
+            console.warn('⚠️ Could not pay invoice (non-critical):', payErr.message);
+          }
+        }
+      }
+      
       // Get amount and currency from subscription price
       const price = subscription.items.data[0]?.price;
       const amount = price?.unit_amount || paymentIntent?.amount || 0;
@@ -1902,6 +1930,31 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         expand: ['latest_invoice.payment_intent', 'items.data.price'] // Expand items to get price for next_invoice calculation
       });
       console.log(`📝 Refreshed subscription status: ${subscription.status}`);
+      
+      // Explicitly pay the invoice if PaymentIntent succeeded
+      if (paymentIntent.status === 'succeeded' && subscription.latest_invoice) {
+        try {
+          const invoiceId = typeof subscription.latest_invoice === 'string' 
+            ? subscription.latest_invoice 
+            : subscription.latest_invoice.id;
+          
+          const invoice = await stripe.invoices.retrieve(invoiceId);
+          
+          if (invoice.status === 'open' || invoice.status === 'draft') {
+            console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
+            await stripe.invoices.pay(invoiceId);
+            console.log(`✅ Invoice ${invoiceId} marked as paid`);
+          } else if (invoice.status === 'paid') {
+            console.log(`✅ Invoice ${invoiceId} already paid`);
+          }
+        } catch (payErr) {
+          if (payErr.code !== 'invoice_already_paid') {
+            console.warn('⚠️ Could not pay invoice (non-critical):', payErr.message);
+          } else {
+            console.log(`✅ Invoice already paid`);
+          }
+        }
+      }
     }
     
     // Extract subscription details (use refreshed status)
