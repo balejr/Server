@@ -1958,7 +1958,42 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let nextBillingDate = null;
     let currentPeriodStart = null;
     
-    if (subscription.current_period_end) {
+    // If current_period_end is missing but we have a subscription_id, try to fetch from Stripe
+    if (!subscription.current_period_end && subscription.subscription_id && subscription.status === 'active') {
+      try {
+        if (stripe && process.env.STRIPE_SECRET_KEY) {
+          console.log(`📝 Fetching subscription details from Stripe: ${subscription.subscription_id}`);
+          const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id);
+          
+          if (stripeSubscription.current_period_end) {
+            nextBillingDate = new Date(stripeSubscription.current_period_end * 1000).toISOString();
+            currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000).toISOString();
+            
+            // Update database with the fetched dates
+            const updateRequest = pool.request();
+            updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
+            updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
+            updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
+            
+            await updateRequest.query(`
+              UPDATE [dbo].[user_subscriptions]
+              SET current_period_end = @periodEnd,
+                  current_period_start = @periodStart,
+                  updated_at = SYSDATETIMEOFFSET()
+              WHERE UserId = @userId
+            `);
+            
+            console.log(`✅ Updated subscription dates from Stripe`);
+          }
+        }
+      } catch (stripeErr) {
+        console.warn('⚠️ Could not fetch subscription from Stripe:', stripeErr.message);
+        // Continue with database values (which may be null)
+      }
+    }
+    
+    // Use database values if Stripe fetch didn't work or wasn't needed
+    if (!nextBillingDate && subscription.current_period_end) {
       // Handle both DATETIMEOFFSET and string formats
       const periodEnd = subscription.current_period_end instanceof Date 
         ? subscription.current_period_end 
@@ -1966,7 +2001,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       nextBillingDate = periodEnd.toISOString();
     }
     
-    if (subscription.current_period_start) {
+    if (!currentPeriodStart && subscription.current_period_start) {
       const periodStart = subscription.current_period_start instanceof Date 
         ? subscription.current_period_start 
         : new Date(subscription.current_period_start);
