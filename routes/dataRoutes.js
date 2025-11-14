@@ -1430,7 +1430,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     // Create Subscription with payment_behavior: 'default_incomplete'
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
-    // Include both 'card' and 'apple_pay' in payment_method_types to enable Apple Pay
+    // Note: Apple Pay is enabled on the PaymentIntent, not in subscription payment_settings
+    // Apple Pay support comes through PaymentIntent's automatic_payment_methods or payment_method_types
     console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
@@ -1438,7 +1439,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       payment_behavior: 'default_incomplete',
       payment_settings: { 
         save_default_payment_method: 'on_subscription',
-        payment_method_types: ['card', 'apple_pay']
+        payment_method_types: ['card'] // Only 'card' is valid here; Apple Pay enabled via PaymentIntent
       },
       expand: ['latest_invoice.payment_intent'],
       metadata: {
@@ -1513,13 +1514,13 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             const currency = latestInvoice.currency || 'usd';
             
             // Create PaymentIntent for this invoice
-            // Include both card and apple_pay payment methods explicitly
+            // Use automatic_payment_methods to enable Apple Pay and other payment methods
             // CRITICAL: Use setup_future_usage to automatically attach payment method to customer
             paymentIntent = await stripe.paymentIntents.create({
               amount: amount,
               currency: currency,
               customer: customer.id,
-              payment_method_types: ['card', 'apple_pay'],
+              automatic_payment_methods: { enabled: true }, // Enables Apple Pay, Link, and other payment methods
               setup_future_usage: 'off_session', // Automatically attach payment method to customer when PaymentIntent succeeds
               metadata: {
                 userId: String(userId),
@@ -1551,18 +1552,28 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
         }
         
-        // Step 4b: Update PaymentIntent to include setup_future_usage if not already set
-        // This ensures payment method is automatically attached to customer when PaymentIntent succeeds
-        if (paymentIntent && !paymentIntent.setup_future_usage) {
+        // Step 4b: Update PaymentIntent to enable Apple Pay and setup_future_usage
+        // Enable automatic_payment_methods to support Apple Pay and other payment methods
+        if (paymentIntent) {
           try {
-            console.log(`🔄 Updating PaymentIntent ${paymentIntent.id} to include setup_future_usage...`);
-            paymentIntent = await stripe.paymentIntents.update(paymentIntent.id, {
-              setup_future_usage: 'off_session'
-            });
-            console.log(`✅ PaymentIntent updated with setup_future_usage`);
+            const updateParams = {};
+            if (!paymentIntent.setup_future_usage) {
+              updateParams.setup_future_usage = 'off_session';
+            }
+            // Enable automatic payment methods (includes Apple Pay) if not already enabled
+            if (!paymentIntent.automatic_payment_methods?.enabled && 
+                !paymentIntent.payment_method_types?.includes('apple_pay')) {
+              updateParams.automatic_payment_methods = { enabled: true };
+            }
+            
+            if (Object.keys(updateParams).length > 0) {
+              console.log(`🔄 Updating PaymentIntent ${paymentIntent.id} to enable Apple Pay and setup_future_usage...`);
+              paymentIntent = await stripe.paymentIntents.update(paymentIntent.id, updateParams);
+              console.log(`✅ PaymentIntent updated with Apple Pay support`);
+            }
           } catch (updateErr) {
-            console.warn('⚠️ Could not update PaymentIntent with setup_future_usage:', updateErr.message);
-            // Continue - payment will still work, just might not attach payment method automatically
+            console.warn('⚠️ Could not update PaymentIntent:', updateErr.message);
+            // Continue - payment will still work
           }
         }
 
