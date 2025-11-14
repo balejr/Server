@@ -1739,12 +1739,12 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       // If paymentIntent is a string ID, retrieve it
       if (typeof paymentIntent === 'string') {
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent, {
-          expand: ['payment_method'] // Expand payment_method to get payment method ID
+          expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
         });
       } else if (paymentIntent && typeof paymentIntent === 'object' && !paymentIntent.payment_method) {
         // If PaymentIntent object doesn't have payment_method, retrieve with expansion
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent.id, {
-          expand: ['payment_method']
+          expand: ['payment_method', 'latest_charge'] // Expand latest_charge for Apple Pay detection
         });
       }
       
@@ -1752,7 +1752,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       if (paymentIntentId && paymentIntent?.id !== paymentIntentId) {
         console.log(`⚠️ PaymentIntent mismatch. Using provided paymentIntentId: ${paymentIntentId}`);
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-          expand: ['payment_method'] // Expand payment_method to get payment method ID
+          expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
         });
         
         // Note: When PaymentIntent succeeds, Stripe automatically pays the associated invoice
@@ -1764,7 +1764,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       // Fallback: retrieve PaymentIntent and find associated subscription
       console.log(`📝 Retrieving PaymentIntent: ${paymentIntentId}`);
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ['payment_method'] // Expand payment_method to get payment method ID
+        expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
       });
       
       // Try to find subscription from PaymentIntent metadata
@@ -2063,11 +2063,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     if (paymentIntentId) {
       console.log(`📝 Retrieving PaymentIntent for status check: ${paymentIntentId}`);
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ['payment_method'] // Expand payment_method to get payment method ID
+        expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
       });
     } else if (typeof paymentIntent === 'string') {
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent, {
-        expand: ['payment_method'] // Expand payment_method to get payment method ID
+        expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
       });
     }
     
@@ -2319,7 +2319,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             paymentStatus = 'pending';
         }
         
-        // Detect payment method type from PaymentIntent's payment_method object (more reliable than metadata)
+        // Detect payment method type from PaymentIntent's payment_method object and charge details
         // This ensures Apple Pay is properly detected even if metadata is missing
         if (paymentIntent.payment_method) {
           try {
@@ -2327,16 +2327,39 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
               ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
               : paymentIntent.payment_method;
             
-            // Check payment method type - Apple Pay uses 'card' type but can be identified by other means
-            // For now, rely on metadata which is set correctly by frontend
-            // If metadata is missing, default to 'stripe' for card payments
+            // Check if this was Apple Pay by looking at the charge's payment_method_details
+            // Apple Pay shows up as type 'card' but has payment_method_details.card.wallet.type === 'apple_pay'
+            let isApplePay = false;
+            if (paymentIntent.latest_charge) {
+              try {
+                const charge = typeof paymentIntent.latest_charge === 'string'
+                  ? await stripe.charges.retrieve(paymentIntent.latest_charge)
+                  : paymentIntent.latest_charge;
+                
+                // Apple Pay is detected via charge.payment_method_details.card.wallet.type === 'apple_pay'
+                if (charge.payment_method_details?.card?.wallet?.type === 'apple_pay') {
+                  isApplePay = true;
+                  console.log('🍎 Detected Apple Pay payment from charge details');
+                }
+              } catch (chargeErr) {
+                console.warn('⚠️ Could not retrieve charge details for Apple Pay detection:', chargeErr.message);
+              }
+            }
+            
             if (pm.type === 'card') {
-              // Card payment - could be Apple Pay or regular card
-              // Check metadata first, then use provided paymentMethod
-              finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+              // Card payment - check if it was Apple Pay
+              if (isApplePay) {
+                finalPaymentMethod = 'apple_pay';
+                console.log('✅ Payment method set to: apple_pay');
+              } else {
+                // Regular card payment - check metadata first, then use provided paymentMethod
+                finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+                console.log('💳 Payment method set to:', finalPaymentMethod);
+              }
             } else {
               // Other payment method types
               finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+              console.log('💳 Payment method set to:', finalPaymentMethod);
             }
           } catch (pmErr) {
             console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
@@ -2352,7 +2375,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // Legacy flow: retrieve payment intent only
     console.log(`📝 Retrieving PaymentIntent (legacy): ${paymentIntentId}`);
     paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-      expand: ['payment_method']
+      expand: ['payment_method', 'latest_charge'] // Expand latest_charge for Apple Pay detection
     });
     amount = paymentIntent.amount / 100;
     currency = paymentIntent.currency.toUpperCase();
@@ -2380,18 +2403,44 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         paymentStatus = 'pending';
     }
     
-    // Detect payment method type from PaymentIntent's payment_method object
+    // Detect payment method type from PaymentIntent's payment_method object and charge details
+    // This ensures Apple Pay is properly detected even if metadata is missing
     if (paymentIntent.payment_method) {
       try {
         const pm = typeof paymentIntent.payment_method === 'string' 
           ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
           : paymentIntent.payment_method;
         
+        // Check if this was Apple Pay by looking at the charge's payment_method_details
+        let isApplePay = false;
+        if (paymentIntent.latest_charge) {
+          try {
+            const charge = typeof paymentIntent.latest_charge === 'string'
+              ? await stripe.charges.retrieve(paymentIntent.latest_charge)
+              : paymentIntent.latest_charge;
+            
+            if (charge.payment_method_details?.card?.wallet?.type === 'apple_pay') {
+              isApplePay = true;
+              console.log('🍎 Detected Apple Pay payment from charge details (legacy flow)');
+            }
+          } catch (chargeErr) {
+            console.warn('⚠️ Could not retrieve charge details for Apple Pay detection:', chargeErr.message);
+          }
+        }
+        
         if (pm.type === 'card') {
-          // Card payment - check metadata first for Apple Pay vs regular card
-          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+          // Card payment - check if it was Apple Pay
+          if (isApplePay) {
+            finalPaymentMethod = 'apple_pay';
+            console.log('✅ Payment method set to: apple_pay (legacy flow)');
+          } else {
+            // Regular card payment - check metadata first
+            finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+            console.log('💳 Payment method set to:', finalPaymentMethod, '(legacy flow)');
+          }
         } else {
           finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+          console.log('💳 Payment method set to:', finalPaymentMethod, '(legacy flow)');
         }
       } catch (pmErr) {
         console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
