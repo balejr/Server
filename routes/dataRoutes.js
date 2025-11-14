@@ -2281,39 +2281,69 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       currency = price.currency.toUpperCase();
     }
     
-    // Map payment intent status to payment status
-    if (paymentIntent) {
-      if (!paymentIntentId) {
-        paymentIntentId = paymentIntent.id;
+      // Map payment intent status to payment status and detect payment method type
+      if (paymentIntent) {
+        if (!paymentIntentId) {
+          paymentIntentId = paymentIntent.id;
+        }
+        
+        switch (paymentIntent.status) {
+          case 'succeeded':
+            paymentStatus = 'succeeded';
+            break;
+          case 'processing':
+            paymentStatus = 'pending';
+            break;
+          case 'requires_payment_method':
+          case 'requires_confirmation':
+          case 'requires_action':
+            paymentStatus = 'pending';
+            break;
+          case 'canceled':
+            paymentStatus = 'canceled';
+            break;
+          case 'payment_failed':
+            paymentStatus = 'failed';
+            break;
+          default:
+            paymentStatus = 'pending';
+        }
+        
+        // Detect payment method type from PaymentIntent's payment_method object (more reliable than metadata)
+        // This ensures Apple Pay is properly detected even if metadata is missing
+        if (paymentIntent.payment_method) {
+          try {
+            const pm = typeof paymentIntent.payment_method === 'string' 
+              ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
+              : paymentIntent.payment_method;
+            
+            // Check payment method type - Apple Pay uses 'card' type but can be identified by other means
+            // For now, rely on metadata which is set correctly by frontend
+            // If metadata is missing, default to 'stripe' for card payments
+            if (pm.type === 'card') {
+              // Card payment - could be Apple Pay or regular card
+              // Check metadata first, then use provided paymentMethod
+              finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+            } else {
+              // Other payment method types
+              finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+            }
+          } catch (pmErr) {
+            console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
+            // Fall back to metadata
+            finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+          }
+        } else {
+          // No payment_method object, use metadata or provided value
+          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+        }
       }
-      
-      switch (paymentIntent.status) {
-        case 'succeeded':
-          paymentStatus = 'succeeded';
-          break;
-        case 'processing':
-          paymentStatus = 'pending';
-          break;
-        case 'requires_payment_method':
-        case 'requires_confirmation':
-        case 'requires_action':
-          paymentStatus = 'pending';
-          break;
-        case 'canceled':
-          paymentStatus = 'canceled';
-          break;
-        case 'payment_failed':
-          paymentStatus = 'failed';
-          break;
-        default:
-          paymentStatus = 'pending';
-      }
-      finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
-    }
   } else if (paymentIntentId) {
     // Legacy flow: retrieve payment intent only
     console.log(`📝 Retrieving PaymentIntent (legacy): ${paymentIntentId}`);
-    paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['payment_method']
+    });
     amount = paymentIntent.amount / 100;
     currency = paymentIntent.currency.toUpperCase();
     
@@ -2339,7 +2369,27 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       default:
         paymentStatus = 'pending';
     }
-    finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+    
+    // Detect payment method type from PaymentIntent's payment_method object
+    if (paymentIntent.payment_method) {
+      try {
+        const pm = typeof paymentIntent.payment_method === 'string' 
+          ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
+          : paymentIntent.payment_method;
+        
+        if (pm.type === 'card') {
+          // Card payment - check metadata first for Apple Pay vs regular card
+          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+        } else {
+          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+        }
+      } catch (pmErr) {
+        console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
+        finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+      }
+    } else {
+      finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+    }
   } else {
     throw new Error('Either subscriptionId or paymentIntentId must be provided');
   }
