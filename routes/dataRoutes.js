@@ -1430,8 +1430,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     // Create Subscription with payment_behavior: 'default_incomplete'
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
-    // Note: Apple Pay is automatically supported via PaymentIntent's automatic_payment_methods
-    // It should NOT be included in payment_method_types for subscriptions
+    // Include both 'card' and 'apple_pay' in payment_method_types to enable Apple Pay
     console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
@@ -1439,7 +1438,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       payment_behavior: 'default_incomplete',
       payment_settings: { 
         save_default_payment_method: 'on_subscription',
-        payment_method_types: ['card']
+        payment_method_types: ['card', 'apple_pay']
       },
       expand: ['latest_invoice.payment_intent'],
       metadata: {
@@ -1514,13 +1513,13 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             const currency = latestInvoice.currency || 'usd';
             
             // Create PaymentIntent for this invoice
-            // Use automatic_payment_methods to support Apple Pay and other payment methods
+            // Include both card and apple_pay payment methods explicitly
             // CRITICAL: Use setup_future_usage to automatically attach payment method to customer
             paymentIntent = await stripe.paymentIntents.create({
               amount: amount,
               currency: currency,
               customer: customer.id,
-              automatic_payment_methods: { enabled: true },
+              payment_method_types: ['card', 'apple_pay'],
               setup_future_usage: 'off_session', // Automatically attach payment method to customer when PaymentIntent succeeds
               metadata: {
                 userId: String(userId),
