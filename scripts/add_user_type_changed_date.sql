@@ -24,3 +24,4 @@ WHERE TABLE_SCHEMA = 'dbo'
   AND TABLE_NAME = 'UserProfile'
   AND COLUMN_NAME = 'UserTypeChangedDate';
 
+

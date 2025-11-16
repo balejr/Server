@@ -74,3 +74,4 @@ After adding the secret:
 - Test mode and Live mode have different webhook secrets
 - When going live, create a new webhook and use its secret
 
+

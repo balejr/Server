@@ -109,3 +109,4 @@ PRINT '  - current_period_end: End of current billing period';
 PRINT '';
 PRINT 'Note: These columns are nullable to support legacy PaymentIntent-based subscriptions.';
 
+
