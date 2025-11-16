@@ -1175,9 +1175,17 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       return sendErrorResponse(res, 500, 'Configuration Error', 'STRIPE_SECRET_KEY missing on server');
     }
 
-    if (!process.env.STRIPE_PRICE_ID) {
+    // Map billing intervals to Stripe Price IDs
+    const priceIdMap = {
+      monthly: process.env.STRIPE_PRICE_ID_MONTHLY || process.env.STRIPE_PRICE_ID,
+      semi_annual: process.env.STRIPE_PRICE_ID_SEMI_ANNUAL,
+      annual: process.env.STRIPE_PRICE_ID_ANNUAL
+    };
+
+    // Validate that at least monthly price ID exists
+    if (!priceIdMap.monthly) {
       return sendErrorResponse(res, 500, 'Configuration Error', 
-        'STRIPE_PRICE_ID missing on server. Please create a Stripe Product and Price first.');
+        'STRIPE_PRICE_ID_MONTHLY missing on server. Please configure Stripe Price IDs.');
     }
 
     // Validate userId
@@ -1188,7 +1196,20 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
     }
 
-    const { plan = 'premium', paymentMethod = 'stripe' } = req.body || {};
+    const { plan = 'premium', billingInterval = 'monthly', paymentMethod = 'stripe' } = req.body || {};
+    
+    // Validate billingInterval
+    if (!['monthly', 'semi_annual', 'annual'].includes(billingInterval)) {
+      return sendErrorResponse(res, 400, 'Validation Error', 
+        'billingInterval must be one of: monthly, semi_annual, annual');
+    }
+
+    // Get the correct Price ID based on billing interval
+    const priceId = priceIdMap[billingInterval];
+    if (!priceId) {
+      return sendErrorResponse(res, 500, 'Configuration Error', 
+        `STRIPE_PRICE_ID_${billingInterval.toUpperCase()} missing on server`);
+    }
     
     // Validate plan
     if (plan && typeof plan !== 'string') {
@@ -1432,10 +1453,10 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     // This creates an incomplete subscription and returns a PaymentIntent for the first payment
     // Note: Apple Pay is enabled on the PaymentIntent, not in subscription payment_settings
     // Apple Pay support comes through PaymentIntent's automatic_payment_methods or payment_method_types
-    console.log('🔄 Creating Stripe Subscription with Price ID:', process.env.STRIPE_PRICE_ID);
+    console.log(`🔄 Creating Stripe Subscription with Price ID: ${priceId} (${billingInterval})`);
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
-      items: [{ price: process.env.STRIPE_PRICE_ID }],
+      items: [{ price: priceId }],
       payment_behavior: 'default_incomplete',
       payment_settings: { 
         save_default_payment_method: 'on_subscription',
@@ -1445,6 +1466,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       metadata: {
         userId: String(userId),
         plan: plan,
+        billingInterval: billingInterval,
         paymentMethod: paymentMethod
       }
     });
@@ -1679,7 +1701,9 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       paymentIntentId: paymentIntent.id,
       subscriptionId: subscription.id,
       customerId: customer.id,
-      status: subscription.status
+      status: subscription.status,
+      billingInterval: billingInterval,
+      priceId: priceId
     });
   } catch (err) {
     return sendErrorResponse(res, 500, 'Initialization Failed', 
@@ -1844,6 +1868,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             
             console.log(`💾 Saving subscription ${subscription.id} to database for user ${req.user.userId}...`);
             console.log(`   Billing dates: start=${currentPeriodStart || 'NULL'}, end=${currentPeriodEnd || 'NULL'}`);
+            const billingInterval = subscription.metadata?.billingInterval || null;
             await updateSubscriptionInDatabase(
               req.user.userId,
               subscription.status,
@@ -1853,7 +1878,8 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
               subscription.id,
               customerId,
               currentPeriodStart,
-              currentPeriodEnd
+              currentPeriodEnd,
+              billingInterval
             );
             console.log(`✅ Subscription details saved to database`);
           } catch (saveErr) {
@@ -2023,7 +2049,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
 // Helper function to update subscription in database
 // Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
-async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd) {
+async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd, billingInterval = null) {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new Error('STRIPE_SECRET_KEY missing on server');
   }
@@ -2282,6 +2308,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       console.warn(`   Dates will be synced later via webhook or status endpoint`);
     } else {
       console.log(`✅ Both billing dates available: start=${currentPeriodStart}, end=${currentPeriodEnd}`);
+    }
+    
+    // Extract billingInterval from subscription metadata if not provided
+    if (!billingInterval && subscription.metadata?.billingInterval) {
+      billingInterval = subscription.metadata.billingInterval;
+      console.log(`📝 Retrieved billingInterval from subscription metadata: ${billingInterval}`);
     }
     
     // Get amount and currency from subscription price
@@ -2572,6 +2604,10 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (paymentIntentId) {
         updateFields.push('payment_intent_id = @paymentIntentId');
       }
+      if (billingInterval) {
+        updateFields.push('billing_interval = @billingInterval');
+        console.log(`   ✅ Will update billing_interval to: ${billingInterval}`);
+      }
       
       const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
       
@@ -2585,6 +2621,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
+      if (billingInterval) updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       
       await updateRequest.query(updateQuery);
       console.log(`✅ Step 2a complete: Subscription updated`);
@@ -2625,6 +2662,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         insertFields.push('payment_intent_id');
         insertValues.push('@paymentIntentId');
       }
+      if (billingInterval) {
+        insertFields.push('billing_interval');
+        insertValues.push('@billingInterval');
+        console.log(`   ✅ Including billing_interval: ${billingInterval}`);
+      }
       
       const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
       
@@ -2638,6 +2680,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
+      if (billingInterval) insertRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       
       await insertRequest.query(insertQuery);
     }
@@ -2728,7 +2771,8 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       subscriptionId,
       customerId,
       currentPeriodStart,
-      currentPeriodEnd
+      currentPeriodEnd,
+      billingInterval
     } = req.body || {};
     
     console.log(`[${timestamp}] 📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
@@ -2823,6 +2867,12 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
               : refreshedSubscription.customer.id;
             console.log(`📝 Retrieved customerId from Stripe: ${customerId}`);
           }
+          
+          // Extract billingInterval from subscription metadata if not provided
+          if (!billingInterval && refreshedSubscription.metadata?.billingInterval) {
+            billingInterval = refreshedSubscription.metadata.billingInterval;
+            console.log(`📝 Retrieved billingInterval from Stripe subscription metadata: ${billingInterval}`);
+          }
         } catch (refreshErr) {
           console.warn('⚠️ Could not refresh subscription from Stripe:', refreshErr.message);
           // Continue with provided dates (or null if not provided)
@@ -2832,6 +2882,7 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
 
     console.log(`[${timestamp}] 🔄 Calling updateSubscriptionInDatabase...`);
     console.log(`   Dates: start=${validatedPeriodStart || currentPeriodStart || 'NULL'}, end=${validatedPeriodEnd || currentPeriodEnd || 'NULL'}`);
+    console.log(`   billingInterval: ${billingInterval || 'NULL'}`);
     const result = await updateSubscriptionInDatabase(
       userId, 
       subscriptionStatus, 
@@ -2841,7 +2892,8 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       subscriptionId,
       customerId,
       validatedPeriodStart || currentPeriodStart,
-      validatedPeriodEnd || currentPeriodEnd
+      validatedPeriodEnd || currentPeriodEnd,
+      billingInterval
     );
     console.log(`[${timestamp}] ✅ updateSubscriptionInDatabase completed successfully`);
     return res.json(result);
@@ -3217,7 +3269,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                       : null,
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null
+                      : null,
+                    subscription.metadata?.billingInterval || null
                   );
           
           console.log(`✅ Subscription ${event.type} processed successfully`);
@@ -3250,7 +3303,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                       : null,
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null
+                      : null,
+                    subscription.metadata?.billingInterval || null
                   );
           
           console.log(`✅ Subscription deletion processed successfully`);
@@ -3292,7 +3346,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                       : null,
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null
+                      : null,
+                    subscription.metadata?.billingInterval || null
                   );
           
           console.log(`✅ Invoice payment succeeded processed successfully`);
@@ -3334,7 +3389,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                       : null,
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null
+                      : null,
+                    subscription.metadata?.billingInterval || null
                   );
           
           console.log(`✅ Invoice payment failed processed successfully`);
