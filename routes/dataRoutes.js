@@ -1712,6 +1712,64 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/data/customer-portal/create-session
+router.post('/customer-portal/create-session', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Customer portal session request received`);
+  
+  try {
+    const userId = req.user.userId || req.body.userId;
+    
+    // Validate userId
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+    }
+
+    const pool = getPool();
+    if (!pool) {
+      return sendErrorResponse(res, 500, 'Database Error', 'Database connection not available');
+    }
+
+    // Get customer_id from database
+    const customerRequest = pool.request();
+    customerRequest.input('userId', mssql.Int, parseInt(userId, 10));
+    const customerResult = await customerRequest.query(`
+      SELECT customer_id FROM [dbo].[user_subscriptions] 
+      WHERE UserId = @userId AND customer_id IS NOT NULL
+    `);
+
+    if (!customerResult.recordset.length || !customerResult.recordset[0].customer_id) {
+      return sendErrorResponse(res, 404, 'Not Found', 
+        'No Stripe customer found for this user. Please complete a payment first.');
+    }
+
+    const customerId = customerResult.recordset[0].customer_id;
+
+    // Create portal session
+    // return_url should point back to your app's subscription status screen
+    // For React Native, you can use a deep link or web URL
+    const returnUrl = req.body.returnUrl || 'https://www.hpapogee.com/subscription-status';
+    
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+
+    console.log(`✅ Created customer portal session: ${session.id} for customer ${customerId}`);
+
+    res.status(200).json({
+      url: session.url,
+      sessionId: session.id,
+    });
+  } catch (err) {
+    console.error('❌ Customer portal session creation failed:', err);
+    return sendErrorResponse(res, 500, 'Portal Error', 
+      err?.message || 'Failed to create customer portal session');
+  }
+});
+
 // POST /api/data/payments/confirm
 router.post('/payments/confirm', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -3394,6 +3452,183 @@ router.post('/webhooks/stripe', async (req, res) => {
                   );
           
           console.log(`✅ Invoice payment failed processed successfully`);
+        }
+        break;
+
+      case 'payment_method.attached':
+        {
+          const paymentMethod = event.data.object;
+          const customerId = paymentMethod.customer;
+          
+          if (!customerId) {
+            console.warn('⚠️ payment_method.attached webhook missing customer ID');
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing payment method attached for customer ${customerId}`);
+          
+          // Get userId from customer metadata or database
+          try {
+            const customer = await stripe.customers.retrieve(customerId);
+            const userId = customer.metadata?.userId;
+            
+            if (userId) {
+              console.log(`✅ Payment method ${paymentMethod.id} attached to customer ${customerId} (user ${userId})`);
+              // You can update your database here if needed to track payment methods
+            } else {
+              console.log(`ℹ️ Payment method attached but no userId in customer metadata`);
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve customer for payment_method.attached:', err.message);
+          }
+        }
+        break;
+
+      case 'payment_method.detached':
+        {
+          const paymentMethod = event.data.object;
+          const customerId = paymentMethod.customer;
+          
+          console.log(`🔄 Processing payment method detached: ${paymentMethod.id} from customer ${customerId || 'N/A'}`);
+          
+          if (customerId) {
+            try {
+              const customer = await stripe.customers.retrieve(customerId);
+              const userId = customer.metadata?.userId;
+              
+              if (userId) {
+                console.log(`✅ Payment method ${paymentMethod.id} detached from customer ${customerId} (user ${userId})`);
+                // You can update your database here if needed
+              }
+            } catch (err) {
+              console.warn('⚠️ Could not retrieve customer for payment_method.detached:', err.message);
+            }
+          }
+        }
+        break;
+
+      case 'customer.updated':
+        {
+          const customer = event.data.object;
+          const userId = customer.metadata?.userId;
+          
+          if (!userId) {
+            console.log(`ℹ️ customer.updated webhook - no userId in metadata, skipping database update`);
+            return res.json({ received: true });
+          }
+
+          console.log(`🔄 Processing customer update for user ${userId}`);
+          
+          // Update customer information in database if needed
+          // Note: Only update billing-related info, not authentication credentials
+          const pool = getPool();
+          if (pool) {
+            try {
+              // Sync email if it changed
+              if (customer.email) {
+                const updateRequest = pool.request();
+                updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
+                updateRequest.input('customerId', mssql.NVarChar(128), customer.id);
+                
+                // Update customer_id in user_subscriptions if it exists
+                await updateRequest.query(`
+                  UPDATE [dbo].[user_subscriptions] 
+                  SET customer_id = @customerId, updated_at = SYSDATETIMEOFFSET()
+                  WHERE UserId = @userId
+                `);
+                
+                console.log(`✅ Updated customer_id for user ${userId} in database`);
+              }
+            } catch (dbErr) {
+              console.warn('⚠️ Could not update customer in database:', dbErr.message);
+            }
+          }
+          
+          console.log(`✅ Customer update processed for user ${userId}`);
+        }
+        break;
+
+      case 'customer.tax_id.created':
+        {
+          const taxId = event.data.object;
+          const customerId = taxId.customer;
+          
+          console.log(`🔄 Processing tax ID created for customer ${customerId}`);
+          
+          try {
+            const customer = await stripe.customers.retrieve(customerId);
+            const userId = customer.metadata?.userId;
+            
+            if (userId) {
+              console.log(`✅ Tax ID ${taxId.id} created for customer ${customerId} (user ${userId})`);
+              // You can store tax ID information in your database if needed
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve customer for tax_id.created:', err.message);
+          }
+        }
+        break;
+
+      case 'customer.tax_id.deleted':
+        {
+          const taxId = event.data.object;
+          const customerId = taxId.customer;
+          
+          console.log(`🔄 Processing tax ID deleted for customer ${customerId}`);
+          
+          try {
+            const customer = await stripe.customers.retrieve(customerId);
+            const userId = customer.metadata?.userId;
+            
+            if (userId) {
+              console.log(`✅ Tax ID ${taxId.id} deleted for customer ${customerId} (user ${userId})`);
+              // You can update your database here if needed
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve customer for tax_id.deleted:', err.message);
+          }
+        }
+        break;
+
+      case 'customer.tax_id.updated':
+        {
+          const taxId = event.data.object;
+          const customerId = taxId.customer;
+          
+          console.log(`🔄 Processing tax ID updated for customer ${customerId}`);
+          
+          try {
+            const customer = await stripe.customers.retrieve(customerId);
+            const userId = customer.metadata?.userId;
+            
+            if (userId) {
+              console.log(`✅ Tax ID ${taxId.id} updated for customer ${customerId} (user ${userId})`);
+              // You can update your database here if needed
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not retrieve customer for tax_id.updated:', err.message);
+          }
+        }
+        break;
+
+      case 'billing_portal.configuration.created':
+        {
+          const configuration = event.data.object;
+          console.log(`ℹ️ Customer portal configuration created: ${configuration.id}`);
+        }
+        break;
+
+      case 'billing_portal.configuration.updated':
+        {
+          const configuration = event.data.object;
+          console.log(`ℹ️ Customer portal configuration updated: ${configuration.id}`);
+        }
+        break;
+
+      case 'billing_portal.session.created':
+        {
+          const session = event.data.object;
+          console.log(`ℹ️ Customer portal session created: ${session.id} for customer ${session.customer}`);
         }
         break;
 
