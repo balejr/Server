@@ -1749,8 +1749,12 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
 
     // Create portal session
     // return_url should point back to your app's subscription status screen
-    // For React Native, you can use a deep link or web URL
-    const returnUrl = req.body.returnUrl || 'https://www.hpapogee.com/subscription-status';
+    // For React Native, use a deep link that will open the app
+    // If returnUrl is provided, use it; otherwise use deep link
+    // Note: Stripe Dashboard can also have a default return URL configured
+    const returnUrl = req.body.returnUrl || 'acme://subscription-status';
+    
+    console.log(`📝 Creating portal session with return URL: ${returnUrl}`);
     
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
