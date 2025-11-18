@@ -3035,6 +3035,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         current_period_end,
         subscription_id,
         customer_id,
+        billing_interval,
         started_at,
         updated_at
       FROM [dbo].[user_subscriptions]
@@ -3069,6 +3070,8 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     // Format dates for response
     let nextBillingDate = null;
     let currentPeriodStart = null;
+    let billingInterval = subscription.billing_interval || null; // Initialize from database
+    let needsBillingIntervalUpdate = false;
     
     // Always fetch from Stripe for active/trialing subscriptions to ensure we have the latest billing dates
     // This ensures billing dates are always up-to-date, even if database values exist
@@ -3082,6 +3085,44 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
             expand: ['latest_invoice', 'items.data.price']
           });
+          
+          // Derive billing_interval from price ID if not in database or if it's incorrect
+          
+          if (stripeSubscription.items.data.length > 0) {
+            const currentPriceId = stripeSubscription.items.data[0].price.id;
+            const priceIdMap = {
+              [process.env.STRIPE_PRICE_ID_MONTHLY || process.env.STRIPE_PRICE_ID]: 'monthly',
+              [process.env.STRIPE_PRICE_ID_SEMI_ANNUAL]: 'semi_annual',
+              [process.env.STRIPE_PRICE_ID_ANNUAL]: 'annual'
+            };
+            
+            const derivedBillingInterval = priceIdMap[currentPriceId];
+            
+            if (derivedBillingInterval) {
+              // If database billing_interval doesn't match current price, update it
+              if (!billingInterval || billingInterval !== derivedBillingInterval) {
+                console.log(`📝 Billing interval mismatch - DB: ${billingInterval || 'NULL'}, Stripe: ${derivedBillingInterval}`);
+                billingInterval = derivedBillingInterval;
+                needsBillingIntervalUpdate = true;
+                
+                // Also update Stripe metadata if it's missing or incorrect
+                if (!stripeSubscription.metadata?.billingInterval || 
+                    stripeSubscription.metadata.billingInterval !== derivedBillingInterval) {
+                  try {
+                    await stripe.subscriptions.update(stripeSubscription.id, {
+                      metadata: {
+                        ...stripeSubscription.metadata,
+                        billingInterval: derivedBillingInterval
+                      }
+                    });
+                    console.log(`✅ Updated Stripe subscription metadata with billingInterval: ${derivedBillingInterval}`);
+                  } catch (metaErr) {
+                    console.warn('⚠️ Could not update Stripe metadata:', metaErr.message);
+                  }
+                }
+              }
+            }
+          }
           
           // First try to get dates from subscription object
           if (stripeSubscription.current_period_end) {
@@ -3156,18 +3197,28 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
             }
           }
           
-          // Save dates to database if we found them
-          if (nextBillingDate) {
+          // Save dates and billing_interval to database if we found them or if billing_interval needs update
+          if (nextBillingDate || needsBillingIntervalUpdate) {
             try {
               const updateRequest = pool.request();
               updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
-              updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
               
-              const updateFields = ['current_period_end = @periodEnd', 'updated_at = SYSDATETIMEOFFSET()'];
+              const updateFields = ['updated_at = SYSDATETIMEOFFSET()'];
+              
+              if (nextBillingDate) {
+                updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
+                updateFields.push('current_period_end = @periodEnd');
+              }
               
               if (currentPeriodStart) {
                 updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
                 updateFields.push('current_period_start = @periodStart');
+              }
+              
+              if (needsBillingIntervalUpdate && billingInterval) {
+                updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
+                updateFields.push('billing_interval = @billingInterval');
+                console.log(`✅ Will update billing_interval to: ${billingInterval}`);
               }
               
               await updateRequest.query(`
@@ -3176,10 +3227,15 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
                 WHERE UserId = @userId
               `);
               
-              console.log(`✅ Synced subscription dates from Stripe to database`);
+              if (nextBillingDate) {
+                console.log(`✅ Synced subscription dates from Stripe to database`);
+              }
+              if (needsBillingIntervalUpdate) {
+                console.log(`✅ Updated billing_interval in database to: ${billingInterval}`);
+              }
             } catch (dbErr) {
-              console.warn('⚠️ Could not save dates to database (non-critical):', dbErr.message);
-              // Continue - dates are still available for this response
+              console.warn('⚠️ Could not save subscription data to database (non-critical):', dbErr.message);
+              // Continue - data is still available for this response
             }
           }
         }
@@ -3228,6 +3284,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       nextBillingDate: nextBillingDate,
       subscriptionId: subscription.subscription_id || null,
       customerId: subscription.customer_id || null,
+      billingInterval: billingInterval, // Include billing interval in response
       hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
       startedAt: subscription.started_at ? (subscription.started_at instanceof Date ? subscription.started_at.toISOString() : new Date(subscription.started_at).toISOString()) : null,
       updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
