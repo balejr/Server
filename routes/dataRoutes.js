@@ -2375,10 +2375,44 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     }
     
     // Get amount and currency from subscription price
+    let currentPriceId = null;
     if (subscription.items.data.length > 0) {
       const price = subscription.items.data[0].price;
+      currentPriceId = price.id;
       amount = price.unit_amount / 100;
       currency = price.currency.toUpperCase();
+    }
+    
+    // If billingInterval is still missing, derive it from the current price ID
+    // This handles cases where users upgrade/downgrade in customer portal and metadata isn't updated
+    if (!billingInterval && currentPriceId) {
+      const priceIdMap = {
+        [process.env.STRIPE_PRICE_ID_MONTHLY || process.env.STRIPE_PRICE_ID]: 'monthly',
+        [process.env.STRIPE_PRICE_ID_SEMI_ANNUAL]: 'semi_annual',
+        [process.env.STRIPE_PRICE_ID_ANNUAL]: 'annual'
+      };
+      
+      billingInterval = priceIdMap[currentPriceId] || null;
+      
+      if (billingInterval) {
+        console.log(`📝 Determined billingInterval from price ID ${currentPriceId}: ${billingInterval}`);
+        
+        // Update subscription metadata with correct billing interval to keep it in sync
+        try {
+          await stripe.subscriptions.update(subscription.id, {
+            metadata: {
+              ...subscription.metadata,
+              billingInterval: billingInterval
+            }
+          });
+          console.log(`✅ Updated subscription metadata with billingInterval: ${billingInterval}`);
+        } catch (updateErr) {
+          console.warn('⚠️ Could not update subscription metadata with billingInterval:', updateErr.message);
+          // Continue - billingInterval will still be saved to database
+        }
+      } else {
+        console.warn(`⚠️ Could not determine billingInterval from price ID ${currentPriceId} - price ID not found in mapping`);
+      }
     }
     
       // Map payment intent status to payment status and detect payment method type
@@ -3303,7 +3337,7 @@ router.post('/webhooks/stripe', async (req, res) => {
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
         {
-          const subscription = event.data.object;
+          let subscription = event.data.object;
           const userId = subscription.metadata?.userId;
           
           if (!userId) {
@@ -3313,7 +3347,20 @@ router.post('/webhooks/stripe', async (req, res) => {
 
           console.log(`🔄 Processing subscription ${event.type} for user ${userId}`);
           
+          // Retrieve subscription with expanded items to get price details
+          // This ensures updateSubscriptionInDatabase can derive billingInterval from price ID if metadata is missing
+          try {
+            subscription = await stripe.subscriptions.retrieve(subscription.id, {
+              expand: ['items.data.price', 'latest_invoice.payment_intent']
+            });
+            console.log(`📝 Retrieved subscription with expanded items for billingInterval derivation`);
+          } catch (retrieveErr) {
+            console.warn('⚠️ Could not retrieve subscription with expanded items:', retrieveErr.message);
+            // Continue with event data object - updateSubscriptionInDatabase will try to retrieve it
+          }
+          
           // Update subscription in database
+          // billingInterval will be derived from price ID if not in metadata
                   await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
@@ -3379,8 +3426,10 @@ router.post('/webhooks/stripe', async (req, res) => {
             return res.json({ received: true });
           }
 
-          // Retrieve subscription to get userId
-          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          // Retrieve subscription to get userId and price details
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+            expand: ['items.data.price']
+          });
           const userId = subscription.metadata?.userId;
           
           if (!userId) {
@@ -3391,6 +3440,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing invoice payment succeeded for user ${userId}, subscription ${subscriptionId}`);
           
           // Update subscription - payment succeeded means subscription should be active
+          // billingInterval will be derived from price ID if not in metadata
                   await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
@@ -3422,8 +3472,10 @@ router.post('/webhooks/stripe', async (req, res) => {
             return res.json({ received: true });
           }
 
-          // Retrieve subscription to get userId
-          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          // Retrieve subscription to get userId and price details
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+            expand: ['items.data.price']
+          });
           const userId = subscription.metadata?.userId;
           
           if (!userId) {
@@ -3434,6 +3486,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing invoice payment failed for user ${userId}, subscription ${subscriptionId}`);
           
           // Update subscription status - payment failed might set status to past_due
+          // billingInterval will be derived from price ID if not in metadata
                   await updateSubscriptionInDatabase(
                     userId,
                     subscription.status, // Could be 'past_due' or 'unpaid'
