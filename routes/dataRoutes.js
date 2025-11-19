@@ -1156,52 +1156,6 @@ function mapPaymentStatusToDatabase(status) {
   }
 }
 
-// Helper function to map billing interval from API format to database format
-// API uses: 'monthly', 'semi_annual', 'annual'
-// Database expects: 'month', '6_months', 'year'
-function mapBillingIntervalToDatabase(billingInterval) {
-  if (!billingInterval) return null;
-  
-  const mapping = {
-    'monthly': 'month',
-    'semi_annual': '6_months',
-    'annual': 'year'
-  };
-  
-  // If already in database format, return as-is
-  if (mapping[billingInterval]) {
-    return mapping[billingInterval];
-  }
-  
-  // If already correct format, return as-is
-  if (['month', '6_months', 'year'].includes(billingInterval)) {
-    return billingInterval;
-  }
-  
-  // Default: return null (will be NULL in database)
-  console.warn(`⚠️ Unknown billingInterval format: ${billingInterval}, returning null`);
-  return null;
-}
-
-// Helper function to map subscription status from Stripe format to database format
-// Database CHECK constraint expects: 'active', 'canceled', 'expired', 'incomplete', 'past_due'
-function mapSubscriptionStatusToDatabase(status) {
-  if (!status) return 'incomplete';
-  
-  const mapping = {
-    'active': 'active',
-    'trialing': 'active', // Treat trialing as active for database
-    'canceled': 'canceled',
-    'cancelled': 'canceled', // Handle both spellings
-    'past_due': 'past_due',
-    'unpaid': 'past_due', // Map unpaid to past_due
-    'incomplete': 'incomplete',
-    'expired': 'expired'
-  };
-  
-  return mapping[status] || 'incomplete'; // Default to incomplete for unknown statuses
-}
-
 // Helper function for input validation
 function validateUserId(userId) {
   if (!userId) {
@@ -2383,10 +2337,6 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   let paymentStatus = 'processing'; // Default to 'processing' (database CHECK constraint value)
   // Map payment method to database value (stripe → card)
   let finalPaymentMethod = mapPaymentMethodToDatabase(paymentMethod || 'card');
-  
-  // Map subscription status to database CHECK constraint values
-  const databaseSubscriptionStatus = mapSubscriptionStatusToDatabase(subscriptionStatus);
-  console.log(`📝 Mapped subscription status: ${subscriptionStatus} → ${databaseSubscriptionStatus}`);
 
   // If subscriptionId is provided, retrieve subscription (new flow)
   if (subscriptionId) {
@@ -2838,8 +2788,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // Map subscription status to determine if user should be Premium
     // active, trialing = Premium; canceled, past_due, incomplete = check payment status
     // If cancellation_scheduled is true, check if period has ended
-    // Note: Use original subscriptionStatus for trialing check, databaseSubscriptionStatus for database operations
-    const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing' || databaseSubscriptionStatus === 'active';
+    const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
     
     // Check if period has ended for canceled subscriptions
     let periodEnded = false;
@@ -2868,7 +2817,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // Downgrade to Free if:
     // - Status is canceled or past_due, OR
     // - Cancellation is scheduled AND period has ended
-    const shouldDowngrade = (databaseSubscriptionStatus === 'canceled' || databaseSubscriptionStatus === 'past_due') ||
+    const shouldDowngrade = (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ||
                             (cancellationScheduled === true && periodEnded);
     const newUserType = shouldBePremium ? 'Premium' : 
                        shouldDowngrade ? 'Free' : currentUserType;
@@ -2961,13 +2910,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         updateFields.push('payment_intent_id = @paymentIntentId');
       }
       if (billingInterval) {
-        const dbBillingInterval = mapBillingIntervalToDatabase(billingInterval);
-        if (dbBillingInterval) {
-          updateFields.push('billing_interval = @billingInterval');
-          console.log(`   ✅ Will update billing_interval to: ${dbBillingInterval} (mapped from ${billingInterval})`);
-        } else {
-          console.warn(`   ⚠️ Skipping billing_interval update - invalid format: ${billingInterval}`);
-        }
+        updateFields.push('billing_interval = @billingInterval');
+        console.log(`   ✅ Will update billing_interval to: ${billingInterval}`);
       }
       if (cancellationScheduled !== null) {
         updateFields.push('cancellation_scheduled = @cancellationScheduled');
@@ -2979,19 +2923,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       const updateRequest = new mssql.Request(transaction);
       updateRequest.input('userId', mssql.Int, userIdInt);
       updateRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
-      updateRequest.input('status', mssql.NVarChar(32), databaseSubscriptionStatus);
+      updateRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) updateRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
-      if (billingInterval) {
-        const dbBillingInterval = mapBillingIntervalToDatabase(billingInterval);
-        if (dbBillingInterval) {
-          updateRequest.input('billingInterval', mssql.NVarChar(32), dbBillingInterval);
-        }
-      }
+      if (billingInterval) updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       if (cancellationScheduled !== null) updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await updateRequest.query(updateQuery);
@@ -3034,14 +2973,9 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         insertValues.push('@paymentIntentId');
       }
       if (billingInterval) {
-        const dbBillingInterval = mapBillingIntervalToDatabase(billingInterval);
-        if (dbBillingInterval) {
-          insertFields.push('billing_interval');
-          insertValues.push('@billingInterval');
-          console.log(`   ✅ Including billing_interval: ${dbBillingInterval} (mapped from ${billingInterval})`);
-        } else {
-          console.warn(`   ⚠️ Skipping billing_interval insert - invalid format: ${billingInterval}`);
-        }
+        insertFields.push('billing_interval');
+        insertValues.push('@billingInterval');
+        console.log(`   ✅ Including billing_interval: ${billingInterval}`);
       }
       if (cancellationScheduled !== null) {
         insertFields.push('cancellation_scheduled');
@@ -3054,19 +2988,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       const insertRequest = new mssql.Request(transaction);
       insertRequest.input('userId', mssql.Int, userIdInt);
       insertRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
-      insertRequest.input('status', mssql.NVarChar(32), databaseSubscriptionStatus);
+      insertRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) insertRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
-      if (billingInterval) {
-        const dbBillingInterval = mapBillingIntervalToDatabase(billingInterval);
-        if (dbBillingInterval) {
-          insertRequest.input('billingInterval', mssql.NVarChar(32), dbBillingInterval);
-        }
-      }
+      if (billingInterval) insertRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       if (cancellationScheduled !== null) insertRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await insertRequest.query(insertQuery);
@@ -3103,13 +3032,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     await transaction.commit();
     console.log('✅ Transaction committed');
 
-    console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${databasePlanCode} - ${databaseSubscriptionStatus}`);
+    console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${databasePlanCode} - ${subscriptionStatus}`);
     console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}, Method: ${finalPaymentMethod}`);
 
     return { 
       ok: true, 
       userId: userIdInt, 
-      subscriptionStatus: databaseSubscriptionStatus, 
+      subscriptionStatus, 
       plan: databasePlanCode, 
       paymentIntentId: paymentIntentId || null,
       subscriptionId: subscriptionId || null,
@@ -3550,14 +3479,9 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
               }
               
               if (needsBillingIntervalUpdate && billingInterval) {
-                const dbBillingInterval = mapBillingIntervalToDatabase(billingInterval);
-                if (dbBillingInterval) {
-                  updateRequest.input('billingInterval', mssql.NVarChar(32), dbBillingInterval);
-                  updateFields.push('billing_interval = @billingInterval');
-                  console.log(`✅ Will update billing_interval to: ${dbBillingInterval} (mapped from ${billingInterval})`);
-                } else {
-                  console.warn(`⚠️ Skipping billing_interval update - invalid format: ${billingInterval}`);
-                }
+                updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
+                updateFields.push('billing_interval = @billingInterval');
+                console.log(`✅ Will update billing_interval to: ${billingInterval}`);
               }
               
               if (needsCancellationUpdate) {
@@ -3777,7 +3701,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           await updateSubscriptionInDatabase(
                     userId,
-                    mapSubscriptionStatusToDatabase(subscription.status),
+                    subscription.status,
                     mappedPlan,
                     subscription.latest_invoice?.payment_intent?.id || null,
                     mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
@@ -3869,7 +3793,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           await updateSubscriptionInDatabase(
                     userId,
-                    mapSubscriptionStatusToDatabase(subscription.status),
+                    subscription.status,
                     mappedPlan,
                     invoice.payment_intent?.id || null,
                     mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
@@ -3921,7 +3845,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           await updateSubscriptionInDatabase(
                     userId,
-                    mapSubscriptionStatusToDatabase(subscription.status), // Could be 'past_due' or 'unpaid'
+                    subscription.status, // Could be 'past_due' or 'unpaid'
                     mappedPlan,
                     invoice.payment_intent?.id || null,
                     mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
