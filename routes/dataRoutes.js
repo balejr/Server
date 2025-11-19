@@ -1747,43 +1747,124 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
 
     const customerId = customerResult.recordset[0].customer_id;
 
-    // Verify customer has a default payment method before creating portal session
-    // This ensures the portal can process prorated charges when upgrading/downgrading
+    // CRITICAL: Ensure customer has a default payment method before creating portal session
+    // This is required for Customer Portal to process prorated charges when upgrading/downgrading
     try {
       const customer = await stripe.customers.retrieve(customerId, {
         expand: ['invoice_settings.default_payment_method']
       });
       
       // Check if customer has a default payment method
-      const defaultPaymentMethod = customer.invoice_settings?.default_payment_method;
+      let defaultPaymentMethod = customer.invoice_settings?.default_payment_method;
       
       if (!defaultPaymentMethod) {
-        // Check if customer has any payment methods attached
-        const paymentMethods = await stripe.paymentMethods.list({
+        console.log(`🔧 Customer ${customerId} has no default payment method - attempting to repair...`);
+        
+        // Strategy 1: Check if customer has any payment methods attached
+        let paymentMethods = await stripe.paymentMethods.list({
           customer: customerId,
           type: 'card',
         });
         
+        // Strategy 2: If no payment methods found, check subscription's latest invoice for payment method
         if (paymentMethods.data.length === 0) {
-          console.warn(`⚠️ Customer ${customerId} has no payment methods attached`);
+          console.log(`📝 No payment methods found - checking subscription invoices...`);
+          
+          // Get customer's active subscriptions
+          const subscriptions = await stripe.subscriptions.list({
+            customer: customerId,
+            status: 'all',
+            limit: 10,
+          });
+          
+          // Check latest invoice from each subscription for payment methods
+          for (const sub of subscriptions.data) {
+            if (sub.latest_invoice) {
+              try {
+                const invoice = await stripe.invoices.retrieve(sub.latest_invoice, {
+                  expand: ['payment_intent.payment_method']
+                });
+                
+                // Check PaymentIntent for payment method
+                if (invoice.payment_intent) {
+                  const pi = typeof invoice.payment_intent === 'string'
+                    ? await stripe.paymentIntents.retrieve(invoice.payment_intent, {
+                        expand: ['payment_method']
+                      })
+                    : invoice.payment_intent;
+                  
+                  if (pi.payment_method) {
+                    const pmId = typeof pi.payment_method === 'string' 
+                      ? pi.payment_method 
+                      : pi.payment_method.id;
+                    
+                    console.log(`📎 Found payment method ${pmId} from subscription ${sub.id} invoice`);
+                    
+                    // Try to attach this payment method
+                    try {
+                      const pm = await stripe.paymentMethods.retrieve(pmId);
+                      if (!pm.customer || pm.customer !== customerId) {
+                        await stripe.paymentMethods.attach(pmId, {
+                          customer: customerId
+                        });
+                        console.log(`✅ Attached payment method ${pmId} to customer`);
+                      }
+                      paymentMethods.data.push(pm);
+                      break; // Found one, stop searching
+                    } catch (attachErr) {
+                      if (attachErr.code === 'payment_method_already_attached') {
+                        // Payment method already attached to this customer
+                        const pm = await stripe.paymentMethods.retrieve(pmId);
+                        paymentMethods.data.push(pm);
+                        break;
+                      }
+                      console.warn(`⚠️ Could not attach payment method from invoice:`, attachErr.message);
+                    }
+                  }
+                }
+              } catch (invoiceErr) {
+                console.warn(`⚠️ Could not retrieve invoice ${sub.latest_invoice}:`, invoiceErr.message);
+              }
+            }
+          }
+        }
+        
+        if (paymentMethods.data.length === 0) {
+          console.error(`❌ Customer ${customerId} has no payment methods and none found in invoices`);
           return sendErrorResponse(res, 400, 'Payment Method Required', 
-            'Please add a payment method before managing your subscription. Complete a payment first to add a payment method.');
+            'No payment method found for your account. Please complete a new payment to add a payment method, then try again.');
         }
         
         // Set the first payment method as default
-        console.log(`📝 Setting payment method ${paymentMethods.data[0].id} as default for customer ${customerId}`);
+        const pmToSet = paymentMethods.data[0];
+        console.log(`📝 Setting payment method ${pmToSet.id} as default for customer ${customerId}`);
         await stripe.customers.update(customerId, {
           invoice_settings: {
-            default_payment_method: paymentMethods.data[0].id
+            default_payment_method: pmToSet.id
           }
         });
-        console.log(`✅ Set default payment method for customer ${customerId}`);
+        console.log(`✅ Set default payment method ${pmToSet.id} for customer ${customerId}`);
+        defaultPaymentMethod = pmToSet.id;
       } else {
-        console.log(`✅ Customer ${customerId} has default payment method: ${typeof defaultPaymentMethod === 'string' ? defaultPaymentMethod : defaultPaymentMethod.id}`);
+        const pmId = typeof defaultPaymentMethod === 'string' ? defaultPaymentMethod : defaultPaymentMethod.id;
+        console.log(`✅ Customer ${customerId} has default payment method: ${pmId}`);
+        
+        // Verify the payment method is still valid
+        try {
+          const pm = await stripe.paymentMethods.retrieve(pmId);
+          if (pm.customer !== customerId) {
+            console.warn(`⚠️ Default payment method ${pmId} not attached to customer ${customerId} - repairing...`);
+            await stripe.paymentMethods.attach(pmId, { customer: customerId });
+            console.log(`✅ Repaired payment method attachment`);
+          }
+        } catch (pmErr) {
+          console.warn(`⚠️ Could not verify default payment method:`, pmErr.message);
+        }
       }
     } catch (customerErr) {
-      console.warn(`⚠️ Could not verify customer payment method (non-critical):`, customerErr.message);
-      // Continue anyway - portal might still work
+      console.error(`❌ Error ensuring customer payment method:`, customerErr.message);
+      return sendErrorResponse(res, 500, 'Payment Method Error', 
+        'Could not verify payment method. Please try again or contact support.');
     }
 
     // Create portal session
@@ -1990,10 +2071,75 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         })(); // Fire and forget - don't await
       }
       
-      // If PaymentIntent succeeded, handle invoice payment and payment method attachment
-      // Do these operations asynchronously after sending response to avoid timeout
+      // CRITICAL: Ensure payment method is attached and set as default BEFORE sending response
+      // This is required for Customer Portal to work properly when upgrading/downgrading
+      if (paymentIntent?.status === 'succeeded' && subscription.id) {
+        const customerId = typeof subscription.customer === 'string' 
+          ? subscription.customer 
+          : subscription.customer?.id;
+        
+        // Extract payment method ID - handle both string ID and expanded object
+        let paymentMethodId = null;
+        if (paymentIntent.payment_method) {
+          paymentMethodId = typeof paymentIntent.payment_method === 'string' 
+            ? paymentIntent.payment_method 
+            : paymentIntent.payment_method.id;
+        }
+        
+        // Ensure payment method is attached and set as default (synchronously)
+        if (paymentMethodId && customerId) {
+          try {
+            console.log(`🔧 Ensuring payment method ${paymentMethodId} is attached to customer ${customerId}...`);
+            
+            // Wait a moment for Stripe to process automatic attachment
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            // Check if payment method is attached
+            const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+            
+            if (paymentMethod.customer !== customerId) {
+              // Payment method not attached - attach it manually
+              console.log(`📎 Attaching payment method ${paymentMethodId} to customer ${customerId}...`);
+              try {
+                await stripe.paymentMethods.attach(paymentMethodId, {
+                  customer: customerId
+                });
+                console.log(`✅ Payment method attached to customer`);
+              } catch (attachErr) {
+                if (attachErr.code === 'payment_method_already_attached') {
+                  console.log(`ℹ️ Payment method already attached (race condition)`);
+                } else {
+                  console.warn(`⚠️ Could not attach payment method:`, attachErr.message);
+                  // Continue - might be attached via webhook
+                }
+              }
+            }
+            
+            // Set as default payment method (critical for Customer Portal)
+            try {
+              await stripe.customers.update(customerId, {
+                invoice_settings: {
+                  default_payment_method: paymentMethodId
+                }
+              });
+              console.log(`✅ Payment method set as default for customer ${customerId}`);
+            } catch (updateErr) {
+              console.warn(`⚠️ Could not set payment method as default:`, updateErr.message);
+              // This is critical - log but continue
+            }
+          } catch (pmErr) {
+            console.error(`❌ Error ensuring payment method attachment:`, pmErr.message);
+            // Log error but don't fail the response - webhook might handle it
+          }
+        } else {
+          console.warn(`⚠️ Missing paymentMethodId or customerId - cannot ensure attachment`);
+          console.warn(`   paymentMethodId: ${paymentMethodId}, customerId: ${customerId}`);
+        }
+      }
+      
+      // Handle invoice payment in background (non-blocking)
       if (paymentIntent?.status === 'succeeded') {
-        // Run these operations in background (don't await - send response first)
+        // Run invoice payment in background (don't await - send response first)
         (async () => {
           try {
             const customerId = typeof subscription.customer === 'string' 
@@ -2012,60 +2158,8 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             // via 'setup_future_usage: off_session' on PaymentIntent and 'save_default_payment_method: on_subscription' on subscription.
             // When PaymentIntent succeeds with setup_future_usage, Stripe automatically attaches the payment method to the customer.
             
-            // 1. Check if payment method is attached and set as default
-            if (paymentMethodId && customerId) {
-              try {
-                // Wait a moment for Stripe to process the automatic attachment
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-                
-                if (paymentMethod.customer === customerId) {
-                  console.log(`✅ Payment method ${paymentMethodId} attached to customer ${customerId}`);
-                  
-                  // Set as default payment method for customer
-                  try {
-                    await stripe.customers.update(customerId, {
-                      invoice_settings: {
-                        default_payment_method: paymentMethodId
-                      }
-                    });
-                    console.log(`✅ Payment method set as default for customer ${customerId}`);
-                  } catch (updateErr) {
-                    console.warn('⚠️ Could not set payment method as default:', updateErr.message);
-                  }
-                } else {
-                  // Payment method not attached yet - this can happen if setup_future_usage didn't work
-                  // Try to attach it manually (only if it wasn't used in a different PaymentIntent)
-                  console.log(`ℹ️ Payment method ${paymentMethodId} not attached to customer ${customerId}`);
-                  console.log(`   Attempting to attach...`);
-                  
-                  try {
-                    await stripe.paymentMethods.attach(paymentMethodId, {
-                      customer: customerId
-                    });
-                    console.log(`✅ Successfully attached payment method to customer`);
-                    
-                    // Set as default
-                    await stripe.customers.update(customerId, {
-                      invoice_settings: {
-                        default_payment_method: paymentMethodId
-                      }
-                    });
-                    console.log(`✅ Payment method set as default`);
-                  } catch (attachErr) {
-                    if (attachErr.message?.includes('previously used') || attachErr.message?.includes('may not be used again')) {
-                      console.log(`ℹ️ Payment method was already used - Stripe will handle attachment automatically`);
-                      console.log(`   This is expected with setup_future_usage - attachment happens asynchronously`);
-                    } else {
-                      console.warn('⚠️ Could not attach payment method:', attachErr.message);
-                    }
-                  }
-                }
-              } catch (retrieveErr) {
-                console.warn('⚠️ Could not retrieve payment method:', retrieveErr.message);
-              }
-            }
+            // Payment method attachment is now handled synchronously above
+            // This background task only handles invoice payment
             
             // 2. Pay invoice - Stripe should handle payment method attachment automatically
             if (subscription.latest_invoice) {
