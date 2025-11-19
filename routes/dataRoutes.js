@@ -1747,6 +1747,45 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
 
     const customerId = customerResult.recordset[0].customer_id;
 
+    // Verify customer has a default payment method before creating portal session
+    // This ensures the portal can process prorated charges when upgrading/downgrading
+    try {
+      const customer = await stripe.customers.retrieve(customerId, {
+        expand: ['invoice_settings.default_payment_method']
+      });
+      
+      // Check if customer has a default payment method
+      const defaultPaymentMethod = customer.invoice_settings?.default_payment_method;
+      
+      if (!defaultPaymentMethod) {
+        // Check if customer has any payment methods attached
+        const paymentMethods = await stripe.paymentMethods.list({
+          customer: customerId,
+          type: 'card',
+        });
+        
+        if (paymentMethods.data.length === 0) {
+          console.warn(`⚠️ Customer ${customerId} has no payment methods attached`);
+          return sendErrorResponse(res, 400, 'Payment Method Required', 
+            'Please add a payment method before managing your subscription. Complete a payment first to add a payment method.');
+        }
+        
+        // Set the first payment method as default
+        console.log(`📝 Setting payment method ${paymentMethods.data[0].id} as default for customer ${customerId}`);
+        await stripe.customers.update(customerId, {
+          invoice_settings: {
+            default_payment_method: paymentMethods.data[0].id
+          }
+        });
+        console.log(`✅ Set default payment method for customer ${customerId}`);
+      } else {
+        console.log(`✅ Customer ${customerId} has default payment method: ${typeof defaultPaymentMethod === 'string' ? defaultPaymentMethod : defaultPaymentMethod.id}`);
+      }
+    } catch (customerErr) {
+      console.warn(`⚠️ Could not verify customer payment method (non-critical):`, customerErr.message);
+      // Continue anyway - portal might still work
+    }
+
     // Create portal session
     // return_url should point back to your app's subscription status screen
     // For React Native, use a deep link that will open the app
