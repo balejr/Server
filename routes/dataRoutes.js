@@ -1118,6 +1118,23 @@ function mapPlanToDatabaseCode(plan, billingInterval = null) {
   return 'monthly';
 }
 
+function getPriceIdForInterval(interval) {
+  if (!interval) {
+    throw new Error('billingInterval is required');
+  }
+  const normalized = interval.toLowerCase();
+  const priceIdMap = {
+    monthly: process.env.STRIPE_PRICE_ID_MONTHLY || process.env.STRIPE_PRICE_ID,
+    semi_annual: process.env.STRIPE_PRICE_ID_SEMI_ANNUAL,
+    annual: process.env.STRIPE_PRICE_ID_ANNUAL,
+  };
+  const priceId = priceIdMap[normalized];
+  if (!priceId) {
+    throw new Error(`Missing Stripe price ID for interval "${normalized}". Please configure STRIPE_PRICE_ID_${normalized === 'semi_annual' ? 'SEMI_ANNUAL' : normalized.toUpperCase()}.`);
+  }
+  return priceId;
+}
+
 // Helper function to map payment method to database values
 // Maps 'stripe' to 'card' (database expects 'card' or 'apple_pay')
 function mapPaymentMethodToDatabase(method) {
@@ -1961,6 +1978,214 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
     console.error('❌ Customer portal session creation failed:', err);
     return sendErrorResponse(res, 500, 'Portal Error', 
       err?.message || 'Failed to create customer portal session');
+  }
+});
+
+router.post('/users/subscription/cancel', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Subscription cancellation request received`);
+
+  try {
+    if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+      return sendErrorResponse(res, 500, 'Configuration Error', 'Stripe not configured on server');
+    }
+
+    const userId = req.user.userId;
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+    }
+
+    const { subscriptionId: providedSubscriptionId, cancelAtPeriodEnd = true } = req.body || {};
+
+    const pool = getPool();
+    if (!pool) {
+      return sendErrorResponse(res, 500, 'Database Error', 'Database connection not available');
+    }
+
+    let subscriptionId = providedSubscriptionId;
+    if (!subscriptionId) {
+      const subscriptionRequest = pool.request();
+      subscriptionRequest.input('userId', mssql.Int, parseInt(userId, 10));
+      const subscriptionResult = await subscriptionRequest.query(`
+        SELECT TOP 1 subscription_id
+        FROM [dbo].[user_subscriptions]
+        WHERE UserId = @userId AND subscription_id IS NOT NULL
+        ORDER BY updated_at DESC
+      `);
+      subscriptionId = subscriptionResult.recordset[0]?.subscription_id || null;
+    }
+
+    if (!subscriptionId) {
+      return sendErrorResponse(res, 404, 'Subscription Not Found', 'No Stripe subscription is associated with this account.');
+    }
+
+    const stripeSubscription = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: Boolean(cancelAtPeriodEnd),
+    });
+
+    try {
+      const paymentIntentId =
+        typeof stripeSubscription.latest_invoice?.payment_intent === 'object'
+          ? stripeSubscription.latest_invoice?.payment_intent?.id
+          : stripeSubscription.latest_invoice?.payment_intent || null;
+
+      await updateSubscriptionInDatabase(
+        userId,
+        stripeSubscription.status,
+        stripeSubscription.metadata?.plan || 'premium',
+        paymentIntentId,
+        stripeSubscription.metadata?.paymentMethod || 'card',
+        stripeSubscription.id,
+        typeof stripeSubscription.customer === 'string' ? stripeSubscription.customer : stripeSubscription.customer?.id,
+        stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000).toISOString() : null,
+        stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000).toISOString() : null,
+        stripeSubscription.metadata?.billingInterval || null,
+        stripeSubscription.cancel_at_period_end === true
+      );
+    } catch (syncErr) {
+      console.warn('⚠️ Could not persist cancellation to database:', syncErr.message);
+    }
+
+    return res.json({
+      ok: true,
+      subscriptionId: stripeSubscription.id,
+      status: stripeSubscription.status,
+      cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
+    });
+  } catch (err) {
+    console.error('❌ Subscription cancellation error:', err);
+    return sendErrorResponse(res, 500, 'Cancellation Failed', err.message || 'Failed to cancel subscription.', err.stack);
+  }
+});
+
+router.post('/subscriptions/update', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Subscription update (plan change) request received`);
+
+  try {
+    if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+      return sendErrorResponse(res, 500, 'Configuration Error', 'Stripe not configured on server');
+    }
+
+    const userId = req.user.userId;
+    try {
+      validateUserId(userId);
+    } catch (validationErr) {
+      return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
+    }
+
+    const {
+      targetBillingInterval,
+      prorationBehavior = 'create_prorations',
+      paymentBehavior = 'create_and_pay',
+    } = req.body || {};
+
+    if (!targetBillingInterval) {
+      return sendErrorResponse(res, 400, 'Validation Error', 'targetBillingInterval is required');
+    }
+
+    if (!['monthly', 'semi_annual', 'annual'].includes(targetBillingInterval)) {
+      return sendErrorResponse(res, 400, 'Validation Error', 'targetBillingInterval must be monthly, semi_annual, or annual');
+    }
+
+    let priceId;
+    try {
+      priceId = getPriceIdForInterval(targetBillingInterval);
+    } catch (priceErr) {
+      return sendErrorResponse(res, 500, 'Configuration Error', priceErr.message);
+    }
+
+    const pool = getPool();
+    if (!pool) {
+      return sendErrorResponse(res, 500, 'Database Error', 'Database connection not available');
+    }
+
+    const subscriptionRequest = pool.request();
+    subscriptionRequest.input('userId', mssql.Int, parseInt(userId, 10));
+    const subscriptionResult = await subscriptionRequest.query(`
+      SELECT TOP 1 subscription_id, billing_interval, [status], customer_id
+      FROM [dbo].[user_subscriptions]
+      WHERE UserId = @userId AND subscription_id IS NOT NULL
+      ORDER BY updated_at DESC
+    `);
+
+    const subscriptionRow = subscriptionResult.recordset[0];
+
+    if (!subscriptionRow || !subscriptionRow.subscription_id) {
+      return sendErrorResponse(res, 404, 'Subscription Not Found', 'No active Stripe subscription found for this user.');
+    }
+
+    if (
+      subscriptionRow.billing_interval &&
+      subscriptionRow.billing_interval.toLowerCase() === targetBillingInterval.toLowerCase()
+    ) {
+      return sendErrorResponse(res, 400, 'Validation Error', 'Subscription is already on the requested billing interval.');
+    }
+
+    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionRow.subscription_id, {
+      expand: ['items.data.price', 'latest_invoice.payment_intent'],
+    });
+
+    if (!stripeSubscription.items?.data?.length) {
+      return sendErrorResponse(res, 500, 'Subscription Error', 'Subscription has no items to update.');
+    }
+
+    const subscriptionItem = stripeSubscription.items.data[0];
+
+    const updatedSubscription = await stripe.subscriptions.update(stripeSubscription.id, {
+      cancel_at_period_end: false,
+      proration_behavior: prorationBehavior,
+      payment_behavior: paymentBehavior,
+      items: [
+        {
+          id: subscriptionItem.id,
+          price: priceId,
+        },
+      ],
+      metadata: {
+        ...stripeSubscription.metadata,
+        billingInterval: targetBillingInterval,
+      },
+    });
+
+    try {
+      const paymentIntentId =
+        typeof updatedSubscription.latest_invoice?.payment_intent === 'object'
+          ? updatedSubscription.latest_invoice?.payment_intent?.id
+          : updatedSubscription.latest_invoice?.payment_intent || null;
+
+      await updateSubscriptionInDatabase(
+        userId,
+        updatedSubscription.status,
+        updatedSubscription.metadata?.plan || 'premium',
+        paymentIntentId,
+        updatedSubscription.metadata?.paymentMethod || 'card',
+        updatedSubscription.id,
+        typeof updatedSubscription.customer === 'string' ? updatedSubscription.customer : updatedSubscription.customer?.id,
+        updatedSubscription.current_period_start ? new Date(updatedSubscription.current_period_start * 1000).toISOString() : null,
+        updatedSubscription.current_period_end ? new Date(updatedSubscription.current_period_end * 1000).toISOString() : null,
+        targetBillingInterval,
+        updatedSubscription.cancel_at_period_end === true
+      );
+    } catch (syncErr) {
+      console.warn('⚠️ Could not persist subscription update to database:', syncErr.message);
+    }
+
+    return res.json({
+      ok: true,
+      subscriptionId: updatedSubscription.id,
+      status: updatedSubscription.status,
+      billingInterval: targetBillingInterval,
+      cancelAtPeriodEnd: updatedSubscription.cancel_at_period_end,
+      currentPeriodEnd: updatedSubscription.current_period_end
+        ? new Date(updatedSubscription.current_period_end * 1000).toISOString()
+        : null,
+    });
+  } catch (err) {
+    console.error('❌ Subscription update (plan change) error:', err);
+    return sendErrorResponse(res, 500, 'Subscription Update Failed', err.message || 'Failed to update subscription.', err.stack);
   }
 });
 
@@ -3276,6 +3501,15 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       WHERE UserId = @userId
     `);
 
+    const paymentMethodRequest = pool.request();
+    paymentMethodRequest.input('userId', mssql.Int, parseInt(userId, 10));
+    const paymentMethodResult = await paymentMethodRequest.query(`
+      SELECT TOP 1 paymentMethod
+      FROM [dbo].[payments]
+      WHERE UserId = @userId
+      ORDER BY confirmed_date DESC, created_date DESC
+    `);
+
     // Get UserType from UserProfile
     const userProfileRequest = pool.request();
     userProfileRequest.input('userId', mssql.Int, parseInt(userId, 10));
@@ -3288,6 +3522,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
 
     const subscription = subscriptionResult.recordset[0];
     const userProfile = userProfileResult.recordset[0];
+    const latestPaymentMethod = paymentMethodResult.recordset[0]?.paymentMethod || null;
 
     // If no subscription record exists, return Free plan
     if (!subscription) {
@@ -3297,7 +3532,8 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         currentPeriodEnd: null,
         currentPeriodStart: null,
         nextBillingDate: null,
-        hasActiveSubscription: false
+        hasActiveSubscription: false,
+        paymentMethod: latestPaymentMethod
       });
     }
 
@@ -3560,7 +3796,8 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       cancellationScheduled: cancellationScheduled, // Include cancellation scheduled flag
       hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
       startedAt: subscription.started_at ? (subscription.started_at instanceof Date ? subscription.started_at.toISOString() : new Date(subscription.started_at).toISOString()) : null,
-      updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
+      updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null,
+      paymentMethod: latestPaymentMethod
     });
   } catch (err) {
     return sendErrorResponse(res, 500, 'Status Retrieval Failed', 
