@@ -2051,6 +2051,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             console.log(`💾 Saving subscription ${subscription.id} to database for user ${req.user.userId}...`);
             console.log(`   Billing dates: start=${currentPeriodStart || 'NULL'}, end=${currentPeriodEnd || 'NULL'}`);
             const billingInterval = subscription.metadata?.billingInterval || null;
+            const cancellationScheduled = subscription.cancel_at_period_end === true;
             await updateSubscriptionInDatabase(
               req.user.userId,
               subscription.status,
@@ -2061,7 +2062,8 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
               customerId,
               currentPeriodStart,
               currentPeriodEnd,
-              billingInterval
+              billingInterval,
+              cancellationScheduled
             );
             console.log(`✅ Subscription details saved to database`);
           } catch (saveErr) {
@@ -2244,7 +2246,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
 // Helper function to update subscription in database
 // Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
-async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd, billingInterval = null) {
+async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd, billingInterval = null, cancellationScheduled = null) {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new Error('STRIPE_SECRET_KEY missing on server');
   }
@@ -2737,8 +2739,22 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
     // Map subscription status to determine if user should be Premium
     // active, trialing = Premium; canceled, past_due, incomplete = check payment status
+    // If cancellation_scheduled is true, check if period has ended
     const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
-    const shouldBePremium = isActive && plan === 'premium';
+    
+    // Check if period has ended for canceled subscriptions
+    let periodEnded = false;
+    if (cancellationScheduled === true && currentPeriodEnd) {
+      const periodEndDate = new Date(currentPeriodEnd);
+      const now = new Date();
+      periodEnded = periodEndDate < now;
+    }
+    
+    // User should be Premium if:
+    // 1. Status is active/trialing AND plan is premium AND
+    // 2. Either not canceled OR (canceled but period hasn't ended yet)
+    const shouldBePremium = isActive && plan === 'premium' && 
+                           (cancellationScheduled !== true || !periodEnded);
 
     // 1. Update UserProfile.UserType and track changes
     // First, get current UserType to detect changes
@@ -2748,8 +2764,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       .query(`SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId`);
     
     const currentUserType = currentUserTypeResult.recordset[0]?.UserType || 'Free';
+    // Downgrade to Free if:
+    // - Status is canceled or past_due, OR
+    // - Cancellation is scheduled AND period has ended
+    const shouldDowngrade = (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ||
+                            (cancellationScheduled === true && periodEnded);
     const newUserType = shouldBePremium ? 'Premium' : 
-                       (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ? 'Free' : currentUserType;
+                       shouldDowngrade ? 'Free' : currentUserType;
     
     // Only update if UserType is actually changing
     const userTypeChanged = currentUserType !== newUserType;
@@ -2766,10 +2787,15 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         console.log(`📝 Step 1: UserProfile.UserType already 'Premium' for user ${userIdInt}, preserving UserTypeChangedDate`);
         // UserType unchanged, don't update UserTypeChangedDate
       }
-    } else if (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') {
-      // Downgrade to Free if subscription is canceled or past due
+    } else if (shouldDowngrade) {
+      // Downgrade to Free if subscription is canceled, past due, or cancellation scheduled and period ended
       if (userTypeChanged) {
-        console.log(`📝 Step 1: Downgrading UserProfile.UserType from '${currentUserType}' to 'Free' for user ${userIdInt}`);
+        const reason = cancellationScheduled === true && periodEnded 
+          ? 'cancellation scheduled and period ended' 
+          : subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due'
+          ? `subscription ${subscriptionStatus}`
+          : 'unknown reason';
+        console.log(`📝 Step 1: Downgrading UserProfile.UserType from '${currentUserType}' to 'Free' for user ${userIdInt} (${reason})`);
         const userProfileRequest = new mssql.Request(transaction);
         await userProfileRequest
           .input('userId', mssql.Int, userIdInt)
@@ -2837,6 +2863,10 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         updateFields.push('billing_interval = @billingInterval');
         console.log(`   ✅ Will update billing_interval to: ${billingInterval}`);
       }
+      if (cancellationScheduled !== null) {
+        updateFields.push('cancellation_scheduled = @cancellationScheduled');
+        console.log(`   ✅ Will update cancellation_scheduled to: ${cancellationScheduled}`);
+      }
       
       const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
       
@@ -2851,6 +2881,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
+      if (cancellationScheduled !== null) updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await updateRequest.query(updateQuery);
       console.log(`✅ Step 2a complete: Subscription updated`);
@@ -2896,6 +2927,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         insertValues.push('@billingInterval');
         console.log(`   ✅ Including billing_interval: ${billingInterval}`);
       }
+      if (cancellationScheduled !== null) {
+        insertFields.push('cancellation_scheduled');
+        insertValues.push('@cancellationScheduled');
+        console.log(`   ✅ Including cancellation_scheduled: ${cancellationScheduled}`);
+      }
       
       const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
       
@@ -2910,6 +2946,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) insertRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
+      if (cancellationScheduled !== null) insertRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await insertRequest.query(insertQuery);
     }
@@ -3001,7 +3038,8 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       customerId,
       currentPeriodStart,
       currentPeriodEnd,
-      billingInterval
+      billingInterval,
+      cancellationScheduled = null
     } = req.body || {};
     
     console.log(`[${timestamp}] 📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
@@ -3102,6 +3140,12 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
             billingInterval = refreshedSubscription.metadata.billingInterval;
             console.log(`📝 Retrieved billingInterval from Stripe subscription metadata: ${billingInterval}`);
           }
+          
+          // Extract cancellation_scheduled from subscription if not provided
+          if (refreshedSubscription.cancel_at_period_end !== undefined) {
+            cancellationScheduled = refreshedSubscription.cancel_at_period_end === true;
+            console.log(`📝 Retrieved cancellation_scheduled from Stripe: ${cancellationScheduled}`);
+          }
         } catch (refreshErr) {
           console.warn('⚠️ Could not refresh subscription from Stripe:', refreshErr.message);
           // Continue with provided dates (or null if not provided)
@@ -3112,6 +3156,7 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
     console.log(`[${timestamp}] 🔄 Calling updateSubscriptionInDatabase...`);
     console.log(`   Dates: start=${validatedPeriodStart || currentPeriodStart || 'NULL'}, end=${validatedPeriodEnd || currentPeriodEnd || 'NULL'}`);
     console.log(`   billingInterval: ${billingInterval || 'NULL'}`);
+    console.log(`   cancellationScheduled: ${cancellationScheduled !== null ? cancellationScheduled : 'NULL'}`);
     const result = await updateSubscriptionInDatabase(
       userId, 
       subscriptionStatus, 
@@ -3122,7 +3167,8 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       customerId,
       validatedPeriodStart || currentPeriodStart,
       validatedPeriodEnd || currentPeriodEnd,
-      billingInterval
+      billingInterval,
+      cancellationScheduled
     );
     console.log(`[${timestamp}] ✅ updateSubscriptionInDatabase completed successfully`);
     return res.json(result);
@@ -3173,6 +3219,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         subscription_id,
         customer_id,
         billing_interval,
+        cancellation_scheduled,
         started_at,
         updated_at
       FROM [dbo].[user_subscriptions]
@@ -3208,7 +3255,28 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let nextBillingDate = null;
     let currentPeriodStart = null;
     let billingInterval = subscription.billing_interval || null; // Initialize from database
+    let cancellationScheduled = subscription.cancellation_scheduled === true || subscription.cancellation_scheduled === 1;
     let needsBillingIntervalUpdate = false;
+    let needsCancellationUpdate = false;
+    
+    // Check if period has ended for canceled subscriptions - downgrade if needed
+    if (cancellationScheduled && subscription.current_period_end) {
+      const periodEndDate = new Date(subscription.current_period_end);
+      const now = new Date();
+      if (periodEndDate < now) {
+        // Period has ended, downgrade to Free
+        console.log(`📝 Period ended for canceled subscription, downgrading user ${userId} to Free`);
+        try {
+          const downgradeRequest = pool.request();
+          await downgradeRequest
+            .input('userId', mssql.Int, parseInt(userId, 10))
+            .query(`UPDATE dbo.UserProfile SET UserType = 'Free', UserTypeChangedDate = SYSDATETIMEOFFSET() WHERE UserID = @userId`);
+          console.log(`✅ User downgraded to Free`);
+        } catch (downgradeErr) {
+          console.warn(`⚠️ Could not downgrade user:`, downgradeErr.message);
+        }
+      }
+    }
     
     // Always fetch from Stripe for active/trialing subscriptions to ensure we have the latest billing dates
     // This ensures billing dates are always up-to-date, even if database values exist
@@ -3222,6 +3290,14 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
             expand: ['latest_invoice', 'items.data.price']
           });
+          
+          // Check and update cancellation_scheduled flag from Stripe
+          const stripeCancellationScheduled = stripeSubscription.cancel_at_period_end === true;
+          if (stripeCancellationScheduled !== cancellationScheduled) {
+            cancellationScheduled = stripeCancellationScheduled;
+            needsCancellationUpdate = true;
+            console.log(`📝 Cancellation scheduled flag changed: ${cancellationScheduled}`);
+          }
           
           // Derive billing_interval from price ID if not in database or if it's incorrect
           
@@ -3334,8 +3410,8 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
             }
           }
           
-          // Save dates and billing_interval to database if we found them or if billing_interval needs update
-          if (nextBillingDate || needsBillingIntervalUpdate) {
+          // Save dates, billing_interval, and cancellation_scheduled to database if they need update
+          if (nextBillingDate || needsBillingIntervalUpdate || needsCancellationUpdate) {
             try {
               const updateRequest = pool.request();
               updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
@@ -3358,6 +3434,12 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
                 console.log(`✅ Will update billing_interval to: ${billingInterval}`);
               }
               
+              if (needsCancellationUpdate) {
+                updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
+                updateFields.push('cancellation_scheduled = @cancellationScheduled');
+                console.log(`✅ Will update cancellation_scheduled to: ${cancellationScheduled}`);
+              }
+              
               await updateRequest.query(`
                 UPDATE [dbo].[user_subscriptions]
                 SET ${updateFields.join(', ')}
@@ -3369,6 +3451,9 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
               }
               if (needsBillingIntervalUpdate) {
                 console.log(`✅ Updated billing_interval in database to: ${billingInterval}`);
+              }
+              if (needsCancellationUpdate) {
+                console.log(`✅ Updated cancellation_scheduled in database to: ${cancellationScheduled}`);
               }
             } catch (dbErr) {
               console.warn('⚠️ Could not save subscription data to database (non-critical):', dbErr.message);
@@ -3422,6 +3507,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       subscriptionId: subscription.subscription_id || null,
       customerId: subscription.customer_id || null,
       billingInterval: billingInterval, // Include billing interval in response
+      cancellationScheduled: cancellationScheduled, // Include cancellation scheduled flag
       hasActiveSubscription: subscription.status === 'active' || subscription.status === 'trialing',
       startedAt: subscription.started_at ? (subscription.started_at instanceof Date ? subscription.started_at.toISOString() : new Date(subscription.started_at).toISOString()) : null,
       updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
@@ -3555,7 +3641,10 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription in database
           // billingInterval will be derived from price ID if not in metadata
-                  await updateSubscriptionInDatabase(
+          // Extract cancel_at_period_end flag from Stripe subscription
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
+          
+          await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
                     subscription.metadata?.plan || 'premium',
@@ -3569,7 +3658,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
-                    subscription.metadata?.billingInterval || null
+                    subscription.metadata?.billingInterval || null,
+                    cancellationScheduled
                   );
           
           console.log(`✅ Subscription ${event.type} processed successfully`);
@@ -3589,7 +3679,8 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing subscription deletion for user ${userId}`);
           
           // Update subscription status to canceled
-                  await updateSubscriptionInDatabase(
+          // When subscription is deleted, cancellation_scheduled should be false (already canceled)
+          await updateSubscriptionInDatabase(
                     userId,
                     'canceled',
                     subscription.metadata?.plan || 'premium',
@@ -3603,7 +3694,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
-                    subscription.metadata?.billingInterval || null
+                    subscription.metadata?.billingInterval || null,
+                    false // cancellation_scheduled = false when subscription is deleted
                   );
           
           console.log(`✅ Subscription deletion processed successfully`);
@@ -3635,7 +3727,8 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription - payment succeeded means subscription should be active
           // billingInterval will be derived from price ID if not in metadata
-                  await updateSubscriptionInDatabase(
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
+          await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
                     subscription.metadata?.plan || 'premium',
@@ -3649,7 +3742,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
-                    subscription.metadata?.billingInterval || null
+                    subscription.metadata?.billingInterval || null,
+                    cancellationScheduled
                   );
           
           console.log(`✅ Invoice payment succeeded processed successfully`);
@@ -3681,7 +3775,8 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription status - payment failed might set status to past_due
           // billingInterval will be derived from price ID if not in metadata
-                  await updateSubscriptionInDatabase(
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
+          await updateSubscriptionInDatabase(
                     userId,
                     subscription.status, // Could be 'past_due' or 'unpaid'
                     subscription.metadata?.plan || 'premium',
@@ -3695,7 +3790,8 @@ router.post('/webhooks/stripe', async (req, res) => {
                     subscription.current_period_end && typeof subscription.current_period_end === 'number'
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
-                    subscription.metadata?.billingInterval || null
+                    subscription.metadata?.billingInterval || null,
+                    cancellationScheduled
                   );
           
           console.log(`✅ Invoice payment failed processed successfully`);
