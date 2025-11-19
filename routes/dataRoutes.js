@@ -1088,6 +1088,74 @@ router.get('/payments/test', (req, res) => {
 
 // ========== VALIDATION AND ERROR HANDLING HELPERS ==========
 
+// Helper function to map plan values to database plan codes
+// Maps 'premium' + billingInterval to 'monthly', 'semi_annual', or 'annual'
+function mapPlanToDatabaseCode(plan, billingInterval = null) {
+  // If plan is already a valid database code, return it
+  if (plan === 'monthly' || plan === 'semi_annual' || plan === 'annual') {
+    return plan;
+  }
+  
+  // Map 'premium' or 'Premium' based on billingInterval
+  if (plan === 'premium' || plan === 'Premium') {
+    if (billingInterval === 'semi_annual' || billingInterval === '6_months') {
+      return 'semi_annual';
+    } else if (billingInterval === 'annual' || billingInterval === 'year') {
+      return 'annual';
+    } else {
+      // Default to monthly
+      return 'monthly';
+    }
+  }
+  
+  // Map 'free' or 'Free' - but free plans shouldn't have subscriptions
+  // Return null or handle appropriately
+  if (plan === 'free' || plan === 'Free') {
+    return null; // Free plans don't have subscription records
+  }
+  
+  // Default to monthly for unknown plans
+  return 'monthly';
+}
+
+// Helper function to map payment method to database values
+// Maps 'stripe' to 'card' (database expects 'card' or 'apple_pay')
+function mapPaymentMethodToDatabase(method) {
+  if (method === 'stripe' || method === 'card') {
+    return 'card';
+  }
+  if (method === 'apple_pay' || method === 'applepay') {
+    return 'apple_pay';
+  }
+  // Default to card for unknown methods
+  return 'card';
+}
+
+// Helper function to map payment status to database CHECK constraint values
+// Database expects: 'requires_payment_method', 'processing', 'succeeded', 'failed', 'canceled'
+function mapPaymentStatusToDatabase(status) {
+  switch (status) {
+    case 'succeeded':
+      return 'succeeded';
+    case 'processing':
+      return 'processing';
+    case 'pending':
+      return 'processing'; // Map pending to processing
+    case 'requires_payment_method':
+    case 'requires_confirmation':
+    case 'requires_action':
+      return 'requires_payment_method';
+    case 'canceled':
+    case 'cancelled':
+      return 'canceled';
+    case 'failed':
+    case 'payment_failed':
+      return 'failed';
+    default:
+      return 'processing'; // Default to processing
+  }
+}
+
 // Helper function for input validation
 function validateUserId(userId) {
   if (!userId) {
@@ -1196,7 +1264,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
     }
 
-    const { plan = 'premium', billingInterval = 'monthly', paymentMethod = 'stripe' } = req.body || {};
+    const { plan = 'premium', billingInterval = 'monthly', paymentMethod = 'card' } = req.body || {};
     
     // Validate billingInterval
     if (!['monthly', 'semi_annual', 'annual'].includes(billingInterval)) {
@@ -1422,9 +1490,11 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               console.log(`✅ Saved customer_id ${customer.id} to existing user_subscriptions record`);
             } else {
               // Create new record with customer_id
+              // Map plan to database plan code (default to monthly if billingInterval not available)
+              const dbPlanCode = mapPlanToDatabaseCode(plan, billingInterval || 'monthly');
               await saveCustomerRequest
-                .input('plan', mssql.NVarChar(32), plan.charAt(0).toUpperCase() + plan.slice(1))
-                .input('status', mssql.NVarChar(32), 'pending')
+                .input('plan', mssql.NVarChar(32), dbPlanCode)
+                .input('status', mssql.NVarChar(32), 'incomplete')
                 .query(`
                   INSERT INTO [dbo].[user_subscriptions] (UserId, [plan], status, customer_id, started_at, updated_at)
                   VALUES (@userId, @plan, @status, @customerId, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())
@@ -2052,12 +2122,14 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
             console.log(`   Billing dates: start=${currentPeriodStart || 'NULL'}, end=${currentPeriodEnd || 'NULL'}`);
             const billingInterval = subscription.metadata?.billingInterval || null;
             const cancellationScheduled = subscription.cancel_at_period_end === true;
+            // Map plan based on billingInterval from subscription
+            const subscriptionPlan = mapPlanToDatabaseCode('premium', billingInterval || subscription.metadata?.billingInterval || 'monthly');
             await updateSubscriptionInDatabase(
               req.user.userId,
               subscription.status,
-              'premium', // Default plan
+              subscriptionPlan,
               paymentIntent?.id || paymentIntentId,
-              paymentMethodId || 'stripe',
+              mapPaymentMethodToDatabase(paymentMethodId || 'card'),
               subscription.id,
               customerId,
               currentPeriodStart,
@@ -2262,8 +2334,9 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   let paymentIntent;
   let amount = 9.99; // Default amount
   let currency = 'USD';
-  let paymentStatus = 'pending';
-  let finalPaymentMethod = paymentMethod || 'stripe';
+  let paymentStatus = 'processing'; // Default to 'processing' (database CHECK constraint value)
+  // Map payment method to database value (stripe → card)
+  let finalPaymentMethod = mapPaymentMethodToDatabase(paymentMethod || 'card');
 
   // If subscriptionId is provided, retrieve subscription (new flow)
   if (subscriptionId) {
@@ -2560,27 +2633,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
           paymentIntentId = paymentIntent.id;
         }
         
-        switch (paymentIntent.status) {
-          case 'succeeded':
-            paymentStatus = 'succeeded';
-            break;
-          case 'processing':
-            paymentStatus = 'pending';
-            break;
-          case 'requires_payment_method':
-          case 'requires_confirmation':
-          case 'requires_action':
-            paymentStatus = 'pending';
-            break;
-          case 'canceled':
-            paymentStatus = 'canceled';
-            break;
-          case 'payment_failed':
-            paymentStatus = 'failed';
-            break;
-          default:
-            paymentStatus = 'pending';
-        }
+        // Map payment intent status to database payment status
+        paymentStatus = mapPaymentStatusToDatabase(paymentIntent.status);
         
         // Detect payment method type from PaymentIntent's payment_method object and charge details
         // This ensures Apple Pay is properly detected even if metadata is missing
@@ -2616,22 +2670,27 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                 console.log('✅ Payment method set to: apple_pay');
               } else {
                 // Regular card payment - check metadata first, then use provided paymentMethod
-                finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+                // Map to database value (stripe → card)
+                const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+                finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
                 console.log('💳 Payment method set to:', finalPaymentMethod);
               }
             } else {
-              // Other payment method types
-              finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+              // Other payment method types - map to database value
+              const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+              finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
               console.log('💳 Payment method set to:', finalPaymentMethod);
             }
           } catch (pmErr) {
             console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
-            // Fall back to metadata
-            finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+            // Fall back to metadata - map to database value
+            const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+            finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
           }
         } else {
-          // No payment_method object, use metadata or provided value
-          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+          // No payment_method object, use metadata or provided value - map to database value
+          const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+          finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
         }
       }
   } else if (paymentIntentId) {
@@ -2643,28 +2702,8 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     amount = paymentIntent.amount / 100;
     currency = paymentIntent.currency.toUpperCase();
     
-    // Map payment intent status
-    switch (paymentIntent.status) {
-      case 'succeeded':
-        paymentStatus = 'succeeded';
-        break;
-      case 'processing':
-        paymentStatus = 'pending';
-        break;
-      case 'requires_payment_method':
-      case 'requires_confirmation':
-      case 'requires_action':
-        paymentStatus = 'pending';
-        break;
-      case 'canceled':
-        paymentStatus = 'canceled';
-        break;
-      case 'payment_failed':
-        paymentStatus = 'failed';
-        break;
-      default:
-        paymentStatus = 'pending';
-    }
+    // Map payment intent status to database payment status
+    paymentStatus = mapPaymentStatusToDatabase(paymentIntent.status);
     
     // Detect payment method type from PaymentIntent's payment_method object and charge details
     // This ensures Apple Pay is properly detected even if metadata is missing
@@ -2697,27 +2736,36 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             finalPaymentMethod = 'apple_pay';
             console.log('✅ Payment method set to: apple_pay (legacy flow)');
           } else {
-            // Regular card payment - check metadata first
-            finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+              // Regular card payment - check metadata first, then map to database value
+            const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+            finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
             console.log('💳 Payment method set to:', finalPaymentMethod, '(legacy flow)');
           }
         } else {
-          finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+          const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+          finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
           console.log('💳 Payment method set to:', finalPaymentMethod, '(legacy flow)');
         }
       } catch (pmErr) {
         console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
-        finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+        const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+        finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
       }
     } else {
-      finalPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+      const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+      finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
     }
   } else {
     throw new Error('Either subscriptionId or paymentIntentId must be provided');
   }
 
-  // Capitalize plan name
-  const capitalizedPlan = plan === 'premium' ? 'Premium' : plan === 'free' ? 'Free' : plan.charAt(0).toUpperCase() + plan.slice(1);
+  // Map plan to database plan code (monthly, semi_annual, annual)
+  // Use billingInterval to determine the correct plan code
+  const databasePlanCode = mapPlanToDatabaseCode(plan, billingInterval);
+  
+  if (!databasePlanCode) {
+    throw new Error(`Invalid plan: ${plan} - cannot map to database plan code`);
+  }
 
   // Convert userId to integer
   const userIdInt = parseInt(userId, 10);
@@ -2751,9 +2799,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     }
     
     // User should be Premium if:
-    // 1. Status is active/trialing AND plan is premium AND
+    // 1. Status is active/trialing AND plan is a paid plan (not free) AND
     // 2. Either not canceled OR (canceled but period hasn't ended yet)
-    const shouldBePremium = isActive && plan === 'premium' && 
+    // Check if plan is a paid plan (monthly, semi_annual, annual are all paid)
+    const isPaidPlan = databasePlanCode === 'monthly' || databasePlanCode === 'semi_annual' || databasePlanCode === 'annual';
+    const shouldBePremium = isActive && isPaidPlan && 
                            (cancellationScheduled !== true || !periodEnded);
 
     // 1. Update UserProfile.UserType and track changes
@@ -2872,7 +2922,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       
       const updateRequest = new mssql.Request(transaction);
       updateRequest.input('userId', mssql.Int, userIdInt);
-      updateRequest.input('plan', mssql.NVarChar(32), capitalizedPlan);
+      updateRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
       updateRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) updateRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
@@ -2937,7 +2987,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       
       const insertRequest = new mssql.Request(transaction);
       insertRequest.input('userId', mssql.Int, userIdInt);
-      insertRequest.input('plan', mssql.NVarChar(32), capitalizedPlan);
+      insertRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
       insertRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
       
       if (subscriptionId) insertRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
@@ -2967,12 +3017,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         const paymentRequest = new mssql.Request(transaction);
         await paymentRequest
           .input('userId', mssql.Int, userIdInt)
-          .input('plan', mssql.VarChar(32), capitalizedPlan)
+          .input('plan', mssql.NVarChar(32), databasePlanCode)
           .input('amount', mssql.Decimal(10, 2), amount)
-          .input('currency', mssql.VarChar(3), currency)
-          .input('paymentMethod', mssql.VarChar(32), finalPaymentMethod)
-          .input('paymentIntentId', mssql.VarChar(128), paymentIntentId)
-          .input('status', mssql.VarChar(32), paymentStatus)
+          .input('currency', mssql.NVarChar(3), currency)
+          .input('paymentMethod', mssql.NVarChar(32), finalPaymentMethod)
+          .input('paymentIntentId', mssql.NVarChar(128), paymentIntentId)
+          .input('status', mssql.NVarChar(32), paymentStatus)
           .query(`INSERT INTO [dbo].[payments] (UserId, [plan], amount, currency, paymentMethod, payment_intent_id, status, created_date, confirmed_date) VALUES (@userId, @plan, @amount, @currency, @paymentMethod, @paymentIntentId, @status, GETDATE(), GETDATE())`);
         console.log(`✅ Step 3 complete: Payment recorded`);
       }
@@ -2982,14 +3032,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     await transaction.commit();
     console.log('✅ Transaction committed');
 
-    console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${capitalizedPlan} - ${subscriptionStatus}`);
-    console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}`);
+    console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${databasePlanCode} - ${subscriptionStatus}`);
+    console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}, Method: ${finalPaymentMethod}`);
 
     return { 
       ok: true, 
       userId: userIdInt, 
       subscriptionStatus, 
-      plan: capitalizedPlan, 
+      plan: databasePlanCode, 
       paymentIntentId: paymentIntentId || null,
       subscriptionId: subscriptionId || null,
       customerId: customerId || null
@@ -3031,9 +3081,9 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
     
     const { 
       subscriptionStatus = 'active', 
-      plan = 'premium', 
+      plan = 'monthly', // Default to monthly, will be mapped correctly in updateSubscriptionInDatabase 
       paymentIntentId, 
-      paymentMethod = 'stripe',
+      paymentMethod = 'card',
       subscriptionId,
       customerId,
       currentPeriodStart,
@@ -3644,12 +3694,17 @@ router.post('/webhooks/stripe', async (req, res) => {
           // Extract cancel_at_period_end flag from Stripe subscription
           const cancellationScheduled = subscription.cancel_at_period_end === true;
           
+          // Map plan from metadata or derive from billingInterval/price ID
+          const planFromMetadata = subscription.metadata?.plan || 'premium';
+          const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
+          const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
+          
           await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
-                    subscription.metadata?.plan || 'premium',
+                    mappedPlan,
                     subscription.latest_invoice?.payment_intent?.id || null,
-                    subscription.metadata?.paymentMethod || 'stripe',
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number' 
@@ -3680,12 +3735,16 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription status to canceled
           // When subscription is deleted, cancellation_scheduled should be false (already canceled)
+          const planFromMetadata = subscription.metadata?.plan || 'premium';
+          const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
+          const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
+          
           await updateSubscriptionInDatabase(
                     userId,
                     'canceled',
-                    subscription.metadata?.plan || 'premium',
+                    mappedPlan,
                     null,
-                    subscription.metadata?.paymentMethod || 'stripe',
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
@@ -3728,12 +3787,16 @@ router.post('/webhooks/stripe', async (req, res) => {
           // Update subscription - payment succeeded means subscription should be active
           // billingInterval will be derived from price ID if not in metadata
           const cancellationScheduled = subscription.cancel_at_period_end === true;
+          const planFromMetadata = subscription.metadata?.plan || 'premium';
+          const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
+          const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
+          
           await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
-                    subscription.metadata?.plan || 'premium',
+                    mappedPlan,
                     invoice.payment_intent?.id || null,
-                    subscription.metadata?.paymentMethod || 'stripe',
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
@@ -3776,12 +3839,16 @@ router.post('/webhooks/stripe', async (req, res) => {
           // Update subscription status - payment failed might set status to past_due
           // billingInterval will be derived from price ID if not in metadata
           const cancellationScheduled = subscription.cancel_at_period_end === true;
+          const planFromMetadata = subscription.metadata?.plan || 'premium';
+          const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
+          const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
+          
           await updateSubscriptionInDatabase(
                     userId,
                     subscription.status, // Could be 'past_due' or 'unpaid'
-                    subscription.metadata?.plan || 'premium',
+                    mappedPlan,
                     invoice.payment_intent?.id || null,
-                    subscription.metadata?.paymentMethod || 'stripe',
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
