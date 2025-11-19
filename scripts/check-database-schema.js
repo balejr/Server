@@ -148,3 +148,4 @@ checkDatabaseSchema()
     process.exit(1);
   });
 
+

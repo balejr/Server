@@ -209,3 +209,4 @@ fixDatabaseSchema()
     process.exit(1);
   });
 
+

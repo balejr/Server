@@ -25,3 +25,4 @@ WHERE TABLE_SCHEMA = 'dbo'
   AND COLUMN_NAME = 'UserTypeChangedDate';
 
 
+
