@@ -2318,7 +2318,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
 
 // Helper function to update subscription in database
 // Supports both Subscription-based (new) and PaymentIntent-based (legacy) subscriptions
-async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd, billingInterval = null, cancelAtPeriodEnd = null, paymentPlatform = null) {
+async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, paymentIntentId, paymentMethod, subscriptionId, customerId, currentPeriodStart, currentPeriodEnd, billingInterval = null, cancellationScheduled = null) {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw new Error('STRIPE_SECRET_KEY missing on server');
   }
@@ -2787,26 +2787,15 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
 
     // Map subscription status to determine if user should be Premium
     // active, trialing = Premium; canceled, past_due, incomplete = check payment status
-    // If cancel_at_period_end is true, check if period has ended
+    // If cancellation_scheduled is true, check if period has ended
     const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
     
     // Check if period has ended for canceled subscriptions
     let periodEnded = false;
-    if (cancelAtPeriodEnd === true && currentPeriodEnd) {
+    if (cancellationScheduled === true && currentPeriodEnd) {
       const periodEndDate = new Date(currentPeriodEnd);
       const now = new Date();
       periodEnded = periodEndDate < now;
-    }
-    
-    // Determine payment platform if not provided
-    let finalPaymentPlatform = paymentPlatform;
-    if (!finalPaymentPlatform && finalPaymentMethod) {
-      finalPaymentPlatform = (finalPaymentMethod.toLowerCase().includes('apple') || finalPaymentMethod.toLowerCase() === 'apple_pay') 
-        ? 'apple' 
-        : 'stripe';
-    }
-    if (!finalPaymentPlatform) {
-      finalPaymentPlatform = 'stripe'; // Default
     }
     
     // User should be Premium if:
@@ -2815,7 +2804,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // Check if plan is a paid plan (monthly, semi_annual, annual are all paid)
     const isPaidPlan = databasePlanCode === 'monthly' || databasePlanCode === 'semi_annual' || databasePlanCode === 'annual';
     const shouldBePremium = isActive && isPaidPlan && 
-                           (cancelAtPeriodEnd !== true || !periodEnded);
+                           (cancellationScheduled !== true || !periodEnded);
 
     // 1. Update UserProfile.UserType and track changes
     // First, get current UserType to detect changes
@@ -2829,7 +2818,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // - Status is canceled or past_due, OR
     // - Cancellation is scheduled AND period has ended
     const shouldDowngrade = (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ||
-                            (cancelAtPeriodEnd === true && periodEnded);
+                            (cancellationScheduled === true && periodEnded);
     const newUserType = shouldBePremium ? 'Premium' : 
                        shouldDowngrade ? 'Free' : currentUserType;
     
@@ -2851,7 +2840,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     } else if (shouldDowngrade) {
       // Downgrade to Free if subscription is canceled, past due, or cancellation scheduled and period ended
       if (userTypeChanged) {
-        const reason = cancelAtPeriodEnd === true && periodEnded 
+        const reason = cancellationScheduled === true && periodEnded 
           ? 'cancellation scheduled and period ended' 
           : subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due'
           ? `subscription ${subscriptionStatus}`
@@ -2924,13 +2913,9 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         updateFields.push('billing_interval = @billingInterval');
         console.log(`   ✅ Will update billing_interval to: ${billingInterval}`);
       }
-      if (cancelAtPeriodEnd !== null) {
-        updateFields.push('cancel_at_period_end = @cancelAtPeriodEnd');
-        console.log(`   ✅ Will update cancel_at_period_end to: ${cancelAtPeriodEnd}`);
-      }
-      if (finalPaymentPlatform) {
-        updateFields.push('payment_platform = @paymentPlatform');
-        console.log(`   ✅ Will update payment_platform to: ${finalPaymentPlatform}`);
+      if (cancellationScheduled !== null) {
+        updateFields.push('cancellation_scheduled = @cancellationScheduled');
+        console.log(`   ✅ Will update cancellation_scheduled to: ${cancellationScheduled}`);
       }
       
       const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
@@ -2946,8 +2931,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodEnd) updateRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
-      if (cancelAtPeriodEnd !== null) updateRequest.input('cancelAtPeriodEnd', mssql.Bit, cancelAtPeriodEnd ? 1 : 0);
-      if (finalPaymentPlatform) updateRequest.input('paymentPlatform', mssql.NVarChar(32), finalPaymentPlatform);
+      if (cancellationScheduled !== null) updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await updateRequest.query(updateQuery);
       console.log(`✅ Step 2a complete: Subscription updated`);
@@ -2993,15 +2977,10 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         insertValues.push('@billingInterval');
         console.log(`   ✅ Including billing_interval: ${billingInterval}`);
       }
-      if (cancelAtPeriodEnd !== null) {
-        insertFields.push('cancel_at_period_end');
-        insertValues.push('@cancelAtPeriodEnd');
-        console.log(`   ✅ Including cancel_at_period_end: ${cancelAtPeriodEnd}`);
-      }
-      if (finalPaymentPlatform) {
-        insertFields.push('payment_platform');
-        insertValues.push('@paymentPlatform');
-        console.log(`   ✅ Including payment_platform: ${finalPaymentPlatform}`);
+      if (cancellationScheduled !== null) {
+        insertFields.push('cancellation_scheduled');
+        insertValues.push('@cancellationScheduled');
+        console.log(`   ✅ Including cancellation_scheduled: ${cancellationScheduled}`);
       }
       
       const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
@@ -3017,8 +2996,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (currentPeriodEnd) insertRequest.input('currentPeriodEnd', mssql.DateTimeOffset, currentPeriodEnd);
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) insertRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
-      if (cancelAtPeriodEnd !== null) insertRequest.input('cancelAtPeriodEnd', mssql.Bit, cancelAtPeriodEnd ? 1 : 0);
-      if (finalPaymentPlatform) insertRequest.input('paymentPlatform', mssql.NVarChar(32), finalPaymentPlatform);
+      if (cancellationScheduled !== null) insertRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
       
       await insertRequest.query(insertQuery);
     }
@@ -3655,47 +3633,32 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
 // This endpoint does NOT use authenticateToken - Stripe signs webhooks with a secret
 // Note: server.js must use express.raw() middleware for this route before express.json()
 router.post('/webhooks/stripe', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.warn('⚠️ STRIPE_WEBHOOK_SECRET not set - webhook verification skipped');
+    // In development, you might want to skip verification
+    // In production, always verify webhooks
+  }
+
+  let event;
+
   try {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-    if (!webhookSecret) {
-      console.error('❌ STRIPE_WEBHOOK_SECRET not set - webhook verification cannot proceed');
-      return res.status(500).json({ error: 'Webhook secret not configured' });
-    }
-
-    if (!stripe) {
-      console.error('❌ Stripe not initialized - check STRIPE_SECRET_KEY');
-      return res.status(500).json({ error: 'Stripe not initialized' });
-    }
-
-    if (!sig) {
-      console.error('❌ Missing stripe-signature header');
-      return res.status(400).send('Missing stripe-signature header');
-    }
-
-    let event;
-
-    try {
-      // req.body should be a Buffer if express.raw() middleware is configured correctly in server.js
-      // If it's not a Buffer, try to get it as a Buffer
-      let rawBody;
-      if (Buffer.isBuffer(req.body)) {
-        rawBody = req.body;
-      } else if (typeof req.body === 'string') {
-        rawBody = Buffer.from(req.body, 'utf8');
-      } else {
-        // Fallback: try to stringify and convert to buffer (not ideal but better than failing)
-        console.warn('⚠️ req.body is not a Buffer, attempting conversion');
-        rawBody = Buffer.from(JSON.stringify(req.body), 'utf8');
-      }
-      
+    // req.body should be a Buffer if express.raw() middleware is configured correctly
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+    
+    if (webhookSecret) {
       event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
-      console.log(`✅ Webhook signature verified: ${event.type}`);
-    } catch (err) {
-      console.error('❌ Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+    } else {
+      // Development mode: parse without verification (NOT recommended for production)
+      event = JSON.parse(rawBody.toString());
+      console.warn('⚠️ Webhook verification skipped - development mode');
     }
+  } catch (err) {
+    console.error('❌ Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
   console.log(`📥 Webhook received: ${event.type}`);
 
@@ -3729,13 +3692,7 @@ router.post('/webhooks/stripe', async (req, res) => {
           // Update subscription in database
           // billingInterval will be derived from price ID if not in metadata
           // Extract cancel_at_period_end flag from Stripe subscription
-          const cancelAtPeriodEnd = subscription.cancel_at_period_end === true;
-          
-          // Determine payment platform from payment method
-          const paymentMethodValue = subscription.metadata?.paymentMethod || 'card';
-          const paymentPlatformValue = (paymentMethodValue.toLowerCase().includes('apple') || paymentMethodValue.toLowerCase() === 'apple_pay') 
-            ? 'apple' 
-            : 'stripe';
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
           
           // Map plan from metadata or derive from billingInterval/price ID
           const planFromMetadata = subscription.metadata?.plan || 'premium';
@@ -3747,7 +3704,7 @@ router.post('/webhooks/stripe', async (req, res) => {
                     subscription.status,
                     mappedPlan,
                     subscription.latest_invoice?.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(paymentMethodValue),
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number' 
@@ -3757,8 +3714,7 @@ router.post('/webhooks/stripe', async (req, res) => {
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
                     subscription.metadata?.billingInterval || null,
-                    cancelAtPeriodEnd,
-                    paymentPlatformValue
+                    cancellationScheduled
                   );
           
           console.log(`✅ Subscription ${event.type} processed successfully`);
@@ -3778,23 +3734,17 @@ router.post('/webhooks/stripe', async (req, res) => {
           console.log(`🔄 Processing subscription deletion for user ${userId}`);
           
           // Update subscription status to canceled
-          // When subscription is deleted, cancel_at_period_end should be false (already canceled)
+          // When subscription is deleted, cancellation_scheduled should be false (already canceled)
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
-          // Determine payment platform
-          const paymentMethodValue = subscription.metadata?.paymentMethod || 'card';
-          const paymentPlatformValue = (paymentMethodValue.toLowerCase().includes('apple') || paymentMethodValue.toLowerCase() === 'apple_pay') 
-            ? 'apple' 
-            : 'stripe';
           
           await updateSubscriptionInDatabase(
                     userId,
                     'canceled',
                     mappedPlan,
                     null,
-                    mapPaymentMethodToDatabase(paymentMethodValue),
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
@@ -3804,8 +3754,7 @@ router.post('/webhooks/stripe', async (req, res) => {
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
                     subscription.metadata?.billingInterval || null,
-                    false, // cancel_at_period_end = false when subscription is deleted
-                    paymentPlatformValue
+                    false // cancellation_scheduled = false when subscription is deleted
                   );
           
           console.log(`✅ Subscription deletion processed successfully`);
@@ -3837,23 +3786,17 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription - payment succeeded means subscription should be active
           // billingInterval will be derived from price ID if not in metadata
-          const cancelAtPeriodEnd = subscription.cancel_at_period_end === true;
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
-          // Determine payment platform
-          const paymentMethodValue = subscription.metadata?.paymentMethod || 'card';
-          const paymentPlatformValue = (paymentMethodValue.toLowerCase().includes('apple') || paymentMethodValue.toLowerCase() === 'apple_pay') 
-            ? 'apple' 
-            : 'stripe';
           
           await updateSubscriptionInDatabase(
                     userId,
                     subscription.status,
                     mappedPlan,
                     invoice.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(paymentMethodValue),
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
@@ -3863,8 +3806,7 @@ router.post('/webhooks/stripe', async (req, res) => {
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
                     subscription.metadata?.billingInterval || null,
-                    cancelAtPeriodEnd,
-                    paymentPlatformValue
+                    cancellationScheduled
                   );
           
           console.log(`✅ Invoice payment succeeded processed successfully`);
@@ -3896,23 +3838,17 @@ router.post('/webhooks/stripe', async (req, res) => {
           
           // Update subscription status - payment failed might set status to past_due
           // billingInterval will be derived from price ID if not in metadata
-          const cancelAtPeriodEnd = subscription.cancel_at_period_end === true;
+          const cancellationScheduled = subscription.cancel_at_period_end === true;
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
-          // Determine payment platform
-          const paymentMethodValue = subscription.metadata?.paymentMethod || 'card';
-          const paymentPlatformValue = (paymentMethodValue.toLowerCase().includes('apple') || paymentMethodValue.toLowerCase() === 'apple_pay') 
-            ? 'apple' 
-            : 'stripe';
           
           await updateSubscriptionInDatabase(
                     userId,
                     subscription.status, // Could be 'past_due' or 'unpaid'
                     mappedPlan,
                     invoice.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(paymentMethodValue),
+                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
                     subscription.id,
                     subscription.customer,
                     subscription.current_period_start && typeof subscription.current_period_start === 'number'
@@ -3922,8 +3858,7 @@ router.post('/webhooks/stripe', async (req, res) => {
                       ? new Date(subscription.current_period_end * 1000).toISOString()
                       : null,
                     subscription.metadata?.billingInterval || null,
-                    cancelAtPeriodEnd,
-                    paymentPlatformValue
+                    cancellationScheduled
                   );
           
           console.log(`✅ Invoice payment failed processed successfully`);
@@ -4111,18 +4046,10 @@ router.post('/webhooks/stripe', async (req, res) => {
         console.log(`ℹ️ Unhandled webhook event type: ${event.type}`);
     }
 
-    // Return success immediately to Stripe (webhooks must respond quickly)
     res.json({ received: true });
   } catch (err) {
     console.error('❌ Webhook processing error:', err);
-    console.error('Error stack:', err.stack);
-    // Return 200 to Stripe to prevent retries for processing errors
-    // Log the error for manual investigation
-    res.status(200).json({ 
-      received: true, 
-      error: 'Webhook processing failed', 
-      message: err.message 
-    });
+    res.status(500).json({ error: 'Webhook processing failed', message: err.message });
   }
 });
 
