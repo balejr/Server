@@ -4056,11 +4056,9 @@ router.post('/webhooks/stripe', async (req, res) => {
 //-------------- DEVICE DATA --------------------
 
 // GET /api/deviceData/lastSync
-router.get('/deviceData/lastSync', async (req, res) => {
+router.get('/deviceData/lastSync/:deviceType', async (req, res) => {
   const userId = req.user.userId;
-  const {
-    deviceType
-  } = req.body;
+  const { deviceType } = req.params;
   try {
     const pool = await getPool();
     const result = await pool.request()

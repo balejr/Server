@@ -209,4 +209,30 @@ router.get("/usage/history", authenticateToken, async (req, res) => {
   }
 });
 
+// OURA URI
+router.get('/oauth/callback', async (req, res) => {
+  const code = req.query.code;
+
+  try {
+    // Exchange code for an access token
+    const tokenResponse = await axios.post('https://api.ouraring.com/oauth/token', {
+      grant_type: 'authorization_code',
+      code: code,
+      client_id: process.env.OURA_CLIENT_ID,
+      client_secret: process.env.OURA_SECRET,
+      redirect_uri: 'https://apogeeapp.azurewebsites.net/oauth/callback',
+    });
+
+    // Save tokens and redirect to your app
+    res.send("Oura authentication successful!");
+  } catch (error) {
+    console.error("Get usage history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to authenticate OURA",
+    });
+  }
+  
+});
+
 module.exports = { router, checkUsageLimit, incrementUsage };
