@@ -12,6 +12,7 @@ const userRoutes = require("./routes/userRoutes");
 const dataRoutes = require("./routes/dataRoutes");
 const chatbotRoutes = require("./routes/chatbotRoutes");
 const { router: usageRoutes } = require("./routes/usageRoutes");
+const { router: workoutRoutes } = require("./routes/workoutRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +40,7 @@ app.use("/api/user", userRoutes);
 app.use("/api/data", dataRoutes);
 app.use("/api/chatbot", chatbotRoutes);
 app.use("/api/usage", usageRoutes);
+app.use("/api/workout", workoutRoutes);
 
 // Root route for health check
 app.get("/", (req, res) => {
@@ -48,4 +50,4 @@ app.get("/", (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-}); 
+});
