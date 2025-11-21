@@ -2,7 +2,7 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
-const { GoogleGenAI, Type } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { checkUsageLimit, incrementUsage } = require("./usageRoutes");
 const { generatePlanId, saveWorkoutPlan } = require("./workoutRoutes");
 
