@@ -988,13 +988,13 @@ router.get('/exercises/history/:userId', async (req, res) => {
 //-------------- DEVICE DATA --------------------
 
 // GET /api/deviceData/lastSync
-router.get('/deviceData/lastSync', async (req, res) => {
+router.get('/deviceData/lastSync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
     deviceType
-  } = req.body;
+  } = req.query;
   try {
-    const pool = await getPool();
+    const pool = getPool();
     const result = await pool.request()
       .input('userId', userId)
       .input('deviceType', deviceType)
@@ -1013,7 +1013,7 @@ router.get('/deviceData/lastSync', async (req, res) => {
 });
 
 //  PATCH  /api/deviceData/sync
-router.patch('/deviceData/sync', async (req, res) => {
+router.patch('/deviceData/sync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { 
     deviceType,
@@ -1072,6 +1072,240 @@ router.patch('/deviceData/sync', async (req, res) => {
     return res.status(500).json({
       message: 'Failed to sync device data',
       error: err.message
+    });
+  }
+});
+
+// -------------------- ACHIEVEMENTS --------------------
+
+// GET progress achievements
+router.get('/achievements/progress', authenticateToken, async (req, res) => {
+  const period = req.query.period || 'Daily';
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+    
+    // Get all active achievements for the specified category
+    // and join with user achievements to get progress
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('category', period)
+      .query(`
+        SELECT 
+          a.AchievementID AS id,
+          a.Title AS title,
+          ISNULL(ua.CurrentValue, 0) AS progress,
+          a.GoalValue AS goal,
+          a.Icon AS icon,
+          ISNULL(ua.IsCompleted, 0) AS completed
+        FROM dbo.Achievements a
+        LEFT JOIN dbo.UserAchievements ua 
+          ON a.AchievementID = ua.AchievementID 
+          AND ua.UserID = @userId
+        WHERE a.Category = @category 
+          AND a.IsActive = 1
+          AND a.Type = 'progress'
+        ORDER BY a.AchievementID
+      `);
+
+    // Transform to match expected format
+    const achievements = result.recordset.map(achievement => ({
+      id: achievement.id,
+      title: achievement.title,
+      progress: achievement.progress,
+      goal: achievement.goal,
+      icon: achievement.icon,
+      completed: achievement.completed === 1
+    }));
+
+    res.status(200).json({
+      userId,
+      period,
+      achievements
+    });
+  } catch (err) {
+    console.error('Error fetching progress achievements:', err);
+    res.status(500).json({ message: 'Failed to fetch progress achievements', error: err.message });
+  }
+});
+
+// GET completed achievements
+router.get('/achievements/completed', authenticateToken, async (req, res) => {
+  const search = req.query.search || '';
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+    
+    let query = `
+      SELECT 
+        a.AchievementID AS id,
+        a.Title AS title,
+        ua.CompletedDate AS date,
+        a.Icon AS icon
+      FROM dbo.Achievements a
+      INNER JOIN dbo.UserAchievements ua 
+        ON a.AchievementID = ua.AchievementID
+      WHERE ua.UserID = @userId
+        AND ua.IsCompleted = 1
+        AND a.IsActive = 1
+    `;
+
+    const request = pool.request().input('userId', userId);
+
+    // Add search filter if provided
+    if (search) {
+      query += ` AND a.Title LIKE @search`;
+      request.input('search', `%${search}%`);
+    }
+
+    query += ` ORDER BY ua.CompletedDate DESC`;
+
+    const result = await request.query(query);
+
+    // Transform to match expected format
+    const completed = result.recordset.map(achievement => ({
+      id: achievement.id,
+      title: achievement.title,
+      date: achievement.date,
+      icon: achievement.icon
+    }));
+
+    res.status(200).json({
+      userId,
+      search,
+      completed
+    });
+  } catch (err) {
+    console.error('Error fetching completed achievements:', err);
+    res.status(500).json({ message: 'Failed to fetch completed achievements', error: err.message });
+  }
+});
+
+// DELETE progress achievement (removes user's progress tracking)
+router.delete('/achievements/progress/:id', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const achievementId = req.params.id;
+  const period = req.query.period || 'Daily';
+
+  try {
+    const pool = getPool();
+
+    // Verify the achievement exists and belongs to the category
+    const checkResult = await pool.request()
+      .input('achievementId', achievementId)
+      .input('category', period)
+      .query(`
+        SELECT AchievementID 
+        FROM dbo.Achievements 
+        WHERE AchievementID = @achievementId 
+          AND Category = @category
+          AND IsActive = 1
+      `);
+
+    if (checkResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Achievement not found or invalid category' 
+      });
+    }
+
+    // Delete user's progress for this achievement
+    const deleteResult = await pool.request()
+      .input('userId', userId)
+      .input('achievementId', achievementId)
+      .query(`
+        DELETE FROM dbo.UserAchievements
+        WHERE UserID = @userId 
+          AND AchievementID = @achievementId
+      `);
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Achievement progress deleted successfully' 
+    });
+  } catch (err) {
+    console.error('Error deleting achievement progress:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to delete achievement progress', 
+      error: err.message 
+    });
+  }
+});
+
+// POST create or update user achievement progress
+router.post('/achievements/progress', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { achievementId, currentValue } = req.body;
+
+  if (!achievementId || currentValue === undefined) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'achievementId and currentValue are required' 
+    });
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get achievement goal value
+    const achievementResult = await pool.request()
+      .input('achievementId', achievementId)
+      .query(`
+        SELECT GoalValue 
+        FROM dbo.Achievements 
+        WHERE AchievementID = @achievementId 
+          AND IsActive = 1
+      `);
+
+    if (achievementResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Achievement not found' 
+      });
+    }
+
+    const goalValue = achievementResult.recordset[0].GoalValue;
+    const isCompleted = currentValue >= goalValue;
+
+    // Upsert user achievement
+    await pool.request()
+      .input('userId', userId)
+      .input('achievementId', achievementId)
+      .input('currentValue', currentValue)
+      .input('isCompleted', isCompleted ? 1 : 0)
+      .input('completedDate', isCompleted ? new Date() : null)
+      .query(`
+        MERGE dbo.UserAchievements AS target
+        USING (SELECT @userId AS UserID, @achievementId AS AchievementID) AS source
+        ON target.UserID = source.UserID AND target.AchievementID = source.AchievementID
+        WHEN MATCHED THEN
+          UPDATE SET 
+            CurrentValue = @currentValue,
+            IsCompleted = @isCompleted,
+            CompletedDate = CASE WHEN @isCompleted = 1 AND CompletedDate IS NULL 
+                              THEN GETDATE() 
+                              ELSE CompletedDate END,
+            LastModified = GETDATE()
+        WHEN NOT MATCHED THEN
+          INSERT (UserID, AchievementID, CurrentValue, IsCompleted, CompletedDate)
+          VALUES (@userId, @achievementId, @currentValue, @isCompleted, 
+                  CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END);
+      `);
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Achievement progress updated successfully',
+      completed: isCompleted
+    });
+  } catch (err) {
+    console.error('Error updating achievement progress:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update achievement progress', 
+      error: err.message 
     });
   }
 });
