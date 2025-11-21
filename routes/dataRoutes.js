@@ -4081,7 +4081,7 @@ router.get('/deviceData/lastSync/:deviceType', authenticateToken, async (req, re
 //  PATCH  /api/deviceData/sync
 router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
-  const deviceType = req.params;
+  const deviceType = req.params.deviceType;
   const { 
     deviceData
   } = req.body;
