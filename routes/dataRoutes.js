@@ -4560,7 +4560,7 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       const newPriceId = priceIdMap[newBillingInterval];
       
       // Get upcoming invoice with proration preview
-      const upcomingInvoice = await stripe.invoices.upcoming({
+      const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
         customer: gatewayInfo.customerId,
         subscription: gatewayInfo.subscriptionId,
         subscription_items: [{
