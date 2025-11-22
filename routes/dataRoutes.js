@@ -4563,14 +4563,21 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
       const subscriptionItemId = subscription.items.data[0].id;
       
-      // Use Stripe's request method to call the API directly since the SDK methods aren't available
-      const upcomingInvoice = await stripe._request('GET', '/v1/invoices/upcoming', {
-        customer: gatewayInfo.customerId,
-        subscription: gatewayInfo.subscriptionId,
-        'subscription_items[0][id]': subscriptionItemId,
-        'subscription_items[0][price]': newPriceId,
-        subscription_proration_behavior: 'always_invoice'
+      // Call Stripe API directly using axios since SDK methods are not available
+      const response = await axios.get('https://api.stripe.com/v1/invoices/upcoming', {
+        params: {
+          customer: gatewayInfo.customerId,
+          subscription: gatewayInfo.subscriptionId,
+          'subscription_items[0][id]': subscriptionItemId,
+          'subscription_items[0][price]': newPriceId,
+          subscription_proration_behavior: 'always_invoice'
+        },
+        headers: {
+          'Authorization': `Bearer ${process.env.STRIPE_SECRET_KEY}`
+        }
       });
+      
+      const upcomingInvoice = response.data;
       
       // Calculate proration
       const prorationAmount = upcomingInvoice.lines.data
