@@ -4559,28 +4559,16 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       
       const newPriceId = priceIdMap[newBillingInterval];
       
-      // Debug: Check available methods
-      const availableMethods = Object.keys(stripe.invoices).filter(k => typeof stripe.invoices[k] === 'function');
-      console.log('🔍 Stripe invoices methods:', availableMethods);
+      // Get subscription item ID first
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      const subscriptionItemId = subscription.items.data[0].id;
       
-      // Return debug info if retrieveUpcoming doesn't exist
-      if (typeof stripe.invoices.retrieveUpcoming !== 'function') {
-        return res.status(500).json({
-          error: 'Debug info',
-          message: 'retrieveUpcoming not found',
-          availableMethods: availableMethods,
-          stripeVersion: stripe.VERSION || 'unknown'
-        });
-      }
-      
-      // Get upcoming invoice with proration preview
-      const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
+      // Use Stripe's request method to call the API directly since the SDK methods aren't available
+      const upcomingInvoice = await stripe._request('GET', '/v1/invoices/upcoming', {
         customer: gatewayInfo.customerId,
         subscription: gatewayInfo.subscriptionId,
-        subscription_items: [{
-          id: (await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId)).items.data[0].id,
-          price: newPriceId
-        }],
+        'subscription_items[0][id]': subscriptionItemId,
+        'subscription_items[0][price]': newPriceId,
         subscription_proration_behavior: 'always_invoice'
       });
       
