@@ -4559,6 +4559,9 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       
       const newPriceId = priceIdMap[newBillingInterval];
       
+      // Debug: Log available methods
+      console.log('🔍 Stripe invoices methods:', Object.keys(stripe.invoices).filter(k => typeof stripe.invoices[k] === 'function'));
+      
       // Get upcoming invoice with proration preview
       const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
         customer: gatewayInfo.customerId,
