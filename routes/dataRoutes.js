@@ -4559,8 +4559,19 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       
       const newPriceId = priceIdMap[newBillingInterval];
       
-      // Debug: Log available methods
-      console.log('🔍 Stripe invoices methods:', Object.keys(stripe.invoices).filter(k => typeof stripe.invoices[k] === 'function'));
+      // Debug: Check available methods
+      const availableMethods = Object.keys(stripe.invoices).filter(k => typeof stripe.invoices[k] === 'function');
+      console.log('🔍 Stripe invoices methods:', availableMethods);
+      
+      // Return debug info if retrieveUpcoming doesn't exist
+      if (typeof stripe.invoices.retrieveUpcoming !== 'function') {
+        return res.status(500).json({
+          error: 'Debug info',
+          message: 'retrieveUpcoming not found',
+          availableMethods: availableMethods,
+          stripeVersion: stripe.VERSION || 'unknown'
+        });
+      }
       
       // Get upcoming invoice with proration preview
       const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
