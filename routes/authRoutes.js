@@ -409,4 +409,57 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// -------- OURA ----------
+/*
+/auth/oura → redirects user to Oura login
+
+/auth/oura/callback → receives code, exchanges for access token
+
+/api/oura/user-info → fetches Oura data using stored access token
+*/
+
+router.get("/oura", (req, res) => {
+  const base = "https://cloud.ouraring.com/oauth/authorize";
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: process.env.OURA_CLIENT_ID,
+    redirect_uri: process.env.OURA_REDIRECT_URI,
+    scope: "personal daily heartrate session workout tag email"
+  });
+
+  res.redirect(`${base}?${params.toString()}`);
+});
+
+router.get("/oura/callback", async (req, res) => {
+  const code = req.query.code;
+
+  if (!code) return res.status(400).send("Missing auth code");
+
+  try {
+    // Step 1: Exchange for token
+    const tokenData = await exchangeCodeForToken(code);
+    const accessToken = tokenData.access_token;
+
+    // Step 2: Save token to Azure SQL (userId example = 1)
+    const pool = await sql.connect(config);
+
+    await pool.request()
+      .input("userId", sql.Int, 1)
+      .input("accessToken", sql.VarChar, accessToken)
+      .query(`
+        IF EXISTS (SELECT * FROM OuraTokens WHERE userId = @userId)
+          UPDATE OuraTokens SET accessToken = @accessToken WHERE userId = @userId
+        ELSE
+          INSERT INTO OuraTokens (userId, accessToken)
+          VALUES (@userId, @accessToken)
+      `);
+
+    res.send("Oura connected! You can close this window.");
+  } catch (err) {
+    console.error("OAuth Error:", err);
+    res.status(500).send("Error during Oura OAuth");
+  }
+});
+
 module.exports = router;

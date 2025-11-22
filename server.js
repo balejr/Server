@@ -4,7 +4,11 @@ require("dotenv").config(); // Load environment variables first
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+
 const { connectToDatabase } = require("./config/db");
+const session = require("express-session");
+const { sql, config } = require("./db");
+const { exchangeCodeForToken, getUserInfo } = require("./services/ouraService");
 
 // Import routes
 const authRoutes = require("./routes/authRoutes");
@@ -29,6 +33,14 @@ app.use((req, res, next) => {
 // Webhook endpoint needs raw body for Stripe signature verification
 app.use('/api/data/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json());
+
+app.use(
+  session({
+    secret: "SUPER_SECRET_SESSION",
+    resave: false,
+    saveUninitialized: true
+  })
+);
 
 // Connect to the database
 connectToDatabase();

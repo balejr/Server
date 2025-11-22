@@ -99,4 +99,28 @@ router.delete('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// ---------- OURA ----------
+router.get("/oura/userinfo", async (req, res) => {
+  try {
+    const pool = await sql.connect(config);
+
+    // Example: always using userId = 1
+    const tokenResp = await pool.request()
+      .input("userId", sql.Int, 1)
+      .query("SELECT accessToken FROM OuraTokens WHERE userId = @userId");
+
+    if (tokenResp.recordset.length === 0)
+      return res.status(401).json({ message: "Oura not connected" });
+
+    const token = tokenResp.recordset[0].accessToken;
+
+    const userInfo = await getUserInfo(token);
+
+    res.json(userInfo);
+  } catch (err) {
+    console.error("User Info Error:", err);
+    res.status(500).json({ error: "Could not fetch user info" });
+  }
+});
+
 module.exports = router;

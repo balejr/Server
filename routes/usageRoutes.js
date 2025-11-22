@@ -210,7 +210,8 @@ router.get("/usage/history", authenticateToken, async (req, res) => {
 });
 
 // OURA URI
-router.get('/oauth/callback', async (req, res) => {
+router.get('/oauth/callback', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
   const code = req.query.code;
 
   try {
@@ -224,6 +225,7 @@ router.get('/oauth/callback', async (req, res) => {
     });
 
     // Save tokens and redirect to your app
+    // TO-DO SQL Insert
     res.send("Oura authentication successful!");
   } catch (error) {
     console.error("Get usage history error:", error);
