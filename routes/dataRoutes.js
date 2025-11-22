@@ -5148,18 +5148,31 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       console.log(`📝 Previewing invoice with subscription item: ${subscriptionItemId}`);
       console.log(`📝 Current price: ${currentPriceId}, New price: ${newPriceId}`);
       
-      // Use Stripe SDK method instead of axios
-      const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
+      // Use axios to call Stripe API directly (SDK is broken on Azure)
+      // Format subscription_items as query parameters properly
+      const params = new URLSearchParams({
         customer: gatewayInfo.customerId,
         subscription: gatewayInfo.subscriptionId,
-        subscription_items: [
-          {
-            id: subscriptionItemId,
-            price: newPriceId
-          }
-        ],
         subscription_proration_behavior: 'always_invoice'
       });
+      
+      // Add subscription items - Stripe expects subscription_items[0][id] and subscription_items[0][price]
+      params.append('subscription_items[0][id]', subscriptionItemId);
+      params.append('subscription_items[0][price]', newPriceId);
+      
+      console.log(`🔗 Calling Stripe API: https://api.stripe.com/v1/invoices/upcoming?${params.toString()}`);
+      
+      const response = await axios.get(
+        `https://api.stripe.com/v1/invoices/upcoming?${params.toString()}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+      
+      const upcomingInvoice = response.data;
       
       // Calculate proration
       const prorationAmount = upcomingInvoice.lines.data
