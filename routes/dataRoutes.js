@@ -4563,15 +4563,17 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
       const subscriptionItemId = subscription.items.data[0].id;
       
-      // Call Stripe API directly using axios since SDK methods are not available
-      const response = await axios.get('https://api.stripe.com/v1/invoices/upcoming', {
-        params: {
-          customer: gatewayInfo.customerId,
-          subscription: gatewayInfo.subscriptionId,
-          'subscription_items[0][id]': subscriptionItemId,
-          'subscription_items[0][price]': newPriceId,
-          subscription_proration_behavior: 'always_invoice'
-        },
+      // Build query string manually for proper array formatting
+      const queryParams = new URLSearchParams({
+        customer: gatewayInfo.customerId,
+        subscription: gatewayInfo.subscriptionId,
+        subscription_proration_behavior: 'always_invoice'
+      });
+      queryParams.append('subscription_items[0][id]', subscriptionItemId);
+      queryParams.append('subscription_items[0][price]', newPriceId);
+      
+      // Call Stripe API directly using axios
+      const response = await axios.get(`https://api.stripe.com/v1/invoices/upcoming?${queryParams.toString()}`, {
         headers: {
           'Authorization': `Bearer ${process.env.STRIPE_SECRET_KEY}`
         }
