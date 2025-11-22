@@ -4562,24 +4562,37 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       // Get subscription item ID first
       const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
       const subscriptionItemId = subscription.items.data[0].id;
+      const currentPriceId = subscription.items.data[0].price.id;
       
-      // Build query string manually for proper array formatting
-      const queryParams = new URLSearchParams({
+      // If trying to change to the same plan, return current details
+      if (currentPriceId === newPriceId) {
+        return res.status(200).json({
+          success: true,
+          currentPlan: gatewayInfo.currentPlan,
+          newPlan: `Premium ${capitalize(newBillingInterval)}`,
+          prorationAmount: 0,
+          nextInvoiceAmount: subscription.items.data[0].price.unit_amount / 100,
+          currency: subscription.items.data[0].price.currency.toUpperCase(),
+          effectiveDate: new Date().toISOString(),
+          message: 'Already on this plan'
+        });
+      }
+      
+      console.log(`📝 Previewing invoice with subscription item: ${subscriptionItemId}`);
+      console.log(`📝 Current price: ${currentPriceId}, New price: ${newPriceId}`);
+      
+      // Use Stripe SDK method instead of axios
+      const upcomingInvoice = await stripe.invoices.retrieveUpcoming({
         customer: gatewayInfo.customerId,
         subscription: gatewayInfo.subscriptionId,
+        subscription_items: [
+          {
+            id: subscriptionItemId,
+            price: newPriceId
+          }
+        ],
         subscription_proration_behavior: 'always_invoice'
       });
-      queryParams.append('subscription_items[0][id]', subscriptionItemId);
-      queryParams.append('subscription_items[0][price]', newPriceId);
-      
-      // Call Stripe API directly using axios
-      const response = await axios.get(`https://api.stripe.com/v1/invoices/upcoming?${queryParams.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${process.env.STRIPE_SECRET_KEY}`
-        }
-      });
-      
-      const upcomingInvoice = response.data;
       
       // Calculate proration
       const prorationAmount = upcomingInvoice.lines.data
