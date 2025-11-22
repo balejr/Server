@@ -5101,16 +5101,25 @@ router.get('/subscriptions/history', authenticateToken, async (req, res) => {
  * Preview proration for plan change
  */
 router.post('/subscriptions/preview-change', authenticateToken, async (req, res) => {
+  console.log('🎯 Preview-change endpoint hit!');
+  console.log('📦 Request body:', JSON.stringify(req.body));
+  console.log('👤 User ID:', req.user?.userId);
+  
   try {
     const userId = req.user.userId;
     const { newBillingInterval } = req.body;
     
+    console.log(`✅ Processing preview for user ${userId}, interval: ${newBillingInterval}`);
+    
     if (!newBillingInterval) {
+      console.log('❌ Missing newBillingInterval');
       return res.status(400).json({ error: 'newBillingInterval is required' });
     }
     
     // Get user's payment gateway
+    console.log(`🔍 Getting payment gateway for user ${userId}...`);
     const gatewayInfo = await getPaymentGateway(userId);
+    console.log(`✅ Gateway info retrieved:`, JSON.stringify(gatewayInfo));
     
     if (gatewayInfo.gateway === 'stripe') {
       if (!stripe) {
@@ -5198,9 +5207,21 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
     
   } catch (error) {
     console.error('❌ Preview change error:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Log axios-specific error details
+    if (error.response) {
+      console.error('❌ Axios response error:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
+    
     return res.status(500).json({ 
       error: 'Preview failed',
-      message: error.message
+      message: error.message,
+      details: error.response?.data || error.stack
     });
   }
 });
