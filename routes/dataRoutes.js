@@ -5160,10 +5160,12 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
       // Use axios to call Stripe API directly (SDK is broken on Azure)
       // Use the new Create Preview Invoice API with correct parameter structure
       const requestBody = new URLSearchParams({
-        customer: gatewayInfo.customerId
+        customer: gatewayInfo.customerId,
+        subscription: gatewayInfo.subscriptionId
       });
       
       // Use subscription_details parameter structure for the new API
+      // IMPORTANT: For existing subscriptions, we preview an update to the subscription
       requestBody.append('subscription_details[proration_behavior]', 'always_invoice');
       requestBody.append('subscription_details[items][0][id]', subscriptionItemId);
       requestBody.append('subscription_details[items][0][price]', newPriceId);
