@@ -4204,6 +4204,11 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
       
       console.log(`✅ Plan change completed for user ${userId}`);
       
+      // Safe date handling
+      const nextBillingDate = updatedSubscription.current_period_end 
+        ? new Date(updatedSubscription.current_period_end * 1000).toISOString() 
+        : null;
+
       return res.status(200).json({
         success: true,
         subscriptionId: updatedSubscription.id,
@@ -4212,7 +4217,7 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
         effectiveDate: new Date().toISOString(),
         prorationAmount,
         transactionId: transactionResult.transactionId,
-        nextBillingDate: new Date(updatedSubscription.current_period_end * 1000).toISOString()
+        nextBillingDate
       });
       
     } else if (gatewayInfo.gateway === 'apple_pay') {
