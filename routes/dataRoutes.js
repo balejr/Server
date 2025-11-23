@@ -4238,7 +4238,7 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
       if (pool) {
         await pool.request()
           .input('userId', mssql.Int, parseInt(userId, 10))
-          .input('plan', mssql.NVarChar(32), `Premium ${capitalize(newBillingInterval)}`)
+          .input('plan', mssql.NVarChar(32), newBillingInterval) // Store interval as plan name to match constraint
           .input('billingInterval', mssql.NVarChar(32), newBillingInterval)
           .query(`
             UPDATE [dbo].[user_subscriptions]
