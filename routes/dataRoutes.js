@@ -4259,27 +4259,19 @@ router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
       
       console.log(`🔄 Pausing subscription ${gatewayInfo.subscriptionId} until ${resumeDate.toISOString()}`);
       
-      // Update subscription with pause collection
-      const schedule = await stripe.subscriptionSchedules.create({
-        from_subscription: gatewayInfo.subscriptionId,
-      });
+      // Check for existing schedule and release it if present
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      if (subscription.schedule) {
+        console.log(`📅 Releasing existing schedule ${subscription.schedule} before pausing`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
       
-      await stripe.subscriptionSchedules.update(schedule.id, {
-        phases: [
-          {
-            items: [{ price: (await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId)).items.data[0].price.id }],
-            start_date: schedule.phases[0].start_date,
-            end_date: resumeTimestamp,
-            proration_behavior: 'none',
-            collection_method: 'charge_automatically',
-            billing_cycle_anchor: 'phase_start'
-          },
-          {
-            items: [{ price: (await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId)).items.data[0].price.id }],
-            start_date: resumeTimestamp,
-            proration_behavior: 'none'
-          }
-        ]
+      // Use Stripe's native pause_collection with auto-resume
+      await stripe.subscriptions.update(gatewayInfo.subscriptionId, {
+        pause_collection: {
+          behavior: 'void', // Don't bill, void invoices
+          resumes_at: resumeTimestamp
+        }
       });
       
       // Update database
