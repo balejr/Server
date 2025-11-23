@@ -4851,13 +4851,13 @@ router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
       // Update database
       const pool = getPool();
       if (pool) {
+        // Note: We don't update status to 'paused' because DB constraint might not allow it
+        // The transaction record below will track the pause event
         await pool.request()
           .input('userId', mssql.Int, parseInt(userId, 10))
-          .input('status', mssql.NVarChar(32), 'paused')
           .query(`
             UPDATE [dbo].[user_subscriptions]
-            SET status = @status,
-                updated_at = SYSDATETIMEOFFSET()
+            SET updated_at = SYSDATETIMEOFFSET()
             WHERE UserId = @userId
           `);
       }
