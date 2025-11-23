@@ -4142,6 +4142,7 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
             price: newPriceId
           }],
           proration_behavior: prorationBehavior,
+          billing_cycle_anchor: 'now', // Reset billing cycle to start immediately
           metadata: {
             userId: String(userId),
             billingInterval: newBillingInterval,
