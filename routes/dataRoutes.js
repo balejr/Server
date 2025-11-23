@@ -4356,6 +4356,15 @@ router.post('/subscriptions/cancel', authenticateToken, async (req, res) => {
       
       console.log(`🔄 Canceling subscription ${gatewayInfo.subscriptionId} at period end`);
       
+      // First retrieve subscription to check for schedules
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      
+      // If subscription is controlled by a schedule (e.g. from a pause), release it first
+      if (subscription.schedule) {
+        console.log(`📅 Found active schedule ${subscription.schedule}, releasing it...`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
+      
       // Cancel subscription at period end
       const canceledSubscription = await stripe.subscriptions.update(
         gatewayInfo.subscriptionId,
