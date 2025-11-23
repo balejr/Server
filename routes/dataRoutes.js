@@ -4376,7 +4376,23 @@ router.post('/subscriptions/cancel', authenticateToken, async (req, res) => {
         }
       );
       
-      const periodEndDate = new Date(canceledSubscription.current_period_end * 1000);
+      // Safely handle date conversion
+      let periodEndDate;
+      try {
+        if (canceledSubscription.current_period_end) {
+          periodEndDate = new Date(canceledSubscription.current_period_end * 1000);
+        } else {
+          // Fallback to current time + 30 days if missing
+          console.warn('⚠️ Missing current_period_end in subscription response');
+          const now = new Date();
+          periodEndDate = new Date(now.setDate(now.getDate() + 30));
+        }
+      } catch (e) {
+        console.warn('⚠️ Date conversion error:', e);
+        periodEndDate = new Date();
+      }
+      
+      console.log(`✅ Subscription canceled for user ${userId}, active until ${periodEndDate.toISOString()}`);
       
       // Update database
       const pool = getPool();
