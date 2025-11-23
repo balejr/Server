@@ -4466,8 +4466,14 @@ router.post('/subscriptions/resume', authenticateToken, async (req, res) => {
       
       console.log(`🔄 Resuming subscription ${gatewayInfo.subscriptionId}`);
       
-      // Check if subscription is set to cancel
+      // Check if subscription is set to cancel or has a schedule
       const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      
+      // If paused (controlled by schedule), release the schedule
+      if (subscription.schedule) {
+        console.log(`📅 Found active schedule ${subscription.schedule}, releasing to resume...`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
       
       if (subscription.cancel_at_period_end) {
         // Undo cancellation
