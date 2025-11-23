@@ -3353,6 +3353,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let currentPeriodStart = null;
     let billingInterval = subscription.billing_interval || null; // Initialize from database
     let cancellationScheduled = subscription.cancellation_scheduled === true || subscription.cancellation_scheduled === 1;
+    let currentStatus = subscription.status;
     let needsBillingIntervalUpdate = false;
     let needsCancellationUpdate = false;
     
@@ -3387,6 +3388,13 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
             expand: ['latest_invoice', 'items.data.price']
           });
+          
+          // Check for pause collection - override status if paused
+          if (stripeSubscription.pause_collection) {
+            currentStatus = 'paused';
+          } else if (stripeSubscription.status) {
+            currentStatus = stripeSubscription.status;
+          }
           
           // Check and update cancellation_scheduled flag from Stripe
           const stripeCancellationScheduled = stripeSubscription.cancel_at_period_end === true;
@@ -3597,7 +3605,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
 
     return res.json({
       plan: userProfile?.UserType || subscription.plan || 'Free', // Use UserType from UserProfile first, then fallback to subscription.plan
-      status: subscription.status || 'inactive',
+      status: currentStatus || 'inactive',
       currentPeriodEnd: nextBillingDate,
       currentPeriodStart: currentPeriodStart,
       nextBillingDate: nextBillingDate,
