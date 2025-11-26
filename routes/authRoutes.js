@@ -5,6 +5,7 @@ const { getPool } = require('../config/db');
 const { generateToken } = require('../utils/token');
 const { sendPasswordResetEmail } = require('../utils/mailer');
 const { authenticateToken } = require('../middleware/authMiddleware');
+const { exchangeCodeForToken } = require('../services/ouraService');
 
 const router = express.Router();
 

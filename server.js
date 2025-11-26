@@ -7,7 +7,8 @@ const multer = require("multer");
 
 const { connectToDatabase } = require("./config/db");
 const session = require("express-session");
-const { sql, config } = require("./db");
+const { sql, config } = require("./db");  // Server
+// const db = require('./config/db');  // Local
 const { exchangeCodeForToken, getUserInfo } = require("./services/ouraService");
 
 // Import routes
@@ -44,6 +45,11 @@ app.use(
 
 // Connect to the database
 connectToDatabase();
+
+// // Connect to the database (Local Modifications)
+// connectToDatabase()
+//   .then(() => console.log('DB connected'))
+//   .catch(err => console.error(err));
 
 // Routes
 app.use("/api/auth", authRoutes);

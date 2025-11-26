@@ -38,3 +38,27 @@ const getPool = () => {
 };
 
 module.exports = { connectToDatabase, getPool };
+
+// Local Test
+// const sql = require('mssql');
+
+// const config = {
+//   server: 'localhost\\SQLEXPRESS',
+//   database: 'TestDB',
+//   user: 'testuser',
+//   password: 'yourpassword',
+//   options: {
+//     trustServerCertificate: true
+//   }
+// };
+
+// async function connectToDatabase() {
+//   try {
+//     await sql.connect(config);
+//     console.log('Connected to SQL Server Express');
+//   } catch (err) {
+//     console.error('Database connection failed:', err);
+//   }
+// }
+
+// module.exports = { connectToDatabase };
