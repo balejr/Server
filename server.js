@@ -7,7 +7,7 @@ const multer = require("multer");
 
 const { connectToDatabase } = require("./config/db");
 // const session = require("express-session");
-const { sql, config } = require("./db");  // Server
+// const { sql, config } = require("./db"); // Local
 // const db = require('./config/db');  // Local
 const { exchangeCodeForToken, getUserInfo } = require("./services/ouraService");
 
