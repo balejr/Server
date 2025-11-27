@@ -26,8 +26,8 @@ const getWeekStart = () => {
   return utcWeekStart;
 };
 
-// Check usage limit function
-const checkUsageLimit = async (userId) => {
+// Check usage limit function with inquiry type differentiation
+const checkUsageLimit = async (userId, inquiryType = "general") => {
   try {
     const pool = getPool();
 
@@ -37,7 +37,19 @@ const checkUsageLimit = async (userId) => {
       `);
 
     const userType = userResult.recordset[0]?.UserType || "free";
-    const weeklyLimit = userType === "premium" ? 100 : 5;
+
+    // Set limits based on user type and inquiry type
+    let weeklyLimit;
+    if (userType === "premium") {
+      weeklyLimit = 100; // Premium users get 100 total inquiries
+    } else {
+      // Free users: 5 general + 3 workout inquiries per week
+      if (inquiryType === "workout") {
+        weeklyLimit = 3;
+      } else {
+        weeklyLimit = 5;
+      }
+    }
 
     // Get current week's usage
     const weekStart = getWeekStart();
@@ -46,7 +58,7 @@ const checkUsageLimit = async (userId) => {
       .request()
       .input("userId", userId)
       .input("weekStart", weekStart).query(`
-        SELECT MessageCount, WeekStart 
+        SELECT GeneralInquiryCount, WorkoutInquiryCount, WeekStart 
         FROM dbo.UserUsage 
         WHERE UserID = @userId 
         AND WeekStart = @weekStart
@@ -59,19 +71,29 @@ const checkUsageLimit = async (userId) => {
       return { remaining: weeklyLimit, used: 0, weekStart: weekStart };
     }
 
-    const remaining = Math.max(0, weeklyLimit - usage.MessageCount);
-    return { remaining, used: usage.MessageCount, weekStart: weekStart };
+    // Get the appropriate count based on inquiry type
+    const usedCount =
+      inquiryType === "workout"
+        ? usage.WorkoutInquiryCount
+        : usage.GeneralInquiryCount;
+
+    const remaining = Math.max(0, weeklyLimit - usedCount);
+    return { remaining, used: usedCount, weekStart: weekStart };
   } catch (error) {
     console.error("Error checking usage limit:", error);
     return { remaining: 0, used: 0, weekStart: null };
   }
 };
 
-// Increment usage function
-const incrementUsage = async (userId) => {
+// Increment usage function with inquiry type differentiation
+const incrementUsage = async (userId, inquiryType = "general") => {
   try {
     const pool = getPool();
     const weekStart = getWeekStart();
+
+    // Determine which column to increment
+    const columnName =
+      inquiryType === "workout" ? "WorkoutInquiryCount" : "GeneralInquiryCount";
 
     // First, try to update existing record
     const updateResult = await pool
@@ -79,7 +101,7 @@ const incrementUsage = async (userId) => {
       .input("userId", userId)
       .input("weekStart", weekStart).query(`
         UPDATE dbo.UserUsage 
-        SET MessageCount = MessageCount + 1
+        SET ${columnName} = ${columnName} + 1
         WHERE UserID = @userId AND WeekStart = @weekStart
       `);
 
@@ -89,9 +111,11 @@ const incrementUsage = async (userId) => {
         const insertResult = await pool
           .request()
           .input("userId", userId)
-          .input("weekStart", weekStart).query(`
-            INSERT INTO dbo.UserUsage (UserID, MessageCount, WeekStart)
-            VALUES (@userId, 1, @weekStart)
+          .input("weekStart", weekStart)
+          .input("generalCount", inquiryType === "general" ? 1 : 0)
+          .input("workoutCount", inquiryType === "workout" ? 1 : 0).query(`
+            INSERT INTO dbo.UserUsage (UserID, GeneralInquiryCount, WorkoutInquiryCount, WeekStart)
+            VALUES (@userId, @generalCount, @workoutCount, @weekStart)
           `);
       } catch (insertError) {
         // If insert fails due to duplicate, try update again
@@ -102,14 +126,13 @@ const incrementUsage = async (userId) => {
             .input("userId", userId)
             .input("weekStart", weekStart).query(`
               UPDATE dbo.UserUsage 
-              SET MessageCount = MessageCount + 1
+              SET ${columnName} = ${columnName} + 1
               WHERE UserID = @userId AND WeekStart = @weekStart
             `);
         } else {
           throw insertError;
         }
       }
-    } else {
     }
 
     return true;
@@ -124,27 +147,78 @@ router.get("/usage", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
   try {
-    const usage = await checkUsageLimit(userId);
-
-    // Get user type
+    // Get user type and current week's usage
     const pool = getPool();
+    const weekStart = getWeekStart();
+
     const userResult = await pool.request().input("userId", userId).query(`
         SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId
       `);
 
     const userType = userResult.recordset[0]?.UserType || "free";
-    const weeklyLimit = userType === "premium" ? 100 : 5;
 
-    res.json({
-      success: true,
-      usage: {
-        remaining: usage.remaining,
-        used: usage.used,
-        limit: weeklyLimit,
-        user_type: userType,
-        week_start: usage.weekStart,
-      },
-    });
+    // Get current week's usage from database
+    const usageResult = await pool
+      .request()
+      .input("userId", userId)
+      .input("weekStart", weekStart).query(`
+        SELECT GeneralInquiryCount, WorkoutInquiryCount, WeekStart 
+        FROM dbo.UserUsage 
+        WHERE UserID = @userId 
+        AND WeekStart = @weekStart
+      `);
+
+    const usage = usageResult.recordset[0];
+
+    if (userType === "premium") {
+      // Premium users have unified limits (100 total)
+      const totalUsed = usage
+        ? usage.GeneralInquiryCount + usage.WorkoutInquiryCount
+        : 0;
+      const totalRemaining = Math.max(0, 100 - totalUsed);
+
+      res.json({
+        success: true,
+        usage: {
+          general: {
+            remaining: totalRemaining,
+            used: usage ? usage.GeneralInquiryCount : 0,
+            limit: 100,
+          },
+          workout: {
+            remaining: totalRemaining,
+            used: usage ? usage.WorkoutInquiryCount : 0,
+            limit: 100,
+          },
+          user_type: userType,
+          week_start: weekStart,
+        },
+      });
+    } else {
+      // Free users have separate limits for general and workout inquiries
+      const generalUsed = usage ? usage.GeneralInquiryCount : 0;
+      const workoutUsed = usage ? usage.WorkoutInquiryCount : 0;
+      const generalRemaining = Math.max(0, 5 - generalUsed);
+      const workoutRemaining = Math.max(0, 3 - workoutUsed);
+
+      res.json({
+        success: true,
+        usage: {
+          general: {
+            remaining: generalRemaining,
+            used: generalUsed,
+            limit: 5,
+          },
+          workout: {
+            remaining: workoutRemaining,
+            used: workoutUsed,
+            limit: 3,
+          },
+          user_type: userType,
+          week_start: weekStart,
+        },
+      });
+    }
   } catch (error) {
     console.error("Get usage error:", error);
     res.status(500).json({
@@ -190,7 +264,7 @@ router.get("/usage/history", authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const result = await pool.request().input("userId", userId).query(`
-        SELECT WeekStart, MessageCount, CreateDate
+        SELECT WeekStart, GeneralInquiryCount, WorkoutInquiryCount, CreateDate
         FROM dbo.UserUsage 
         WHERE UserID = @userId
         ORDER BY WeekStart DESC

@@ -3306,6 +3306,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let currentPeriodStart = null;
     let billingInterval = subscription.billing_interval || null; // Initialize from database
     let cancellationScheduled = subscription.cancellation_scheduled === true || subscription.cancellation_scheduled === 1;
+    let currentStatus = subscription.status;
     let needsBillingIntervalUpdate = false;
     let needsCancellationUpdate = false;
     
@@ -3340,6 +3341,13 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
             expand: ['latest_invoice', 'items.data.price']
           });
+          
+          // Check for pause collection - override status if paused
+          if (stripeSubscription.pause_collection) {
+            currentStatus = 'paused';
+          } else if (stripeSubscription.status) {
+            currentStatus = stripeSubscription.status;
+          }
           
           // Check and update cancellation_scheduled flag from Stripe
           const stripeCancellationScheduled = stripeSubscription.cancel_at_period_end === true;
@@ -3550,7 +3558,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
 
     return res.json({
       plan: userProfile?.UserType || subscription.plan || 'Free', // Use UserType from UserProfile first, then fallback to subscription.plan
-      status: subscription.status || 'inactive',
+      status: currentStatus || 'inactive',
       currentPeriodEnd: nextBillingDate,
       currentPeriodStart: currentPeriodStart,
       nextBillingDate: nextBillingDate,
@@ -4142,4 +4150,660 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
   }
 });
 
-module.exports = router;
+// ========== SUBSCRIPTION MANAGEMENT ENDPOINTS ==========
+// New endpoints for in-app subscription management (replacing Stripe Customer Portal)
+
+const { getPaymentGateway, isGatewaySupported } = require('../utils/paymentGatewayRouter');
+const { recordTransaction, getTransactionHistory } = require('../utils/transactionRecorder');
+
+/**
+ * POST /api/data/subscriptions/change-plan
+ * Change subscription plan (upgrade/downgrade)
+ */
+router.post('/subscriptions/change-plan', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Plan change request received`);
+  
+  try {
+    const userId = req.user.userId;
+    const { newBillingInterval, prorationBehavior = 'always_invoice' } = req.body;
+    
+    // Validate inputs
+    if (!newBillingInterval) {
+      return res.status(400).json({ error: 'newBillingInterval is required' });
+    }
+    
+    if (!['monthly', 'semi_annual', 'annual'].includes(newBillingInterval)) {
+      return res.status(400).json({ 
+        error: 'Invalid billingInterval',
+        details: 'Must be one of: monthly, semi_annual, annual'
+      });
+    }
+    
+    // Get user's current payment gateway
+    const gatewayInfo = await getPaymentGateway(userId);
+    console.log(`📝 User ${userId} payment gateway: ${gatewayInfo.gateway}`);
+    
+    if (!isGatewaySupported(gatewayInfo.gateway)) {
+      return res.status(400).json({ 
+        error: 'Unsupported payment gateway',
+        gateway: gatewayInfo.gateway
+      });
+    }
+    
+    // Check if already on this plan
+    if (gatewayInfo.currentBillingInterval === newBillingInterval) {
+      return res.status(400).json({ 
+        error: 'Already on this plan',
+        currentPlan: `Premium ${newBillingInterval}`
+      });
+    }
+    
+    // Route to appropriate gateway
+    if (gatewayInfo.gateway === 'stripe') {
+      // Stripe plan change logic
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+      
+      // Get new price ID
+      const priceIdMap = {
+        monthly: process.env.STRIPE_PRICE_ID_MONTHLY,
+        semi_annual: process.env.STRIPE_PRICE_ID_SEMI_ANNUAL,
+        annual: process.env.STRIPE_PRICE_ID_ANNUAL
+      };
+      
+      const newPriceId = priceIdMap[newBillingInterval];
+      if (!newPriceId) {
+        return res.status(500).json({ 
+          error: `Price ID not configured for ${newBillingInterval}`
+        });
+      }
+      
+      console.log(`🔄 Updating Stripe subscription ${gatewayInfo.subscriptionId} to price ${newPriceId}`);
+      
+      // Update subscription in Stripe
+      const updatedSubscription = await stripe.subscriptions.update(
+        gatewayInfo.subscriptionId,
+        {
+          items: [{
+            id: (await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId)).items.data[0].id,
+            price: newPriceId
+          }],
+          proration_behavior: prorationBehavior,
+          billing_cycle_anchor: 'now', // Reset billing cycle to start immediately
+          metadata: {
+            userId: String(userId),
+            billingInterval: newBillingInterval,
+            plan: 'premium'
+          }
+        }
+      );
+      
+      console.log(`✅ Subscription updated in Stripe: ${updatedSubscription.id}`);
+      
+      // Get proration amount from latest invoice
+      let prorationAmount = 0;
+      if (updatedSubscription.latest_invoice) {
+        const invoice = typeof updatedSubscription.latest_invoice === 'string'
+          ? await stripe.invoices.retrieve(updatedSubscription.latest_invoice)
+          : updatedSubscription.latest_invoice;
+        
+        // Sum proration line items
+        if (invoice.lines && invoice.lines.data) {
+          prorationAmount = invoice.lines.data
+            .filter(line => line.proration)
+            .reduce((sum, line) => sum + line.amount, 0) / 100;
+        }
+      }
+      
+      // Determine transaction type
+      const transactionType = isUpgrade(gatewayInfo.currentBillingInterval, newBillingInterval) 
+        ? 'upgrade' 
+        : 'downgrade';
+      
+      // Record transaction
+      const transactionResult = await recordTransaction({
+        userId,
+        subscriptionId: gatewayInfo.subscriptionId,
+        type: transactionType,
+        fromPlan: `Premium ${gatewayInfo.currentBillingInterval}`,
+        toPlan: `Premium ${newBillingInterval}`,
+        billingInterval: newBillingInterval,
+        amount: updatedSubscription.items.data[0].price.unit_amount / 100,
+        currency: updatedSubscription.currency.toUpperCase(),
+        prorationAmount,
+        paymentGateway: 'stripe'
+      });
+      
+      // Update user_subscriptions table
+      const pool = getPool();
+      if (pool) {
+        await pool.request()
+          .input('userId', mssql.Int, parseInt(userId, 10))
+          .input('plan', mssql.NVarChar(32), newBillingInterval) // Store interval as plan name to match constraint
+          .input('billingInterval', mssql.NVarChar(32), newBillingInterval)
+          .query(`
+            UPDATE [dbo].[user_subscriptions]
+            SET [plan] = @plan,
+                billing_interval = @billingInterval,
+                updated_at = SYSDATETIMEOFFSET()
+            WHERE UserId = @userId
+          `);
+      }
+      
+      console.log(`✅ Plan change completed for user ${userId}`);
+      
+      // Safe date handling
+      const nextBillingDate = updatedSubscription.current_period_end 
+        ? new Date(updatedSubscription.current_period_end * 1000).toISOString() 
+        : null;
+
+      return res.status(200).json({
+        success: true,
+        subscriptionId: updatedSubscription.id,
+        newPlan: `Premium ${capitalize(newBillingInterval)}`,
+        newBillingInterval,
+        effectiveDate: new Date().toISOString(),
+        prorationAmount,
+        transactionId: transactionResult.transactionId,
+        nextBillingDate
+      });
+      
+    } else if (gatewayInfo.gateway === 'apple_pay') {
+      // Apple Pay plan change logic (Phase 2)
+      return res.status(501).json({ 
+        error: 'Apple Pay plan changes not yet implemented',
+        message: 'Please use the App Store to manage your subscription'
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Plan change error:', error);
+    return res.status(500).json({ 
+      error: 'Plan change failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/data/subscriptions/pause
+ * Pause subscription for 1-3 months
+ */
+router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Pause subscription request received`);
+  
+  try {
+    const userId = req.user.userId;
+    const { pauseDuration } = req.body; // Duration in months (1-3)
+    
+    // Validate pause duration
+    if (!pauseDuration || pauseDuration < 1 || pauseDuration > 3) {
+      return res.status(400).json({ 
+        error: 'Invalid pause duration',
+        details: 'Pause duration must be between 1 and 3 months'
+      });
+    }
+    
+    // Get user's payment gateway
+    const gatewayInfo = await getPaymentGateway(userId);
+    
+    if (gatewayInfo.gateway === 'stripe') {
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+      
+      // Calculate resume date
+      const resumeDate = new Date();
+      resumeDate.setMonth(resumeDate.getMonth() + pauseDuration);
+      const resumeTimestamp = Math.floor(resumeDate.getTime() / 1000);
+      
+      console.log(`🔄 Pausing subscription ${gatewayInfo.subscriptionId} until ${resumeDate.toISOString()}`);
+      
+      // Check for existing schedule and release it if present
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      if (subscription.schedule) {
+        console.log(`📅 Releasing existing schedule ${subscription.schedule} before pausing`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
+      
+      // Use Stripe's native pause_collection with auto-resume
+      await stripe.subscriptions.update(gatewayInfo.subscriptionId, {
+        pause_collection: {
+          behavior: 'void', // Don't bill, void invoices
+          resumes_at: resumeTimestamp
+        }
+      });
+      
+      // Update database
+      const pool = getPool();
+      if (pool) {
+        await pool.request()
+          .input('userId', mssql.Int, parseInt(userId, 10))
+          .input('status', mssql.NVarChar(32), 'paused')
+          .query(`
+            UPDATE [dbo].[user_subscriptions]
+            SET status = @status,
+                updated_at = SYSDATETIMEOFFSET()
+            WHERE UserId = @userId
+          `);
+      }
+      
+      // Record transaction
+      await recordTransaction({
+        userId,
+        subscriptionId: gatewayInfo.subscriptionId,
+        type: 'pause',
+        toPlan: gatewayInfo.currentPlan,
+        billingInterval: gatewayInfo.currentBillingInterval,
+        paymentGateway: 'stripe',
+        pauseDurationMonths: pauseDuration,
+        resumeDate
+      });
+      
+      console.log(`✅ Subscription paused for user ${userId}`);
+      
+      return res.status(200).json({
+        success: true,
+        status: 'paused',
+        pauseDuration,
+        resumeDate: resumeDate.toISOString(),
+        message: `Subscription paused for ${pauseDuration} month(s)`
+      });
+      
+    } else {
+      return res.status(501).json({ 
+        error: 'Pause not supported for this payment gateway',
+        gateway: gatewayInfo.gateway
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Pause subscription error:', error);
+    return res.status(500).json({ 
+      error: 'Pause failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/data/subscriptions/cancel
+ * Cancel subscription at end of billing period
+ */
+router.post('/subscriptions/cancel', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Cancel subscription request received`);
+  
+  try {
+    const userId = req.user.userId;
+    const { cancellationReason, feedback } = req.body;
+    
+    // Get user's payment gateway
+    const gatewayInfo = await getPaymentGateway(userId);
+    
+    if (gatewayInfo.gateway === 'stripe') {
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+      
+      console.log(`🔄 Canceling subscription ${gatewayInfo.subscriptionId} at period end`);
+      
+      // First retrieve subscription to check for schedules
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      
+      // If subscription is controlled by a schedule (e.g. from a pause), release it first
+      if (subscription.schedule) {
+        console.log(`📅 Found active schedule ${subscription.schedule}, releasing it...`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
+      
+      // Cancel subscription at period end
+      const canceledSubscription = await stripe.subscriptions.update(
+        gatewayInfo.subscriptionId,
+        {
+          cancel_at_period_end: true,
+          cancellation_details: {
+            comment: feedback || undefined
+          }
+        }
+      );
+      
+      // Safely handle date conversion
+      let periodEndDate;
+      try {
+        if (canceledSubscription.current_period_end) {
+          periodEndDate = new Date(canceledSubscription.current_period_end * 1000);
+        } else {
+          // Fallback to current time + 30 days if missing
+          console.warn('⚠️ Missing current_period_end in subscription response');
+          const now = new Date();
+          periodEndDate = new Date(now.setDate(now.getDate() + 30));
+        }
+      } catch (e) {
+        console.warn('⚠️ Date conversion error:', e);
+        periodEndDate = new Date();
+      }
+      
+      console.log(`✅ Subscription canceled for user ${userId}, active until ${periodEndDate.toISOString()}`);
+      
+      // Update database
+      const pool = getPool();
+      if (pool) {
+        await pool.request()
+          .input('userId', mssql.Int, parseInt(userId, 10))
+          .input('cancelAtPeriodEnd', mssql.Bit, true)
+          .query(`
+            UPDATE [dbo].[user_subscriptions]
+            SET cancel_at_period_end = @cancelAtPeriodEnd,
+                updated_at = SYSDATETIMEOFFSET()
+            WHERE UserId = @userId
+          `);
+      }
+      
+      // Record transaction
+      await recordTransaction({
+        userId,
+        subscriptionId: gatewayInfo.subscriptionId,
+        type: 'cancellation',
+        toPlan: gatewayInfo.currentPlan,
+        billingInterval: gatewayInfo.currentBillingInterval,
+        paymentGateway: 'stripe',
+        cancellationReason,
+        userFeedback: feedback
+      });
+      
+      console.log(`✅ Subscription canceled for user ${userId}, active until ${periodEndDate.toISOString()}`);
+      
+      return res.status(200).json({
+        success: true,
+        status: 'canceling',
+        activeUntil: periodEndDate.toISOString(),
+        message: 'Subscription will cancel at end of billing period'
+      });
+      
+    } else {
+      return res.status(501).json({ 
+        error: 'Cancellation not supported for this payment gateway',
+        gateway: gatewayInfo.gateway
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Cancel subscription error:', error);
+    return res.status(500).json({ 
+      error: 'Cancellation failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/data/subscriptions/resume
+ * Resume a paused or canceling subscription
+ */
+router.post('/subscriptions/resume', authenticateToken, async (req, res) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] 📥 Resume subscription request received`);
+  
+  try {
+    const userId = req.user.userId;
+    
+    // Get user's payment gateway
+    const gatewayInfo = await getPaymentGateway(userId);
+    
+    if (gatewayInfo.gateway === 'stripe') {
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+      
+      console.log(`🔄 Resuming subscription ${gatewayInfo.subscriptionId}`);
+      
+      // Check if subscription is set to cancel or has a schedule
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      
+      // Check for pause collection (native pause) - clear it if present
+      if (subscription.pause_collection) {
+        console.log(`⏸️ Found pause_collection, clearing it to resume...`);
+        await stripe.subscriptions.update(gatewayInfo.subscriptionId, {
+          pause_collection: '' // Unsets the pause configuration
+        });
+      }
+
+      // If paused (controlled by schedule - legacy), release the schedule
+      if (subscription.schedule) {
+        console.log(`📅 Found active schedule ${subscription.schedule}, releasing to resume...`);
+        await stripe.subscriptionSchedules.release(subscription.schedule);
+      }
+      
+      if (subscription.cancel_at_period_end) {
+        // Undo cancellation
+        await stripe.subscriptions.update(gatewayInfo.subscriptionId, {
+          cancel_at_period_end: false
+        });
+      }
+      
+      // Update database
+      const pool = getPool();
+      if (pool) {
+        await pool.request()
+          .input('userId', mssql.Int, parseInt(userId, 10))
+          .input('status', mssql.NVarChar(32), 'active')
+          .input('cancelAtPeriodEnd', mssql.Bit, false)
+          .query(`
+            UPDATE [dbo].[user_subscriptions]
+            SET status = @status,
+                cancel_at_period_end = @cancelAtPeriodEnd,
+                updated_at = SYSDATETIMEOFFSET()
+            WHERE UserId = @userId
+          `);
+      }
+      
+      // Record transaction
+      await recordTransaction({
+        userId,
+        subscriptionId: gatewayInfo.subscriptionId,
+        type: 'resume',
+        toPlan: gatewayInfo.currentPlan,
+        billingInterval: gatewayInfo.currentBillingInterval,
+        paymentGateway: 'stripe'
+      });
+      
+      console.log(`✅ Subscription resumed for user ${userId}`);
+      
+      return res.status(200).json({
+        success: true,
+        status: 'active',
+        message: 'Subscription resumed successfully'
+      });
+      
+    } else {
+      return res.status(501).json({ 
+        error: 'Resume not supported for this payment gateway',
+        gateway: gatewayInfo.gateway
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Resume subscription error:', error);
+    return res.status(500).json({ 
+      error: 'Resume failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/data/subscriptions/history
+ * Get transaction history for user
+ */
+router.get('/subscriptions/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const months = parseInt(req.query.months) || 12;
+    
+    console.log(`📝 Fetching transaction history for user ${userId} (last ${months} months)`);
+    
+    const history = await getTransactionHistory(userId, months);
+    
+    return res.status(200).json({
+      success: true,
+      transactions: history,
+      count: history.length
+    });
+    
+  } catch (error) {
+    console.error('❌ Get history error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch history',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/data/subscriptions/preview-change
+ * Preview proration for plan change
+ */
+router.post('/subscriptions/preview-change', authenticateToken, async (req, res) => {
+  console.log('🎯 Preview-change endpoint hit!');
+  console.log('📦 Request body:', JSON.stringify(req.body));
+  console.log('👤 User ID:', req.user?.userId);
+  
+  try {
+    const userId = req.user.userId;
+    const { newBillingInterval } = req.body;
+    
+    console.log(`✅ Processing preview for user ${userId}, interval: ${newBillingInterval}`);
+    
+    if (!newBillingInterval) {
+      console.log('❌ Missing newBillingInterval');
+      return res.status(400).json({ error: 'newBillingInterval is required' });
+    }
+    
+    // Get user's payment gateway
+    console.log(`🔍 Getting payment gateway for user ${userId}...`);
+    const gatewayInfo = await getPaymentGateway(userId);
+    console.log(`✅ Gateway info retrieved:`, JSON.stringify(gatewayInfo));
+    
+    if (gatewayInfo.gateway === 'stripe') {
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+      
+      // Get new price ID
+      const priceIdMap = {
+        monthly: process.env.STRIPE_PRICE_ID_MONTHLY,
+        semi_annual: process.env.STRIPE_PRICE_ID_SEMI_ANNUAL,
+        annual: process.env.STRIPE_PRICE_ID_ANNUAL
+      };
+      
+      const newPriceId = priceIdMap[newBillingInterval];
+      
+      // Get subscription item ID first
+      const subscription = await stripe.subscriptions.retrieve(gatewayInfo.subscriptionId);
+      const subscriptionItemId = subscription.items.data[0].id;
+      const currentPriceId = subscription.items.data[0].price.id;
+      
+      // If trying to change to the same plan, return current details
+      if (currentPriceId === newPriceId) {
+        return res.status(200).json({
+          success: true,
+          currentPlan: gatewayInfo.currentPlan,
+          newPlan: `Premium ${capitalize(newBillingInterval)}`,
+          prorationAmount: 0,
+          nextInvoiceAmount: subscription.items.data[0].price.unit_amount / 100,
+          currency: subscription.items.data[0].price.currency.toUpperCase(),
+          effectiveDate: new Date().toISOString(),
+          message: 'Already on this plan'
+        });
+      }
+      
+      console.log(`📝 Previewing invoice with subscription item: ${subscriptionItemId}`);
+      console.log(`📝 Current price: ${currentPriceId}, New price: ${newPriceId}`);
+      
+      // Use axios to call Stripe API directly (SDK is broken on Azure)
+      // Use the new Create Preview Invoice API with correct parameter structure
+      const requestBody = new URLSearchParams({
+        customer: gatewayInfo.customerId,
+        subscription: gatewayInfo.subscriptionId
+      });
+      
+      // Use subscription_details parameter structure for the new API
+      // IMPORTANT: For existing subscriptions, we preview an update to the subscription
+      requestBody.append('subscription_details[proration_behavior]', 'always_invoice');
+      requestBody.append('subscription_details[items][0][id]', subscriptionItemId);
+      requestBody.append('subscription_details[items][0][price]', newPriceId);
+      
+      console.log(`🔗 Calling Stripe Create Preview Invoice API`);
+      console.log(`📝 Request body:`, requestBody.toString());
+      
+      const response = await axios.post(
+        'https://api.stripe.com/v1/invoices/create_preview',
+        requestBody.toString(),
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+      
+      const upcomingInvoice = response.data;
+      
+      // Calculate proration
+      const prorationAmount = upcomingInvoice.lines.data
+        .filter(line => line.proration)
+        .reduce((sum, line) => sum + line.amount, 0) / 100;
+      
+      return res.status(200).json({
+        success: true,
+        currentPlan: gatewayInfo.currentPlan,
+        newPlan: `Premium ${capitalize(newBillingInterval)}`,
+        prorationAmount,
+        nextInvoiceAmount: upcomingInvoice.amount_due / 100,
+        currency: upcomingInvoice.currency.toUpperCase(),
+        effectiveDate: new Date().toISOString()
+      });
+      
+    } else {
+      return res.status(501).json({ 
+        error: 'Preview not supported for this payment gateway',
+        gateway: gatewayInfo.gateway
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Preview change error:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Log axios-specific error details
+    if (error.response) {
+      console.error('❌ Axios response error:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: 'Preview failed',
+      message: error.message,
+      details: error.response?.data || error.stack
+    });
+  }
+});
+
+// Helper functions
+function isUpgrade(currentInterval, newInterval) {
+  const hierarchy = { monthly: 1, semi_annual: 2, annual: 3 };
+  return hierarchy[newInterval] > hierarchy[currentInterval];
+}
+
+function capitalize(str) {
+  return str.charAt(0).toUpperCase() + str.slice(1).replace('_', ' ');
+}
+
+module.exports = router;// Redeployed Fri Nov 21 21:16:54 PST 2025
