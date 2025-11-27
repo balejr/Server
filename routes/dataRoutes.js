@@ -988,13 +988,13 @@ router.get('/exercises/history/:userId', async (req, res) => {
 //-------------- DEVICE DATA --------------------
 
 // GET /api/deviceData/lastSync
-router.get('/deviceData/lastSync', async (req, res) => {
+router.get('/deviceData/lastSync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
     deviceType
-  } = req.body;
+  } = req.query;
   try {
-    const pool = await getPool();
+    const pool = getPool();
     const result = await pool.request()
       .input('userId', userId)
       .input('deviceType', deviceType)
@@ -1013,7 +1013,7 @@ router.get('/deviceData/lastSync', async (req, res) => {
 });
 
 //  PATCH  /api/deviceData/sync
-router.patch('/deviceData/sync', async (req, res) => {
+router.patch('/deviceData/sync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { 
     deviceType,
