@@ -6,7 +6,7 @@ const cors = require("cors");
 const multer = require("multer");
 
 const { connectToDatabase } = require("./config/db");
-const session = require("express-session");
+// const session = require("express-session");
 const { sql, config } = require("./db");  // Server
 // const db = require('./config/db');  // Local
 const { exchangeCodeForToken, getUserInfo } = require("./services/ouraService");
@@ -36,13 +36,13 @@ app.use((req, res, next) => {
 app.use('/api/data/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-app.use(
-  session({
-    secret: "SUPER_SECRET_SESSION",
-    resave: false,
-    saveUninitialized: true
-  })
-);
+// app.use(
+//   session({
+//     secret: "SUPER_SECRET_SESSION",
+//     resave: false,
+//     saveUninitialized: true
+//   })
+// );
 
 // Connect to the database
 connectToDatabase();
