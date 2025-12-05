@@ -19,6 +19,16 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
+// Request logging middleware - log all requests to Azure
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  process.stdout.write(`\n[${timestamp}] 📥 ${req.method} ${req.path}\n`);
+  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  next();
+});
+
+// Webhook endpoint needs raw body for Stripe signature verification
+app.use('/api/data/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 // Connect to the database

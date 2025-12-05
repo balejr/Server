@@ -2,7 +2,15 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
-const { GoogleGenAI, Type } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Define Type constants for schema compatibility
+const Type = {
+  OBJECT: "object",
+  STRING: "string",
+  INTEGER: "integer",
+  ARRAY: "array",
+};
 const { checkUsageLimit, incrementUsage } = require("./usageRoutes");
 const { generatePlanId, saveWorkoutPlan } = require("./workoutRoutes");
 
