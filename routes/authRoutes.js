@@ -410,14 +410,17 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // --------------- OURA --------------
-router.get("/oura", (req, res) => {
+router.get("/oura", authenticateToken, (req, res) => {
+  const userId = req.user.userId;  // <-- Your app user ID
+
   const base = "https://cloud.ouraring.com/oauth/authorize";
 
   const params = new URLSearchParams({
     response_type: "code",
     client_id: process.env.OURA_CLIENT_ID,
     redirect_uri: process.env.OURA_REDIRECT_URI,
-    scope: "personal daily heartrate session workout tag email"
+    scope: "personal daily heartrate session workout tag email",
+    state: userId.toString()    // <-- SEND USER ID
   });
 
   res.redirect(`${base}?${params.toString()}`);
