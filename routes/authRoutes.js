@@ -431,81 +431,66 @@ router.get("/oura/getCode/:userId", (req, res) => {
   res.redirect(`${base}?${params.toString()}`);
 });
 
-router.get("/oura/callback", async (req, res) => {
+router.get('/oura/callback', async (req, res) => {
+  console.log('[OuraCallback] Route hit');
+  console.log('[OuraCallback] Query params:', req.query);
+
   const code = req.query.code;
-  const token = req.query.token; // optional direct token
+  const userId = req.query.state;
 
-  console.log("[OuraCallback] Received query:", req.query);
+  if (!code) {
+    console.log('[OuraCallback] Missing code');
+    return res.status(400).send('Missing code');
+  }
 
-  if (!code && !token) {
-    console.log("[OuraCallback] Missing code and token");
-    return res.status(400).send("Missing code or token");
+  if (!userId) {
+    console.log('[OuraCallback] Missing userId(state)');
+    return res.status(400).send('Missing userId (state)');
   }
 
   try {
-    let accessToken;
+    console.log('[OuraToken] Exchanging code for token:', code);
 
-    if (token) {
-      // If a token is sent directly, use it
-      accessToken = token;
-      console.log("[OuraCallback] Using direct token:", accessToken);
-    } else if (code) {
-      console.log("[OuraCallback] Exchanging OAuth code:", code);
+    const tokenData = await exchangeCodeForToken(code);
 
-      const payload = {
-        grant_type: "authorization_code",
-        code: code,
-        redirect_uri: process.env.OURA_REDIRECT_URI,
-        client_id: process.env.OURA_CLIENT_ID,
-        client_secret: process.env.OURA_CLIENT_SECRET,
-      };
+    console.log('[OuraToken] Token response:', tokenData);
 
-      console.log("[OuraToken] Payload:", payload);
-
-      const tokenData = await exchangeCodeForToken(code);
-      console.log("[OuraToken] Response from Oura:", tokenData);
-
-      accessToken = tokenData.access_token;
-    }
-
-    // Save accessToken to DB
-    const userId = req.query.state;
-    if (!userId) {
-      console.log("[OuraCallback] Missing userId (state)");
-      return res.status(400).send("Missing userId (state)");
-    }
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
 
     const pool = await getPool();
+
     await pool.request()
       .input('userId', userId)
       .input('accessToken', accessToken)
+      .input('refreshToken', refreshToken)
       .query(`
         IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
         BEGIN
           UPDATE OuraTokens
-          SET accessToken = @accessToken,
-              updatedAt = GETDATE()
+          SET 
+            accessToken = @accessToken,
+            refreshToken = @refreshToken,
+            updatedAt = GETDATE()
           WHERE userId = @userId;
         END
         ELSE
         BEGIN
-          INSERT INTO OuraTokens (userId, accessToken, createdAt, updatedAt)
-          VALUES (@userId, @accessToken, GETDATE(), GETDATE());
+          INSERT INTO OuraTokens 
+            (userId, accessToken, refreshToken, createdAt, updatedAt)
+          VALUES 
+            (@userId, @accessToken, @refreshToken, GETDATE(), GETDATE());
         END
       `);
 
-    console.log("[OuraCallback] Token saved for userId:", userId);
+    console.log('[OuraCallback] Token saved successfully');
 
-    res.send("Oura connected successfully! You can close this window.");
+    res.send('Oura connected successfully! You can close this window.');
+
   } catch (err) {
-    console.error("[OuraCallback] Error exchanging code:", err.response?.data || err);
-    res.status(500).send("Error processing callback");
+    console.error('[OuraCallback] Error exchanging code:', err);
+    res.status(500).send('Error processing callback');
   }
 });
-
-
-
-
-
 
 module.exports = router;

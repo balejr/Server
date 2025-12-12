@@ -4142,4 +4142,90 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
   }
 });
 
+router.get('/oura/sync', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    // 1. Get user's Oura access token from database
+    const pool = getPool();
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT AccessToken 
+        FROM OuraTokens
+        WHERE UserID = @userId
+      `);
+
+    if (tokenResult.recordset.length === 0) {
+      return res.status(400).json({ message: 'No Oura token found for user' });
+    }
+
+    const accessToken = tokenResult.recordset[0].AccessToken;
+
+    // 2. Fetch Oura activity (steps + calories)
+    const activityRes = await axios.get('https://api.ouraring.com/v2/usercollection/daily_activity', {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+
+    // 3. Fetch Oura sleep data
+    const sleepRes = await axios.get('https://api.ouraring.com/v2/usercollection/daily_sleep', {
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+
+    const activity = activityRes.data.data;
+    const sleep = sleepRes.data.data;
+
+    // 4. Merge records and UPSERT
+    for (const day of activity) {
+      const date = day.day;
+      const steps = day.steps ?? 0;
+      const calories = day.cal_total ?? 0;
+
+      // match sleep data by date
+      const sleepDay = sleep.find(s => s.day === date);
+      const sleepScore = sleepDay ? sleepDay.score ?? 0 : 0;
+
+      await pool.request()
+        .input('userId', userId)
+        .input('date', date)
+        .input('steps', steps)
+        .input('calories', calories)
+        .input('sleepScore', sleepScore)
+        .query(`
+          MERGE OuraDailyData AS target
+          USING (SELECT 
+                  @userId AS UserID,
+                  @date AS Date
+                ) AS source
+          ON target.UserID = source.UserID
+             AND target.Date = source.Date
+
+          WHEN MATCHED THEN
+            UPDATE SET
+              Steps = @steps,
+              Calories = @calories,
+              SleepScore = @sleepScore,
+              UpdatedAt = GETDATE()
+
+          WHEN NOT MATCHED THEN
+            INSERT (UserID, Date, Steps, Calories, SleepScore, CreatedAt)
+            VALUES (@userId, @date, @steps, @calories, @sleepScore, GETDATE());
+        `);
+    }
+
+    return res.status(200).json({
+      message: 'Oura steps, sleep, and calories synced successfully'
+    });
+
+  } catch (err) {
+    console.error('Oura Sync Error:', err);
+    return res.status(500).json({
+      message: 'Failed to sync Oura data',
+      error: err.message
+    });
+  }
+});
+
+
+
 module.exports = router;
