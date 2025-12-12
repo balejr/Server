@@ -4153,7 +4153,7 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       .query(`
         SELECT accessToken, RefreshToken
         FROM OuraTokens
-        WHERE userId = 'userId'
+        WHERE userId = @userId
       `);
 
     let ouraAccessToken = tokenResult.recordset[0]?.accessToken;
