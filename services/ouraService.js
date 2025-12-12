@@ -5,6 +5,14 @@ module.exports = {
     console.log("[OuraToken] Exchanging code for token:", code);
     console.log("[OuraToken] Using redirect URI:", process.env.OURA_REDIRECT_URI);
 
+    console.log("[OuraToken] Payload:", {
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: process.env.OURA_REDIRECT_URI,
+      client_id: process.env.OURA_CLIENT_ID,
+      client_secret: process.env.OURA_CLIENT_SECRET,
+    });
+
     try {
       const res = await axios.post("https://api.ouraring.com/oauth/token", {
         grant_type: "authorization_code",
