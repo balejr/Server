@@ -39,109 +39,109 @@ router.get('/exercises', authenticateToken, async (req, res) => {
 // -------------------- DAILY LOGS --------------------
 // POST daily Log
 router.post('/dailylog', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const {
-      sleep, steps, heartrate, waterIntake, sleepQuality, caloriesBurned,
-      restingHeartRate, heartrateVariability, weight, effectiveDate
-    } = req.body;
+  const userId = req.user.userId;
+  const {
+    sleep, steps, heartrate, waterIntake, sleepQuality, caloriesBurned,
+    restingHeartRate, heartrateVariability, weight, effectiveDate
+  } = req.body;
 
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('userId', userId)
-        .input('sleep', sleep)
-        .input('steps', steps)
-        .input('heartrate', heartrate)
-        .input('waterIntake', waterIntake)
-        .input('sleepQuality', sleepQuality)
-        .input('caloriesBurned', caloriesBurned)
-        .input('restingHeartRate', restingHeartRate)
-        .input('heartrateVariability', heartrateVariability)
-        .input('weight', weight)
-        .input('effectiveDate', effectiveDate)
-        .query(`
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('userId', userId)
+      .input('sleep', sleep)
+      .input('steps', steps)
+      .input('heartrate', heartrate)
+      .input('waterIntake', waterIntake)
+      .input('sleepQuality', sleepQuality)
+      .input('caloriesBurned', caloriesBurned)
+      .input('restingHeartRate', restingHeartRate)
+      .input('heartrateVariability', heartrateVariability)
+      .input('weight', weight)
+      .input('effectiveDate', effectiveDate)
+      .query(`
           INSERT INTO dbo.DailyLogs 
           (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, caloriesBurned, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
           VALUES 
            (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @caloriesBurned, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
         `);
-      res.status(200).json({ message: 'Daily log added successfully' });
-    } catch (err) {
-      console.error('DailyLog POST Error:', err);
-      res.status(500).json({ message: 'Failed to insert daily log' });
-    }
+    res.status(200).json({ message: 'Daily log added successfully' });
+  } catch (err) {
+    console.error('DailyLog POST Error:', err);
+    res.status(500).json({ message: 'Failed to insert daily log' });
+  }
 });
 
 // GET daily log by ID
 router.get('/dailylog/:logId', authenticateToken, async (req, res) => {
-    const { logId } = req.params;
+  const { logId } = req.params;
 
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('logId', logId)
-        .query('SELECT * FROM dbo.DailyLogs WHERE LogID = @logId');
-      res.status(200).json(result.recordset[0]);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch daily log' });
-    }
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('logId', logId)
+      .query('SELECT * FROM dbo.DailyLogs WHERE LogID = @logId');
+    res.status(200).json(result.recordset[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch daily log' });
+  }
 });
 
 // GET all daily logs for specific user
 router.get('/dailylogs', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
+  const userId = req.user.userId;
 
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .query(`SELECT dl.* FROM dbo.DailyLogs dl
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`SELECT dl.* FROM dbo.DailyLogs dl
                 INNER JOIN (SELECT MAX(LogId) AS LogId, EffectiveDate FROM dbo.DailyLogs 
                 WHERE UserID = @userId
                 GROUP BY EffectiveDate) dlx
                   ON dl.LogId = dlx.LogId
                 `);
 
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch daily logs' });
-    }
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch daily logs' });
+  }
 });
 
 // EDIT an existing daily log
 router.patch('/dailylog/:logId', authenticateToken, async (req, res) => {
-    const { logId } = req.params;
-    const fields = req.body;
+  const { logId } = req.params;
+  const fields = req.body;
 
-    const pool = getPool();
-    const request = pool.request().input('logId', logId);
-    const updates = Object.keys(fields).map((key) => {
-        request.input(key, fields[key]);
-        return `${key} = @${key}`;
-    }).join(', ');
+  const pool = getPool();
+  const request = pool.request().input('logId', logId);
+  const updates = Object.keys(fields).map((key) => {
+    request.input(key, fields[key]);
+    return `${key} = @${key}`;
+  }).join(', ');
 
-    try {
-        await request.query(`UPDATE dbo.DailyLogs SET ${updates} WHERE LogID = @logId`);
-        res.status(200).json({ message: 'Daily log updated' });
-    } catch (err) {
-        res.status(500).json({ message: 'Failed to update daily log' });
-    }
+  try {
+    await request.query(`UPDATE dbo.DailyLogs SET ${updates} WHERE LogID = @logId`);
+    res.status(200).json({ message: 'Daily log updated' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update daily log' });
+  }
 });
 
 // DELETE daily log by ID
 router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
-    const { logId } = req.params;
-  
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('logId', logId)
-        .query('DELETE FROM dbo.DailyLogs WHERE LogID = @logId');
-  
-      res.status(200).json({ message: 'Daily log deleted successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to delete daily log' });
-    }
+  const { logId } = req.params;
+
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('logId', logId)
+      .query('DELETE FROM dbo.DailyLogs WHERE LogID = @logId');
+
+    res.status(200).json({ message: 'Daily log deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete daily log' });
+  }
 });
 
 // -------------------- EXERCISE EXISTENCE --------------------
@@ -161,7 +161,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   let today = null;
   let targetMuscleForRoutine = ''; // fallback if workoutName not provided
   let workoutNameForRoutine = '';
-  
+
 
   try {
     for (const item of exerciseList) {
@@ -197,11 +197,11 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
       // Check or insert into dbo.Exercise
       const checkExercise = await pool.request()
-      .input('exerciseId', sourceExerciseId)
-      .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`);
-    
+        .input('exerciseId', sourceExerciseId)
+        .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`);
 
-        console.log('gifURL being inserted:', gifURL);
+
+      console.log('gifURL being inserted:', gifURL);
 
       let MasterExerciseId;
 
@@ -270,7 +270,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       const allNewEquipment = [...new Set([...equipmentList, ...Array.from(allEquipment)])];
 
       const updatedLoad = (routine.Load || 0) + totalLoad;
-      
+
 
       await pool.request()
         .input('id', routine.WorkoutRoutineID)
@@ -316,335 +316,335 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
 // GET all exercise instances for specific user
 router.get('/exerciseexistences', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId');
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch exercise existences' });
-    }
+  const userId = req.user.userId;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId');
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch exercise existences' });
+  }
 });
 
 // GET all exercise instances for specific user and specific exercise
 router.get('/exerciseexistence/user/:exerciseId', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { exerciseId } = req.params;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .input('exerciseId', exerciseId)
-        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId AND ExerciseID = @exerciseId');
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch by user and exerciseId' });
-    }
+  const userId = req.user.userId;
+  const { exerciseId } = req.params;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('exerciseId', exerciseId)
+      .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId AND ExerciseID = @exerciseId');
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch by user and exerciseId' });
+  }
 });
 
 // GET all exercise instances for specific user on a specific date
 router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { date } = req.params;
-    try { 
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .input('date', date)
-        // .query(`SELECT ex.* , e.ExerciseName
-        //         FROM dbo.ExerciseExistence ex
-        //         INNER JOIN 
-        //         (
-        //         SELECT MAX(ee.ExerciseExistenceID) as ExerciseExistenceID, ee.UserId, ee.ExerciseID
-        //         FROM dbo.ExerciseExistence ee
-        //         INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
-        //             FROM dbo.ExerciseExistence 
-        //             WHERE UserID = @userId
-        //             AND CONVERT(date, [Date]) = @date
-        //             GROUP BY UserId) eex
-        //         ON ee.UserId = eex.UserId
-        //         AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
-        //         GROUP BY ee.UserId, ee.ExerciseID
-        //         ) ey
-        //         on ex.ExerciseExistenceID = ey.ExerciseExistenceID
-        //         LEFT JOIN dbo.[Exercise] e 
-        //         ON ex.ExerciseId = e.ExerciseId`)
-        
-        .query(`SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee 
+  const userId = req.user.userId;
+  const { date } = req.params;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('date', date)
+      // .query(`SELECT ex.* , e.ExerciseName
+      //         FROM dbo.ExerciseExistence ex
+      //         INNER JOIN 
+      //         (
+      //         SELECT MAX(ee.ExerciseExistenceID) as ExerciseExistenceID, ee.UserId, ee.ExerciseID
+      //         FROM dbo.ExerciseExistence ee
+      //         INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date] 
+      //             FROM dbo.ExerciseExistence 
+      //             WHERE UserID = @userId
+      //             AND CONVERT(date, [Date]) = @date
+      //             GROUP BY UserId) eex
+      //         ON ee.UserId = eex.UserId
+      //         AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
+      //         GROUP BY ee.UserId, ee.ExerciseID
+      //         ) ey
+      //         on ex.ExerciseExistenceID = ey.ExerciseExistenceID
+      //         LEFT JOIN dbo.[Exercise] e 
+      //         ON ex.ExerciseId = e.ExerciseId`)
+
+      .query(`SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee 
                 LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId 
                 WHERE ee.UserID = @userId AND CONVERT(date, ee.Date) = @date`);
-                
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch by user and date' });
-    }
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch by user and date' });
+  }
 });
 
 // PATCH edit an exercise instance
 router.patch('/exerciseexistence/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const fields = req.body;
+  const { id } = req.params;
+  const fields = req.body;
 
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
+  const pool = getPool();
+  const request = pool.request().input('id', id);
+  const updates = Object.keys(fields).map((key) => {
+    request.input(key, fields[key]);
+    return `${key} = @${key}`;
+  }).join(', ');
 
-    try {
-      await request.query(`UPDATE dbo.ExerciseExistence SET ${updates} WHERE ExerciseExistenceID = @id`);
-      res.status(200).json({ message: 'Exercise existence updated' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to update exercise existence' });
-    }
+  try {
+    await request.query(`UPDATE dbo.ExerciseExistence SET ${updates} WHERE ExerciseExistenceID = @id`);
+    res.status(200).json({ message: 'Exercise existence updated' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update exercise existence' });
+  }
 });
 
 // DELETE an exercise instance
 // DELETE EXERCISE EXISTENCE AND REMOVE FROM ROUTINE
 router.delete('/exerciseexistence/:id', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { id } = req.params;
+  const userId = req.user.userId;
+  const { id } = req.params;
 
-    try {
-      const pool = getPool();
+  try {
+    const pool = getPool();
 
-      // Remove the existence ID from any linked WorkoutRoutine
-      const routineQuery = await pool.request()
-        .input('id', id)
-        .query(`
+    // Remove the existence ID from any linked WorkoutRoutine
+    const routineQuery = await pool.request()
+      .input('id', id)
+      .query(`
           SELECT WorkoutRoutineID, ExerciseInstances FROM dbo.WorkoutRoutine
           WHERE ExerciseInstances LIKE '%${id}%'
         `);
 
-      for (const routine of routineQuery.recordset) {
-        const ids = routine.ExerciseInstances.split(',').map(i => i.trim()).filter(i => i !== id);
-        await pool.request()
-          .input('instances', ids.join(','))
-          .input('routineId', routine.WorkoutRoutineID)
-          .query(`
+    for (const routine of routineQuery.recordset) {
+      const ids = routine.ExerciseInstances.split(',').map(i => i.trim()).filter(i => i !== id);
+      await pool.request()
+        .input('instances', ids.join(','))
+        .input('routineId', routine.WorkoutRoutineID)
+        .query(`
             UPDATE dbo.WorkoutRoutine SET ExerciseInstances = @instances WHERE WorkoutRoutineID = @routineId
           `);
-      }
-
-      await pool.request()
-        .input('id', id)
-        .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
-
-      res.status(200).json({ message: 'Exercise existence deleted and routine updated' });
-    } catch (err) {
-      console.error('ExerciseExistence DELETE Error:', err);
-      res.status(500).json({ message: 'Failed to delete exercise existence' });
     }
+
+    await pool.request()
+      .input('id', id)
+      .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
+
+    res.status(200).json({ message: 'Exercise existence deleted and routine updated' });
+  } catch (err) {
+    console.error('ExerciseExistence DELETE Error:', err);
+    res.status(500).json({ message: 'Failed to delete exercise existence' });
+  }
 });
 
 // -------------------- WORKOUT ROUTINE --------------------
 // POST a new workout routine
 router.post('/workoutroutine', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const {
-      workoutName, exerciseInstances, equipment, duration,
-      caloriesBurned, intensity, load, durationLeft, completed, workoutRoutineDate
-    } = req.body;
+  const userId = req.user.userId;
+  const {
+    workoutName, exerciseInstances, equipment, duration,
+    caloriesBurned, intensity, load, durationLeft, completed, workoutRoutineDate
+  } = req.body;
 
-    try { 
-      const pool = getPool();
-      await pool.request()
-        .input('userId', userId)
-        .input('workoutName', workoutName)
-        .input('exerciseInstances', exerciseInstances) // comma-separated IDs
-        .input('equipment', equipment)
-        .input('duration', duration)
-        .input('caloriesBurned', caloriesBurned)
-        .input('intensity', intensity)
-        .input('load', load)
-        .input('durationLeft', durationLeft)
-        .input('completed', completed)
-        .input('workoutRoutineDate', workoutRoutineDate)
-        .query(`
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('userId', userId)
+      .input('workoutName', workoutName)
+      .input('exerciseInstances', exerciseInstances) // comma-separated IDs
+      .input('equipment', equipment)
+      .input('duration', duration)
+      .input('caloriesBurned', caloriesBurned)
+      .input('intensity', intensity)
+      .input('load', load)
+      .input('durationLeft', durationLeft)
+      .input('completed', completed)
+      .input('workoutRoutineDate', workoutRoutineDate)
+      .query(`
           INSERT INTO dbo.WorkoutRoutine
           (UserID, WorkoutName, ExerciseInstances, Equipment, Duration, CaloriesBurned, Intensity, Load, DurationLeft, Completed, WorkoutRoutineDate)
           VALUES
           (@userId, @workoutName, @exerciseInstances, @equipment, @duration, @caloriesBurned, @intensity, @load, @durationLeft, @completed, @workoutRoutineDate)
         `);
 
-      res.status(200).json({ message: 'Workout routine added successfully' });
-    } catch (err) {
-      console.error('WorkoutRoutine POST Error:', err);
-      res.status(500).json({ message: 'Failed to insert workout routine' });
-    }
+    res.status(200).json({ message: 'Workout routine added successfully' });
+  } catch (err) {
+    console.error('WorkoutRoutine POST Error:', err);
+    res.status(500).json({ message: 'Failed to insert workout routine' });
+  }
 });
 
 // GET a workout routine by ID
 router.get('/workoutroutine/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('id', id)
-        .query('SELECT * FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
-      res.status(200).json(result.recordset[0]);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch workout routine' });
-    }
+  const { id } = req.params;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('id', id)
+      .query('SELECT * FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+    res.status(200).json(result.recordset[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch workout routine' });
+  }
 });
 
 // GET all workout routines for a specific user
 router.get('/workoutroutines', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId');
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch workout routines' });
-    }
+  const userId = req.user.userId;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId');
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch workout routines' });
+  }
 });
 
 // GET all workout routines for specific user on a specific date
 router.get('/workoutroutines/date/:date', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { date } = req.params;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .input('date', date)
-        .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId AND WorkoutRoutineDate = @date');
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch workout routines by date' });
-    }
+  const userId = req.user.userId;
+  const { date } = req.params;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('date', date)
+      .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId AND WorkoutRoutineDate = @date');
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch workout routines by date' });
+  }
 });
 
 // GET all exercise instances for a specific workout routine
 router.get('/workoutroutine/exerciseinstances/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    try {
-      const pool = getPool();
-      const routineResult = await pool.request()
-        .input('id', id)
-        .query('SELECT ExerciseInstances FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+  const { id } = req.params;
+  try {
+    const pool = getPool();
+    const routineResult = await pool.request()
+      .input('id', id)
+      .query('SELECT ExerciseInstances FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
 
-      const instanceIds = routineResult.recordset[0]?.ExerciseInstances?.split(',') || [];
-      if (instanceIds.length === 0) return res.status(200).json([]);
+    const instanceIds = routineResult.recordset[0]?.ExerciseInstances?.split(',') || [];
+    if (instanceIds.length === 0) return res.status(200).json([]);
 
-      const placeholders = instanceIds.map((_, i) => `@id${i}`).join(',');
-      const request = pool.request();
-      instanceIds.forEach((val, i) => request.input(`id${i}`, parseInt(val)));
+    const placeholders = instanceIds.map((_, i) => `@id${i}`).join(',');
+    const request = pool.request();
+    instanceIds.forEach((val, i) => request.input(`id${i}`, parseInt(val)));
 
-      const result = await request.query(`
+    const result = await request.query(`
         SELECT * FROM dbo.ExerciseExistence WHERE ExerciseExistenceID IN (${placeholders})
       `);
 
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch exercise instances from workout routine' });
-    }
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch exercise instances from workout routine' });
+  }
 });
 
 // PATCH edit a workout routine
 router.patch('/workoutroutine/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
+  const { id } = req.params;
+  const fields = req.body;
+  const pool = getPool();
+  const request = pool.request().input('id', id);
+  const updates = Object.keys(fields).map((key) => {
+    request.input(key, fields[key]);
+    return `${key} = @${key}`;
+  }).join(', ');
 
-    try {
-      await request.query(`UPDATE dbo.WorkoutRoutine SET ${updates} WHERE WorkoutRoutineID = @id`);
-      res.status(200).json({ message: 'Workout routine updated successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to update workout routine' });
-    }
+  try {
+    await request.query(`UPDATE dbo.WorkoutRoutine SET ${updates} WHERE WorkoutRoutineID = @id`);
+    res.status(200).json({ message: 'Workout routine updated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update workout routine' });
+  }
 });
 
 // DELETE a workout routine
 router.delete('/workoutroutine/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('id', id)
-        .query('DELETE FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
-      res.status(200).json({ message: 'Workout routine deleted successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to delete workout routine' });
-    }
+  const { id } = req.params;
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('id', id)
+      .query('DELETE FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
+    res.status(200).json({ message: 'Workout routine deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete workout routine' });
+  }
 });
 
 // -------------------- MESOCYCLES --------------------
 // POST a mesocycle
 router.post('/mesocycle', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { start_date, end_date, is_current, created_date } = req.body;
+  const userId = req.user.userId;
+  const { start_date, end_date, is_current, created_date } = req.body;
 
-    try {
-      const pool = getPool();
-      // Step 1: Set all existing mesocycles for this user to is_current = 0
+  try {
+    const pool = getPool();
+    // Step 1: Set all existing mesocycles for this user to is_current = 0
     await pool.request()
-        .input('userId', userId)
-        .query(`
+      .input('userId', userId)
+      .query(`
           UPDATE dbo.mesocycles
           SET is_current = 0
           WHERE UserId = @userId
         `);
-      await pool.request()
-        .input('userId', userId)
-        .input('start_date', start_date)
-        .input('end_date', end_date)
-        .input('is_current', is_current)
-        .input('created_date', created_date)
-        .query(`
+    await pool.request()
+      .input('userId', userId)
+      .input('start_date', start_date)
+      .input('end_date', end_date)
+      .input('is_current', is_current)
+      .input('created_date', created_date)
+      .query(`
           INSERT INTO dbo.mesocycles (UserId, start_date, end_date, is_current, created_date)
           VALUES (@userId, @start_date, @end_date, CAST(@is_current AS BIT), CAST(@created_date AS DATETIME2))
         `);
-      res.status(200).json({ message: 'Mesocycle added successfully' });
+    res.status(200).json({ message: 'Mesocycle added successfully' });
 
-    } catch (err) {
-      console.error('Server error inserting mesocycle:', err.message);
-      res.status(500).json({ message: 'Failed to insert mesocycle' });
-    }
+  } catch (err) {
+    console.error('Server error inserting mesocycle:', err.message);
+    res.status(500).json({ message: 'Failed to insert mesocycle' });
+  }
 });
 
 // GET all users mesocycles
 router.get('/mesocycles', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId and is_current = 1');
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch mesocycles' });
-    }
+  const userId = req.user.userId;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId and is_current = 1');
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch mesocycles' });
+  }
 });
 
 // EDIT specific mesocycle
 router.patch('/mesocycle/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
+  const { id } = req.params;
+  const fields = req.body;
+  const pool = getPool();
+  const request = pool.request().input('id', id);
+  const updates = Object.keys(fields).map((key) => {
+    request.input(key, fields[key]);
+    return `${key} = @${key}`;
+  }).join(', ');
 
-    try {
-      await request.query(`UPDATE dbo.Mesocycles SET ${updates} WHERE mesocycle_id = @id`);
-      res.status(200).json({ message: 'Mesocycle updated successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to update mesocycle' });
-    }
+  try {
+    await request.query(`UPDATE dbo.Mesocycles SET ${updates} WHERE mesocycle_id = @id`);
+    res.status(200).json({ message: 'Mesocycle updated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update mesocycle' });
+  }
 });
 
 // DELETE a mesocycle
@@ -695,105 +695,105 @@ router.get('/mesocycles/date', authenticateToken, async (req, res) => {
 // POST a microcycle
 
 router.post('/microcycle', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { mesocycle_id, start_date, end_date, is_current, created_date } = req.body;
+  const userId = req.user.userId;
+  const { mesocycle_id, start_date, end_date, is_current, created_date } = req.body;
 
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('userId', userId)
-        .query(`
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('userId', userId)
+      .query(`
           UPDATE dbo.Microcycles
           SET is_current = 0
           WHERE UserId = @userId
         `);
-      await pool.request()
-        .input('userId', userId)
-        .input('mesocycle_id', mesocycle_id)
-        // .input('week_number', week_number)
-        .input('start_date', start_date)
-        .input('end_date', end_date)
-        .input('is_current', is_current)
-        .input('created_date', created_date)
-        .query(`
+    await pool.request()
+      .input('userId', userId)
+      .input('mesocycle_id', mesocycle_id)
+      // .input('week_number', week_number)
+      .input('start_date', start_date)
+      .input('end_date', end_date)
+      .input('is_current', is_current)
+      .input('created_date', created_date)
+      .query(`
           INSERT INTO dbo.Microcycles (mesocycle_id, start_date, end_date, is_current, created_date, userID)
           VALUES (@mesocycle_id, @start_date, @end_date, @is_current, @created_date, @userId)
         `);
-      res.status(200).json({ message: 'Microcycle added successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to insert microcycle' , err});
-    }
+    res.status(200).json({ message: 'Microcycle added successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to insert microcycle', err });
+  }
 });
 
 // GET all microcyles by user
 router.get('/microcycles', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .query(`
+  const userId = req.user.userId;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
           SELECT m.* FROM dbo.Microcycles m
           INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
           WHERE ms.UserId = @userId
         `);
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch microcycles' });
-    }
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch microcycles' });
+  }
 });
 
 // GET all microcycles within a mesocycle
 router.get('/microcycles/:mesocycle_id', authenticateToken, async (req, res) => {
-    const userId = req.user.userId;
-    const { mesocycle_id } = req.params;
-    try {
-      const pool = getPool();
-      const result = await pool.request()
-        .input('userId', userId)
-        .input('mesocycle_id', mesocycle_id)
-        .query(`
+  const userId = req.user.userId;
+  const { mesocycle_id } = req.params;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('mesocycle_id', mesocycle_id)
+      .query(`
           SELECT m.* FROM dbo.Microcycles m
           INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
           WHERE ms.UserId = @userId AND m.mesocycle_id = @mesocycle_id
         `);
-      res.status(200).json(result.recordset);
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to fetch microcycles for mesocycle' });
-    }
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch microcycles for mesocycle' });
+  }
 });
 
 // PATCH edit a specific microcycle
 router.patch('/microcycle/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
+  const { id } = req.params;
+  const fields = req.body;
+  const pool = getPool();
+  const request = pool.request().input('id', id);
+  const updates = Object.keys(fields).map((key) => {
+    request.input(key, fields[key]);
+    return `${key} = @${key}`;
+  }).join(', ');
 
-    try {
-      await request.query(`UPDATE dbo.Microcycles SET ${updates} WHERE microcycle_id = @id`);
-      res.status(200).json({ message: 'Microcycle updated successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to update microcycle' });
-    }
+  try {
+    await request.query(`UPDATE dbo.Microcycles SET ${updates} WHERE microcycle_id = @id`);
+    res.status(200).json({ message: 'Microcycle updated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update microcycle' });
+  }
 });
 
 // DELETE a specific microcyle
 router.delete('/microcycle/:id', authenticateToken, async (req, res) => {
-    const { id } = req.params;
-    try {
-      const pool = getPool();
-      await pool.request()
-        .input('id', id)
-        .query('DELETE FROM dbo.Microcycles WHERE microcycle_id = @id');
-      res.status(200).json({ message: 'Microcycle deleted successfully' });
-    } catch (err) {
-      res.status(500).json({ message: 'Failed to delete microcycle' });
-    }
+  const { id } = req.params;
+  try {
+    const pool = getPool();
+    await pool.request()
+      .input('id', id)
+      .query('DELETE FROM dbo.Microcycles WHERE microcycle_id = @id');
+    res.status(200).json({ message: 'Microcycle deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete microcycle' });
+  }
 });
 //--------UNFINISED EXERCISES (Jump Back In) -------------------
 
@@ -1052,7 +1052,7 @@ router.get('/exercises/history/:userId', async (req, res) => {
 //   });
 // }
 // });
-  
+
 
 
 // module.exports = router;
@@ -1077,8 +1077,8 @@ router.get('/payments/test', (req, res) => {
   const timestamp = new Date().toISOString();
   process.stdout.write(`\n[${timestamp}] ✅ TEST ENDPOINT HIT!\n`);
   console.log(`[${timestamp}] ✅ TEST ENDPOINT HIT!`);
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'Azure backend is reachable!',
     timestamp,
     path: req.path,
@@ -1095,7 +1095,7 @@ function mapPlanToDatabaseCode(plan, billingInterval = null) {
   if (plan === 'monthly' || plan === 'semi_annual' || plan === 'annual') {
     return plan;
   }
-  
+
   // Map 'premium' or 'Premium' based on billingInterval
   if (plan === 'premium' || plan === 'Premium') {
     if (billingInterval === 'semi_annual' || billingInterval === '6_months') {
@@ -1107,13 +1107,13 @@ function mapPlanToDatabaseCode(plan, billingInterval = null) {
       return 'monthly';
     }
   }
-  
+
   // Map 'free' or 'Free' - but free plans shouldn't have subscriptions
   // Return null or handle appropriately
   if (plan === 'free' || plan === 'Free') {
     return null; // Free plans don't have subscription records
   }
-  
+
   // Default to monthly for unknown plans
   return 'monthly';
 }
@@ -1216,17 +1216,17 @@ function sendErrorResponse(res, statusCode, error, message, details = null) {
   if (details && process.env.NODE_ENV !== 'production') {
     console.error(`   Details:`, details);
   }
-  
+
   const response = {
     error: error,
     message: message,
     timestamp: timestamp
   };
-  
+
   if (details && process.env.NODE_ENV !== 'production') {
     response.details = details;
   }
-  
+
   return res.status(statusCode).json(response);
 }
 
@@ -1236,7 +1236,7 @@ function sendErrorResponse(res, statusCode, error, message, details = null) {
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Payment initialization request received`);
-  
+
   try {
     // Validate environment variables
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -1252,7 +1252,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
     // Validate that at least monthly price ID exists
     if (!priceIdMap.monthly) {
-      return sendErrorResponse(res, 500, 'Configuration Error', 
+      return sendErrorResponse(res, 500, 'Configuration Error',
         'STRIPE_PRICE_ID_MONTHLY missing on server. Please configure Stripe Price IDs.');
     }
 
@@ -1265,25 +1265,25 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     }
 
     const { plan = 'premium', billingInterval = 'monthly', paymentMethod = 'card' } = req.body || {};
-    
+
     // Validate billingInterval
     if (!['monthly', 'semi_annual', 'annual'].includes(billingInterval)) {
-      return sendErrorResponse(res, 400, 'Validation Error', 
+      return sendErrorResponse(res, 400, 'Validation Error',
         'billingInterval must be one of: monthly, semi_annual, annual');
     }
 
     // Get the correct Price ID based on billing interval
     const priceId = priceIdMap[billingInterval];
     if (!priceId) {
-      return sendErrorResponse(res, 500, 'Configuration Error', 
+      return sendErrorResponse(res, 500, 'Configuration Error',
         `STRIPE_PRICE_ID_${billingInterval.toUpperCase()} missing on server`);
     }
-    
+
     // Validate plan
     if (plan && typeof plan !== 'string') {
       return sendErrorResponse(res, 400, 'Validation Error', 'plan must be a string');
     }
-    
+
     // Validate paymentMethod
     if (paymentMethod && typeof paymentMethod !== 'string') {
       return sendErrorResponse(res, 400, 'Validation Error', 'paymentMethod must be a string');
@@ -1292,23 +1292,23 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     // Get or create Stripe Customer
     let customer;
     const pool = getPool();
-    
+
     // Check if user already has a customer_id in database
     if (pool) {
       try {
         const existingCustomer = await pool.request()
           .input('userId', mssql.Int, parseInt(userId, 10))
           .query(`SELECT customer_id FROM [dbo].[user_subscriptions] WHERE UserId = @userId AND customer_id IS NOT NULL`);
-        
+
         if (existingCustomer.recordset.length > 0 && existingCustomer.recordset[0].customer_id) {
           const existingCustomerId = existingCustomer.recordset[0].customer_id;
           console.log(`📝 Found existing customer_id in database: ${existingCustomerId}`);
-          
+
           // Try to retrieve customer from Stripe
           try {
             customer = await stripe.customers.retrieve(existingCustomerId);
             console.log(`✅ Retrieved existing Stripe Customer: ${customer.id}`);
-            
+
             // Verify customer exists and is valid
             if (customer.deleted) {
               console.warn(`⚠️ Customer ${existingCustomerId} was deleted in Stripe, will create new one`);
@@ -1329,18 +1329,18 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
                     LEFT JOIN [dbo].[UserProfile] UP ON UL.UserID = UP.UserID
                     WHERE UL.UserID = @userId
                   `);
-                  
+
                   if (userInfoResult.recordset.length > 0) {
                     const userInfo = userInfoResult.recordset[0];
                     const userEmail = userInfo.Email || null;
                     const firstName = userInfo.FirstName || '';
                     const lastName = userInfo.LastName || '';
                     const userName = `${firstName} ${lastName}`.trim() || null;
-                    
+
                     // Check if email or name needs updating
                     const needsEmailUpdate = userEmail && customer.email !== userEmail;
                     const needsNameUpdate = userName && customer.name !== userName;
-                    
+
                     if (needsEmailUpdate || needsNameUpdate) {
                       console.log(`🔄 Syncing customer ${customer.id} with updated user profile`);
                       const updateData = {};
@@ -1352,7 +1352,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
                         updateData.name = userName;
                         console.log(`   👤 Updating name: ${customer.name || 'not set'} → ${userName}`);
                       }
-                      
+
                       customer = await stripe.customers.update(existingCustomerId, updateData);
                       console.log(`✅ Customer synced successfully`);
                     }
@@ -1387,7 +1387,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         // Retrieve user email from UserLogin and name from UserProfile for better Stripe dashboard visibility
         let userEmail = null;
         let userName = null;
-        
+
         if (pool) {
           try {
             const userInfoRequest = pool.request();
@@ -1402,17 +1402,17 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               LEFT JOIN [dbo].[UserProfile] UP ON UL.UserID = UP.UserID
               WHERE UL.UserID = @userId
             `);
-            
+
             if (userInfoResult.recordset.length > 0) {
               const userInfo = userInfoResult.recordset[0];
               userEmail = userInfo.Email || null;
               const firstName = userInfo.FirstName || '';
               const lastName = userInfo.LastName || '';
               userName = `${firstName} ${lastName}`.trim() || null;
-              
+
               console.log(`📧 Retrieved user email: ${userEmail || 'not found'}`);
               console.log(`👤 Retrieved user name: ${userName || 'not found'}`);
-              
+
               if (!userEmail) {
                 console.warn(`⚠️ No email found for user ${userId} in UserLogin table - customer will be created without email`);
               }
@@ -1427,7 +1427,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         } else {
           console.warn('⚠️ Database pool not available - customer will be created without email/name');
         }
-        
+
         // Build customer creation object
         const customerData = {
           metadata: {
@@ -1435,7 +1435,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             plan: plan
           }
         };
-        
+
         // Add email if available (CRITICAL for Stripe dashboard visibility)
         // Stripe customers without email are harder to find in dashboard
         if (userEmail) {
@@ -1444,19 +1444,19 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         } else {
           console.warn(`⚠️ Creating customer WITHOUT email - customer may not appear in Stripe dashboard easily`);
         }
-        
+
         // Add name if available (helps with Stripe dashboard visibility)
         if (userName) {
           customerData.name = userName;
           console.log(`👤 Adding name to customer: ${userName}`);
         }
-        
+
         console.log(`🔄 Creating Stripe customer with data:`, {
           email: customerData.email || 'not set',
           name: customerData.name || 'not set',
           metadata: customerData.metadata
         });
-        
+
         customer = await stripe.customers.create(customerData);
         console.log('✅ Created Stripe Customer:', customer.id);
         console.log('   Customer details:', {
@@ -1466,7 +1466,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           created: customer.created,
           metadata: customer.metadata
         });
-        
+
         // IMPORTANT: Save customer_id to database immediately after creation
         // This ensures customer appears in Stripe dashboard and is linked properly
         if (pool && customer.id) {
@@ -1474,12 +1474,12 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             const saveCustomerRequest = pool.request();
             saveCustomerRequest.input('userId', mssql.Int, parseInt(userId, 10));
             saveCustomerRequest.input('customerId', mssql.NVarChar(128), customer.id);
-            
+
             // Check if user_subscriptions record exists
             const checkSub = await saveCustomerRequest.query(`
               SELECT UserId FROM [dbo].[user_subscriptions] WHERE UserId = @userId
             `);
-            
+
             if (checkSub.recordset.length > 0) {
               // Update existing record
               await saveCustomerRequest.query(`
@@ -1511,12 +1511,12 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         throw new Error(`Failed to create Stripe customer: ${createErr.message}`);
       }
     }
-    
+
     // Final validation - ensure customer exists
     if (!customer || !customer.id) {
       throw new Error('Failed to get or create Stripe customer');
     }
-    
+
     console.log(`✅ Using Stripe Customer: ${customer.id} for user ${userId}`);
 
     // Create Subscription with payment_behavior: 'default_incomplete'
@@ -1528,7 +1528,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       customer: customer.id,
       items: [{ price: priceId }],
       payment_behavior: 'default_incomplete',
-      payment_settings: { 
+      payment_settings: {
         save_default_payment_method: 'on_subscription',
         payment_method_types: ['card'] // Only 'card' is valid here; Apple Pay enabled via PaymentIntent
       },
@@ -1545,12 +1545,12 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     console.log('📋 Subscription status:', subscription.status);
     console.log('📋 Subscription customer:', subscription.customer);
     console.log('📋 Customer ID being used:', customer.id);
-    
+
     // Verify customer is properly linked to subscription
-    const subscriptionCustomerId = typeof subscription.customer === 'string' 
-      ? subscription.customer 
+    const subscriptionCustomerId = typeof subscription.customer === 'string'
+      ? subscription.customer
       : subscription.customer?.id;
-    
+
     if (subscriptionCustomerId !== customer.id) {
       console.warn(`⚠️ Customer ID mismatch! Subscription customer: ${subscriptionCustomerId}, Expected: ${customer.id}`);
     } else {
@@ -1584,8 +1584,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             console.log(`✅ Invoice finalized, status: ${latestInvoice.status}`);
           } catch (finalizeErr) {
             // Invoice might already be finalized or in a state that can't be finalized
-            if (finalizeErr.code === 'invoice_already_finalized' || 
-                finalizeErr.message?.includes('already finalized')) {
+            if (finalizeErr.code === 'invoice_already_finalized' ||
+              finalizeErr.message?.includes('already finalized')) {
               console.log('📝 Invoice already finalized, retrieving latest state...');
               latestInvoice = await stripe.invoices.retrieve(latestInvoice.id, {
                 expand: ['payment_intent']
@@ -1604,7 +1604,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
             // Get amount from invoice
             const amount = latestInvoice.amount_due;
             const currency = latestInvoice.currency || 'usd';
-            
+
             // Create PaymentIntent for this invoice
             // Use automatic_payment_methods to enable Apple Pay and other payment methods
             // CRITICAL: Use setup_future_usage to automatically attach payment method to customer
@@ -1623,7 +1623,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               },
               description: `Subscription payment for ${plan} plan`
             });
-            
+
             // Attach PaymentIntent to invoice by paying the invoice with it
             // Note: We can't directly attach, but we'll use it when confirming payment
             console.log(`✅ Created PaymentIntent for open invoice: ${paymentIntent.id}`);
@@ -1643,7 +1643,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           console.log(`📝 Attempt ${attempt + 1}: PaymentIntent is string ID, retrieving: ${paymentIntent}`);
           paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent);
         }
-        
+
         // Step 4b: Update PaymentIntent to enable Apple Pay and setup_future_usage
         // Enable automatic_payment_methods to support Apple Pay and other payment methods
         if (paymentIntent) {
@@ -1653,11 +1653,11 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
               updateParams.setup_future_usage = 'off_session';
             }
             // Enable automatic payment methods (includes Apple Pay) if not already enabled
-            if (!paymentIntent.automatic_payment_methods?.enabled && 
-                !paymentIntent.payment_method_types?.includes('apple_pay')) {
+            if (!paymentIntent.automatic_payment_methods?.enabled &&
+              !paymentIntent.payment_method_types?.includes('apple_pay')) {
               updateParams.automatic_payment_methods = { enabled: true };
             }
-            
+
             if (Object.keys(updateParams).length > 0) {
               console.log(`🔄 Updating PaymentIntent ${paymentIntent.id} to enable Apple Pay and setup_future_usage...`);
               paymentIntent = await stripe.paymentIntents.update(paymentIntent.id, updateParams);
@@ -1680,13 +1680,13 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           const delay = retryDelays[attempt] || 2000;
           console.log(`⚠️ Attempt ${attempt + 1}: PaymentIntent not ready, retrying in ${delay}ms...`);
           console.log(`   Invoice status: ${latestInvoice?.status}, Invoice ID: ${latestInvoice?.id}`);
-          
+
           // Also try refreshing the subscription to get latest invoice
           const refreshedSubscription = await stripe.subscriptions.retrieve(subscription.id, {
             expand: ['latest_invoice.payment_intent']
           });
           latestInvoice = refreshedSubscription.latest_invoice;
-          
+
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       } catch (retryErr) {
@@ -1722,12 +1722,12 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         const finalSubscription = await stripe.subscriptions.retrieve(subscription.id, {
           expand: ['latest_invoice.payment_intent']
         });
-        
+
         if (finalSubscription.latest_invoice) {
           const finalInvoice = typeof finalSubscription.latest_invoice === 'string'
             ? await stripe.invoices.retrieve(finalSubscription.latest_invoice, { expand: ['payment_intent'] })
             : finalSubscription.latest_invoice;
-          
+
           if (finalInvoice.payment_intent) {
             paymentIntent = typeof finalInvoice.payment_intent === 'string'
               ? await stripe.paymentIntents.retrieve(finalInvoice.payment_intent)
@@ -1740,7 +1740,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 
       // If still no PaymentIntent, return detailed error
       if (!paymentIntent || !paymentIntent.client_secret) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Failed to create payment intent',
           details: 'PaymentIntent was not created with the subscription. This may be a temporary Stripe issue.',
           subscriptionId: subscription.id,
@@ -1766,7 +1766,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       throw new Error(`Customer ${customer.id} does not exist in Stripe: ${verifyErr.message}`);
     }
 
-    res.status(200).json({ 
+    res.status(200).json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       subscriptionId: subscription.id,
@@ -1776,8 +1776,8 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
       priceId: priceId
     });
   } catch (err) {
-    return sendErrorResponse(res, 500, 'Initialization Failed', 
-      err?.message || 'Stripe subscription creation failed', 
+    return sendErrorResponse(res, 500, 'Initialization Failed',
+      err?.message || 'Stripe subscription creation failed',
       err.stack);
   }
 });
@@ -1786,10 +1786,10 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
 router.post('/customer-portal/create-session', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Customer portal session request received`);
-  
+
   try {
     const userId = req.user.userId || req.body.userId;
-    
+
     // Validate userId
     try {
       validateUserId(userId);
@@ -1811,7 +1811,7 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
     `);
 
     if (!customerResult.recordset.length || !customerResult.recordset[0].customer_id) {
-      return sendErrorResponse(res, 404, 'Not Found', 
+      return sendErrorResponse(res, 404, 'Not Found',
         'No Stripe customer found for this user. Please complete a payment first.');
     }
 
@@ -1823,30 +1823,30 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
       const customer = await stripe.customers.retrieve(customerId, {
         expand: ['invoice_settings.default_payment_method']
       });
-      
+
       // Check if customer has a default payment method
       let defaultPaymentMethod = customer.invoice_settings?.default_payment_method;
-      
+
       if (!defaultPaymentMethod) {
         console.log(`🔧 Customer ${customerId} has no default payment method - attempting to repair...`);
-        
+
         // Strategy 1: Check if customer has any payment methods attached
         let paymentMethods = await stripe.paymentMethods.list({
           customer: customerId,
           type: 'card',
         });
-        
+
         // Strategy 2: If no payment methods found, check subscription's latest invoice for payment method
         if (paymentMethods.data.length === 0) {
           console.log(`📝 No payment methods found - checking subscription invoices...`);
-          
+
           // Get customer's active subscriptions
           const subscriptions = await stripe.subscriptions.list({
             customer: customerId,
             status: 'all',
             limit: 10,
           });
-          
+
           // Check latest invoice from each subscription for payment methods
           for (const sub of subscriptions.data) {
             if (sub.latest_invoice) {
@@ -1854,22 +1854,22 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
                 const invoice = await stripe.invoices.retrieve(sub.latest_invoice, {
                   expand: ['payment_intent.payment_method']
                 });
-                
+
                 // Check PaymentIntent for payment method
                 if (invoice.payment_intent) {
                   const pi = typeof invoice.payment_intent === 'string'
                     ? await stripe.paymentIntents.retrieve(invoice.payment_intent, {
-                        expand: ['payment_method']
-                      })
+                      expand: ['payment_method']
+                    })
                     : invoice.payment_intent;
-                  
+
                   if (pi.payment_method) {
-                    const pmId = typeof pi.payment_method === 'string' 
-                      ? pi.payment_method 
+                    const pmId = typeof pi.payment_method === 'string'
+                      ? pi.payment_method
                       : pi.payment_method.id;
-                    
+
                     console.log(`📎 Found payment method ${pmId} from subscription ${sub.id} invoice`);
-                    
+
                     // Try to attach this payment method
                     try {
                       const pm = await stripe.paymentMethods.retrieve(pmId);
@@ -1898,13 +1898,13 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
             }
           }
         }
-        
+
         if (paymentMethods.data.length === 0) {
           console.error(`❌ Customer ${customerId} has no payment methods and none found in invoices`);
-          return sendErrorResponse(res, 400, 'Payment Method Required', 
+          return sendErrorResponse(res, 400, 'Payment Method Required',
             'No payment method found for your account. Please complete a new payment to add a payment method, then try again.');
         }
-        
+
         // Set the first payment method as default
         const pmToSet = paymentMethods.data[0];
         console.log(`📝 Setting payment method ${pmToSet.id} as default for customer ${customerId}`);
@@ -1918,7 +1918,7 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
       } else {
         const pmId = typeof defaultPaymentMethod === 'string' ? defaultPaymentMethod : defaultPaymentMethod.id;
         console.log(`✅ Customer ${customerId} has default payment method: ${pmId}`);
-        
+
         // Verify the payment method is still valid
         try {
           const pm = await stripe.paymentMethods.retrieve(pmId);
@@ -1933,7 +1933,7 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
       }
     } catch (customerErr) {
       console.error(`❌ Error ensuring customer payment method:`, customerErr.message);
-      return sendErrorResponse(res, 500, 'Payment Method Error', 
+      return sendErrorResponse(res, 500, 'Payment Method Error',
         'Could not verify payment method. Please try again or contact support.');
     }
 
@@ -1943,9 +1943,9 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
     // If returnUrl is provided, use it; otherwise use deep link
     // Note: Stripe Dashboard can also have a default return URL configured
     const returnUrl = req.body.returnUrl || 'acme://subscription-status';
-    
+
     console.log(`📝 Creating portal session with return URL: ${returnUrl}`);
-    
+
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
       return_url: returnUrl,
@@ -1959,7 +1959,7 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
     });
   } catch (err) {
     console.error('❌ Customer portal session creation failed:', err);
-    return sendErrorResponse(res, 500, 'Portal Error', 
+    return sendErrorResponse(res, 500, 'Portal Error',
       err?.message || 'Failed to create customer portal session');
   }
 });
@@ -1968,20 +1968,20 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
 router.post('/payments/confirm', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Payment confirmation request received`);
-  
+
   try {
     if (!process.env.STRIPE_SECRET_KEY) {
       return sendErrorResponse(res, 500, 'Configuration Error', 'STRIPE_SECRET_KEY missing on server');
     }
 
     const { paymentIntentId, subscriptionId } = req.body || {};
-    
+
     // Validate that at least one ID is provided
     if (!paymentIntentId && !subscriptionId) {
-      return sendErrorResponse(res, 400, 'Validation Error', 
+      return sendErrorResponse(res, 400, 'Validation Error',
         'paymentIntentId or subscriptionId required');
     }
-    
+
     // Validate format if provided
     if (paymentIntentId) {
       try {
@@ -1990,7 +1990,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
       }
     }
-    
+
     if (subscriptionId) {
       try {
         validateSubscriptionId(subscriptionId);
@@ -2008,10 +2008,10 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
         expand: ['latest_invoice.payment_intent', 'latest_invoice.payment_intent.payment_method']
       });
-      
+
       // Get PaymentIntent from latest invoice
       paymentIntent = subscription.latest_invoice?.payment_intent;
-      
+
       // If paymentIntent is a string ID, retrieve it
       if (typeof paymentIntent === 'string') {
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent, {
@@ -2023,14 +2023,14 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           expand: ['payment_method', 'latest_charge'] // Expand latest_charge for Apple Pay detection
         });
       }
-      
+
       // If paymentIntentId was provided separately, use it to verify
       if (paymentIntentId && paymentIntent?.id !== paymentIntentId) {
         console.log(`⚠️ PaymentIntent mismatch. Using provided paymentIntentId: ${paymentIntentId}`);
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
           expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
         });
-        
+
         // Note: When PaymentIntent succeeds, Stripe automatically pays the associated invoice
         // If we manually created the PaymentIntent, Stripe will still handle invoice payment
         // We don't need to manually pay the invoice - Stripe handles it via webhooks
@@ -2042,7 +2042,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
         expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
       });
-      
+
       // Try to find subscription from PaymentIntent metadata
       if (paymentIntent.metadata?.subscriptionId) {
         subscription = await stripe.subscriptions.retrieve(paymentIntent.metadata.subscriptionId, {
@@ -2072,7 +2072,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
         console.log(`📝 PaymentIntent status: ${paymentIntent.status}, refreshing subscription to get billing dates...`);
         // Wait a moment for Stripe to process
         await new Promise(resolve => setTimeout(resolve, 1500));
-        
+
         // Refresh subscription to get latest status and billing dates
         try {
           subscription = await stripe.subscriptions.retrieve(subscription.id, {
@@ -2089,35 +2089,35 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           // Continue with original subscription data
         }
       }
-      
+
       // Extract dates from subscription for response and database save
       let currentPeriodStart = null;
       let currentPeriodEnd = null;
-      
+
       if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
         currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
       }
-      
+
       if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
         currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
       }
-      
+
       // Save subscription details to database (including dates) - run in background to avoid blocking response
       if (subscription.id && req.user?.userId) {
         (async () => {
           try {
-            const customerId = typeof subscription.customer === 'string' 
-              ? subscription.customer 
+            const customerId = typeof subscription.customer === 'string'
+              ? subscription.customer
               : subscription.customer?.id;
-            
+
             // Extract payment method ID if available
             let paymentMethodId = null;
             if (paymentIntent?.payment_method) {
-              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
-                ? paymentIntent.payment_method 
+              paymentMethodId = typeof paymentIntent.payment_method === 'string'
+                ? paymentIntent.payment_method
                 : paymentIntent.payment_method.id;
             }
-            
+
             console.log(`💾 Saving subscription ${subscription.id} to database for user ${req.user.userId}...`);
             console.log(`   Billing dates: start=${currentPeriodStart || 'NULL'}, end=${currentPeriodEnd || 'NULL'}`);
             const billingInterval = subscription.metadata?.billingInterval || null;
@@ -2144,33 +2144,33 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           }
         })(); // Fire and forget - don't await
       }
-      
+
       // CRITICAL: Ensure payment method is attached and set as default BEFORE sending response
       // This is required for Customer Portal to work properly when upgrading/downgrading
       if (paymentIntent?.status === 'succeeded' && subscription.id) {
-        const customerId = typeof subscription.customer === 'string' 
-          ? subscription.customer 
+        const customerId = typeof subscription.customer === 'string'
+          ? subscription.customer
           : subscription.customer?.id;
-        
+
         // Extract payment method ID - handle both string ID and expanded object
         let paymentMethodId = null;
         if (paymentIntent.payment_method) {
-          paymentMethodId = typeof paymentIntent.payment_method === 'string' 
-            ? paymentIntent.payment_method 
+          paymentMethodId = typeof paymentIntent.payment_method === 'string'
+            ? paymentIntent.payment_method
             : paymentIntent.payment_method.id;
         }
-        
+
         // Ensure payment method is attached and set as default (synchronously)
         if (paymentMethodId && customerId) {
           try {
             console.log(`🔧 Ensuring payment method ${paymentMethodId} is attached to customer ${customerId}...`);
-            
+
             // Wait a moment for Stripe to process automatic attachment
             await new Promise(resolve => setTimeout(resolve, 1500));
-            
+
             // Check if payment method is attached
             const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-            
+
             if (paymentMethod.customer !== customerId) {
               // Payment method not attached - attach it manually
               console.log(`📎 Attaching payment method ${paymentMethodId} to customer ${customerId}...`);
@@ -2188,7 +2188,7 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
                 }
               }
             }
-            
+
             // Set as default payment method (critical for Customer Portal)
             try {
               await stripe.customers.update(customerId, {
@@ -2210,43 +2210,43 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           console.warn(`   paymentMethodId: ${paymentMethodId}, customerId: ${customerId}`);
         }
       }
-      
+
       // Handle invoice payment in background (non-blocking)
       if (paymentIntent?.status === 'succeeded') {
         // Run invoice payment in background (don't await - send response first)
         (async () => {
           try {
-            const customerId = typeof subscription.customer === 'string' 
-              ? subscription.customer 
+            const customerId = typeof subscription.customer === 'string'
+              ? subscription.customer
               : subscription.customer.id;
-            
+
             // Extract payment method ID - handle both string ID and expanded object
             let paymentMethodId = null;
             if (paymentIntent.payment_method) {
-              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
-                ? paymentIntent.payment_method 
+              paymentMethodId = typeof paymentIntent.payment_method === 'string'
+                ? paymentIntent.payment_method
                 : paymentIntent.payment_method.id;
             }
-            
+
             // IMPORTANT: Payment method attachment is handled automatically by Stripe
             // via 'setup_future_usage: off_session' on PaymentIntent and 'save_default_payment_method: on_subscription' on subscription.
             // When PaymentIntent succeeds with setup_future_usage, Stripe automatically attaches the payment method to the customer.
-            
+
             // Payment method attachment is now handled synchronously above
             // This background task only handles invoice payment
-            
+
             // 2. Pay invoice - Stripe should handle payment method attachment automatically
             if (subscription.latest_invoice) {
               try {
-                const invoiceId = typeof subscription.latest_invoice === 'string' 
-                  ? subscription.latest_invoice 
+                const invoiceId = typeof subscription.latest_invoice === 'string'
+                  ? subscription.latest_invoice
                   : subscription.latest_invoice.id;
-                
+
                 const invoice = await stripe.invoices.retrieve(invoiceId);
-                
+
                 if (invoice.status === 'open' || invoice.status === 'draft') {
                   console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
-                  
+
                   // Pay invoice - Stripe will use the default payment method or the one from PaymentIntent
                   // Since PaymentIntent already succeeded, invoice should be payable
                   try {
@@ -2276,14 +2276,14 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
           }
         })(); // Fire and forget - don't await
       }
-      
+
       // Get amount and currency from subscription price
       const price = subscription.items.data[0]?.price;
       const amount = price?.unit_amount || paymentIntent?.amount || 0;
       const currency = price?.currency || paymentIntent?.currency || 'usd';
-      
+
       // Convert dates to ISO strings for response (already converted above)
-      res.status(200).json({ 
+      res.status(200).json({
         id: subscription.id,
         status: subscription.status, // active, trialing, past_due, canceled, incomplete, etc.
         paymentIntentId: paymentIntent?.id || paymentIntentId,
@@ -2296,22 +2296,22 @@ router.post('/payments/confirm', authenticateToken, async (req, res) => {
       });
     } else if (paymentIntent) {
       // Fallback: return PaymentIntent details only
-      res.status(200).json({ 
-        id: paymentIntent.id, 
-        status: paymentIntent.status, 
-        amount: paymentIntent.amount, 
+      res.status(200).json({
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+        amount: paymentIntent.amount,
         currency: paymentIntent.currency,
         paymentIntentId: paymentIntent.id,
         paymentIntentStatus: paymentIntent.status
       });
     } else {
-      return res.status(404).json({ 
-        error: 'Subscription or PaymentIntent not found' 
+      return res.status(404).json({
+        error: 'Subscription or PaymentIntent not found'
       });
     }
   } catch (err) {
-    return sendErrorResponse(res, 500, 'Confirmation Failed', 
-      err?.message || 'Stripe confirm failed', 
+    return sendErrorResponse(res, 500, 'Confirmation Failed',
+      err?.message || 'Stripe confirm failed',
       err.stack);
   }
 });
@@ -2344,17 +2344,17 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     subscription = await stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['latest_invoice.payment_intent', 'latest_invoice.payment_intent.payment_method', 'items.data.price'] // Expand items and payment_method
     });
-    
+
     // Get payment intent from latest invoice or retrieve separately if paymentIntentId provided
     paymentIntent = subscription.latest_invoice?.payment_intent;
-    
+
     // If paymentIntent is expanded but doesn't have payment_method, retrieve it separately
     if (paymentIntent && typeof paymentIntent === 'object' && !paymentIntent.payment_method && paymentIntent.id) {
       paymentIntent = await stripe.paymentIntents.retrieve(paymentIntent.id, {
         expand: ['payment_method']
       });
     }
-    
+
     // If paymentIntentId was provided, retrieve it to get accurate status
     if (paymentIntentId) {
       console.log(`📝 Retrieving PaymentIntent for status check: ${paymentIntentId}`);
@@ -2366,23 +2366,23 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         expand: ['payment_method', 'latest_charge'] // Expand payment_method and latest_charge for Apple Pay detection
       });
     }
-    
+
     // If PaymentIntent succeeded OR if billing dates are missing, refresh subscription to get updated status and dates
     // Stripe may need a moment to update subscription status and set billing dates after PaymentIntent succeeds
     const needsRefresh = (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) ||
-                         !currentPeriodStart || !currentPeriodEnd;
-    
+      !currentPeriodStart || !currentPeriodEnd;
+
     if (needsRefresh && subscriptionId) {
       console.log(`📝 Refreshing subscription to get latest status and billing dates...`);
       // Wait a moment for Stripe to process
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
       // Refresh subscription to get latest status and billing dates
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
         expand: ['latest_invoice.payment_intent', 'items.data.price']
       });
       console.log(`📝 Refreshed subscription status: ${subscription.status}`);
-      
+
       // Update dates from refreshed subscription if they were missing
       if (!currentPeriodStart && subscription.current_period_start && typeof subscription.current_period_start === 'number') {
         currentPeriodStart = new Date(subscription.current_period_start * 1000).toISOString();
@@ -2392,7 +2392,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
         console.log(`✅ Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
       }
-      
+
       // Explicitly pay invoice and attach payment method if PaymentIntent succeeded
       // These operations are important but shouldn't block the main flow
       if (paymentIntent.status === 'succeeded') {
@@ -2402,26 +2402,26 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             // Extract payment method ID - handle both string ID and expanded object
             let paymentMethodId = null;
             if (paymentIntent.payment_method) {
-              paymentMethodId = typeof paymentIntent.payment_method === 'string' 
-                ? paymentIntent.payment_method 
+              paymentMethodId = typeof paymentIntent.payment_method === 'string'
+                ? paymentIntent.payment_method
                 : paymentIntent.payment_method.id;
             }
-            
+
             // IMPORTANT: Payment method attachment is handled automatically by Stripe
             // via 'setup_future_usage: off_session' on PaymentIntent and 'save_default_payment_method: on_subscription' on subscription.
             // When PaymentIntent succeeds with setup_future_usage, Stripe automatically attaches the payment method to the customer.
-            
+
             // 1. Check if payment method is attached and set as default
             if (customerId && paymentMethodId) {
               try {
                 // Wait a moment for Stripe to process the automatic attachment
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                
+
                 const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-                
+
                 if (paymentMethod.customer === customerId) {
                   console.log(`✅ Payment method ${paymentMethodId} attached to customer ${customerId}`);
-                  
+
                   // Set as default payment method for customer
                   try {
                     await stripe.customers.update(customerId, {
@@ -2438,13 +2438,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                   // Try to attach it manually (only if it wasn't used in a different PaymentIntent)
                   console.log(`ℹ️ Payment method ${paymentMethodId} not attached to customer ${customerId}`);
                   console.log(`   Attempting to attach...`);
-                  
+
                   try {
                     await stripe.paymentMethods.attach(paymentMethodId, {
                       customer: customerId
                     });
                     console.log(`✅ Successfully attached payment method to customer`);
-                    
+
                     // Set as default
                     await stripe.customers.update(customerId, {
                       invoice_settings: {
@@ -2465,19 +2465,19 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
                 console.warn('⚠️ Could not retrieve payment method:', retrieveErr.message);
               }
             }
-            
+
             // 2. Pay invoice - Stripe should handle payment method attachment automatically
             if (subscription.latest_invoice) {
               try {
-                const invoiceId = typeof subscription.latest_invoice === 'string' 
-                  ? subscription.latest_invoice 
+                const invoiceId = typeof subscription.latest_invoice === 'string'
+                  ? subscription.latest_invoice
                   : subscription.latest_invoice.id;
-                
+
                 const invoice = await stripe.invoices.retrieve(invoiceId);
-                
+
                 if (invoice.status === 'open' || invoice.status === 'draft') {
                   console.log(`💳 Paying invoice ${invoiceId} after PaymentIntent succeeded...`);
-                  
+
                   // Pay invoice - Stripe will use the default payment method or the one from PaymentIntent
                   // Since PaymentIntent already succeeded, invoice should be payable
                   try {
@@ -2508,15 +2508,15 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         })(); // Fire and forget - don't await
       }
     }
-    
+
     // Extract subscription details (use refreshed status)
     subscriptionStatus = subscription.status;
     // Always get customerId from subscription (source of truth)
     // Handle both string ID and expanded customer object
-    const subscriptionCustomerId = typeof subscription.customer === 'string' 
-      ? subscription.customer 
+    const subscriptionCustomerId = typeof subscription.customer === 'string'
+      ? subscription.customer
       : subscription.customer?.id || subscription.customer;
-    
+
     // Use subscription's customerId if available, otherwise keep the passed value
     if (subscriptionCustomerId) {
       customerId = subscriptionCustomerId;
@@ -2524,14 +2524,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     } else if (!customerId) {
       console.warn(`⚠️ No customerId found in subscription and none provided as parameter`);
     }
-    
+
     // If PaymentIntent succeeded but subscription is still incomplete, update to active
     // This handles the case where Stripe hasn't updated subscription status yet
     if (paymentIntent && paymentIntent.status === 'succeeded' && subscriptionStatus === 'incomplete') {
       console.log(`⚠️ PaymentIntent succeeded but subscription still incomplete, updating to active`);
       subscriptionStatus = 'active';
     }
-    
+
     // ALWAYS retrieve period dates from Stripe subscription (source of truth)
     // Override any passed-in dates with Stripe's authoritative values
     if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
@@ -2541,7 +2541,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       console.warn(`⚠️ Subscription ${subscriptionId} missing current_period_start in Stripe`);
       currentPeriodStart = currentPeriodStart || null; // Use passed value if Stripe doesn't have it
     }
-    
+
     if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
       currentPeriodEnd = new Date(subscription.current_period_end * 1000).toISOString();
       console.log(`📅 Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
@@ -2549,20 +2549,20 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       console.warn(`⚠️ Subscription ${subscriptionId} missing current_period_end in Stripe`);
       currentPeriodEnd = currentPeriodEnd || null; // Use passed value if Stripe doesn't have it
     }
-    
+
     // Retry logic: If dates are missing but subscription is active/trialing, refresh from Stripe
     if ((!currentPeriodStart || !currentPeriodEnd) && (subscriptionStatus === 'active' || subscriptionStatus === 'trialing')) {
       console.log(`🔄 Dates missing for active/trialing subscription, retrying after delay...`);
       await new Promise(resolve => setTimeout(resolve, 750)); // Wait 750ms
-      
+
       try {
         const refreshedSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-        
+
         if (refreshedSubscription.current_period_start && typeof refreshedSubscription.current_period_start === 'number') {
           currentPeriodStart = new Date(refreshedSubscription.current_period_start * 1000).toISOString();
           console.log(`✅ Retrieved current_period_start after retry: ${currentPeriodStart}`);
         }
-        
+
         if (refreshedSubscription.current_period_end && typeof refreshedSubscription.current_period_end === 'number') {
           currentPeriodEnd = new Date(refreshedSubscription.current_period_end * 1000).toISOString();
           console.log(`✅ Retrieved current_period_end after retry: ${currentPeriodEnd}`);
@@ -2571,7 +2571,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         console.warn(`⚠️ Retry failed to get dates: ${retryErr.message}`);
       }
     }
-    
+
     // If dates are still missing, log warning but continue (will be synced later via webhook or status endpoint)
     if (!currentPeriodStart || !currentPeriodEnd) {
       console.warn(`⚠️ Missing billing dates for subscription ${subscriptionId}. Status: ${subscription.status}`);
@@ -2579,13 +2579,13 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     } else {
       console.log(`✅ Both billing dates available: start=${currentPeriodStart}, end=${currentPeriodEnd}`);
     }
-    
+
     // Extract billingInterval from subscription metadata if not provided
     if (!billingInterval && subscription.metadata?.billingInterval) {
       billingInterval = subscription.metadata.billingInterval;
       console.log(`📝 Retrieved billingInterval from subscription metadata: ${billingInterval}`);
     }
-    
+
     // Get amount and currency from subscription price
     let currentPriceId = null;
     if (subscription.items.data.length > 0) {
@@ -2594,7 +2594,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       amount = price.unit_amount / 100;
       currency = price.currency.toUpperCase();
     }
-    
+
     // If billingInterval is still missing, derive it from the current price ID
     // This handles cases where users upgrade/downgrade in customer portal and metadata isn't updated
     if (!billingInterval && currentPriceId) {
@@ -2603,12 +2603,12 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         [process.env.STRIPE_PRICE_ID_SEMI_ANNUAL]: 'semi_annual',
         [process.env.STRIPE_PRICE_ID_ANNUAL]: 'annual'
       };
-      
+
       billingInterval = priceIdMap[currentPriceId] || null;
-      
+
       if (billingInterval) {
         console.log(`📝 Determined billingInterval from price ID ${currentPriceId}: ${billingInterval}`);
-        
+
         // Update subscription metadata with correct billing interval to keep it in sync
         try {
           await stripe.subscriptions.update(subscription.id, {
@@ -2626,73 +2626,73 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         console.warn(`⚠️ Could not determine billingInterval from price ID ${currentPriceId} - price ID not found in mapping`);
       }
     }
-    
-      // Map payment intent status to payment status and detect payment method type
-      if (paymentIntent) {
-        if (!paymentIntentId) {
-          paymentIntentId = paymentIntent.id;
-        }
-        
-        // Map payment intent status to database payment status
-        paymentStatus = mapPaymentStatusToDatabase(paymentIntent.status);
-        
-        // Detect payment method type from PaymentIntent's payment_method object and charge details
-        // This ensures Apple Pay is properly detected even if metadata is missing
-        if (paymentIntent.payment_method) {
-          try {
-            const pm = typeof paymentIntent.payment_method === 'string' 
-              ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
-              : paymentIntent.payment_method;
-            
-            // Check if this was Apple Pay by looking at the charge's payment_method_details
-            // Apple Pay shows up as type 'card' but has payment_method_details.card.wallet.type === 'apple_pay'
-            let isApplePay = false;
-            if (paymentIntent.latest_charge) {
-              try {
-                const charge = typeof paymentIntent.latest_charge === 'string'
-                  ? await stripe.charges.retrieve(paymentIntent.latest_charge)
-                  : paymentIntent.latest_charge;
-                
-                // Apple Pay is detected via charge.payment_method_details.card.wallet.type === 'apple_pay'
-                if (charge.payment_method_details?.card?.wallet?.type === 'apple_pay') {
-                  isApplePay = true;
-                  console.log('🍎 Detected Apple Pay payment from charge details');
-                }
-              } catch (chargeErr) {
-                console.warn('⚠️ Could not retrieve charge details for Apple Pay detection:', chargeErr.message);
+
+    // Map payment intent status to payment status and detect payment method type
+    if (paymentIntent) {
+      if (!paymentIntentId) {
+        paymentIntentId = paymentIntent.id;
+      }
+
+      // Map payment intent status to database payment status
+      paymentStatus = mapPaymentStatusToDatabase(paymentIntent.status);
+
+      // Detect payment method type from PaymentIntent's payment_method object and charge details
+      // This ensures Apple Pay is properly detected even if metadata is missing
+      if (paymentIntent.payment_method) {
+        try {
+          const pm = typeof paymentIntent.payment_method === 'string'
+            ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
+            : paymentIntent.payment_method;
+
+          // Check if this was Apple Pay by looking at the charge's payment_method_details
+          // Apple Pay shows up as type 'card' but has payment_method_details.card.wallet.type === 'apple_pay'
+          let isApplePay = false;
+          if (paymentIntent.latest_charge) {
+            try {
+              const charge = typeof paymentIntent.latest_charge === 'string'
+                ? await stripe.charges.retrieve(paymentIntent.latest_charge)
+                : paymentIntent.latest_charge;
+
+              // Apple Pay is detected via charge.payment_method_details.card.wallet.type === 'apple_pay'
+              if (charge.payment_method_details?.card?.wallet?.type === 'apple_pay') {
+                isApplePay = true;
+                console.log('🍎 Detected Apple Pay payment from charge details');
               }
+            } catch (chargeErr) {
+              console.warn('⚠️ Could not retrieve charge details for Apple Pay detection:', chargeErr.message);
             }
-            
-            if (pm.type === 'card') {
-              // Card payment - check if it was Apple Pay
-              if (isApplePay) {
-                finalPaymentMethod = 'apple_pay';
-                console.log('✅ Payment method set to: apple_pay');
-              } else {
-                // Regular card payment - check metadata first, then use provided paymentMethod
-                // Map to database value (stripe → card)
-                const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
-                finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
-                console.log('💳 Payment method set to:', finalPaymentMethod);
-              }
+          }
+
+          if (pm.type === 'card') {
+            // Card payment - check if it was Apple Pay
+            if (isApplePay) {
+              finalPaymentMethod = 'apple_pay';
+              console.log('✅ Payment method set to: apple_pay');
             } else {
-              // Other payment method types - map to database value
-              const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
+              // Regular card payment - check metadata first, then use provided paymentMethod
+              // Map to database value (stripe → card)
+              const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
               finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
               console.log('💳 Payment method set to:', finalPaymentMethod);
             }
-          } catch (pmErr) {
-            console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
-            // Fall back to metadata - map to database value
-            const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+          } else {
+            // Other payment method types - map to database value
+            const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || pm.type;
             finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
+            console.log('💳 Payment method set to:', finalPaymentMethod);
           }
-        } else {
-          // No payment_method object, use metadata or provided value - map to database value
+        } catch (pmErr) {
+          console.warn('⚠️ Could not retrieve payment method details:', pmErr.message);
+          // Fall back to metadata - map to database value
           const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
           finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
         }
+      } else {
+        // No payment_method object, use metadata or provided value - map to database value
+        const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
+        finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
       }
+    }
   } else if (paymentIntentId) {
     // Legacy flow: retrieve payment intent only
     console.log(`📝 Retrieving PaymentIntent (legacy): ${paymentIntentId}`);
@@ -2701,18 +2701,18 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     });
     amount = paymentIntent.amount / 100;
     currency = paymentIntent.currency.toUpperCase();
-    
+
     // Map payment intent status to database payment status
     paymentStatus = mapPaymentStatusToDatabase(paymentIntent.status);
-    
+
     // Detect payment method type from PaymentIntent's payment_method object and charge details
     // This ensures Apple Pay is properly detected even if metadata is missing
     if (paymentIntent.payment_method) {
       try {
-        const pm = typeof paymentIntent.payment_method === 'string' 
+        const pm = typeof paymentIntent.payment_method === 'string'
           ? await stripe.paymentMethods.retrieve(paymentIntent.payment_method)
           : paymentIntent.payment_method;
-        
+
         // Check if this was Apple Pay by looking at the charge's payment_method_details
         let isApplePay = false;
         if (paymentIntent.latest_charge) {
@@ -2720,7 +2720,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             const charge = typeof paymentIntent.latest_charge === 'string'
               ? await stripe.charges.retrieve(paymentIntent.latest_charge)
               : paymentIntent.latest_charge;
-            
+
             if (charge.payment_method_details?.card?.wallet?.type === 'apple_pay') {
               isApplePay = true;
               console.log('🍎 Detected Apple Pay payment from charge details (legacy flow)');
@@ -2729,14 +2729,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
             console.warn('⚠️ Could not retrieve charge details for Apple Pay detection:', chargeErr.message);
           }
         }
-        
+
         if (pm.type === 'card') {
           // Card payment - check if it was Apple Pay
           if (isApplePay) {
             finalPaymentMethod = 'apple_pay';
             console.log('✅ Payment method set to: apple_pay (legacy flow)');
           } else {
-              // Regular card payment - check metadata first, then map to database value
+            // Regular card payment - check metadata first, then map to database value
             const rawPaymentMethod = paymentIntent.metadata?.paymentMethod || paymentMethod || 'stripe';
             finalPaymentMethod = mapPaymentMethodToDatabase(rawPaymentMethod);
             console.log('💳 Payment method set to:', finalPaymentMethod, '(legacy flow)');
@@ -2762,7 +2762,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   // Map plan to database plan code (monthly, semi_annual, annual)
   // Use billingInterval to determine the correct plan code
   const databasePlanCode = mapPlanToDatabaseCode(plan, billingInterval);
-  
+
   if (!databasePlanCode) {
     throw new Error(`Invalid plan: ${plan} - cannot map to database plan code`);
   }
@@ -2789,7 +2789,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     // active, trialing = Premium; canceled, past_due, incomplete = check payment status
     // If cancellation_scheduled is true, check if period has ended
     const isActive = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
-    
+
     // Check if period has ended for canceled subscriptions
     let periodEnded = false;
     if (cancellationScheduled === true && currentPeriodEnd) {
@@ -2797,14 +2797,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       const now = new Date();
       periodEnded = periodEndDate < now;
     }
-    
+
     // User should be Premium if:
     // 1. Status is active/trialing AND plan is a paid plan (not free) AND
     // 2. Either not canceled OR (canceled but period hasn't ended yet)
     // Check if plan is a paid plan (monthly, semi_annual, annual are all paid)
     const isPaidPlan = databasePlanCode === 'monthly' || databasePlanCode === 'semi_annual' || databasePlanCode === 'annual';
-    const shouldBePremium = isActive && isPaidPlan && 
-                           (cancellationScheduled !== true || !periodEnded);
+    const shouldBePremium = isActive && isPaidPlan &&
+      (cancellationScheduled !== true || !periodEnded);
 
     // 1. Update UserProfile.UserType and track changes
     // First, get current UserType to detect changes
@@ -2812,19 +2812,19 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     const currentUserTypeResult = await currentUserTypeRequest
       .input('userId', mssql.Int, userIdInt)
       .query(`SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId`);
-    
+
     const currentUserType = currentUserTypeResult.recordset[0]?.UserType || 'Free';
     // Downgrade to Free if:
     // - Status is canceled or past_due, OR
     // - Cancellation is scheduled AND period has ended
     const shouldDowngrade = (subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due') ||
-                            (cancellationScheduled === true && periodEnded);
-    const newUserType = shouldBePremium ? 'Premium' : 
-                       shouldDowngrade ? 'Free' : currentUserType;
-    
+      (cancellationScheduled === true && periodEnded);
+    const newUserType = shouldBePremium ? 'Premium' :
+      shouldDowngrade ? 'Free' : currentUserType;
+
     // Only update if UserType is actually changing
     const userTypeChanged = currentUserType !== newUserType;
-    
+
     if (shouldBePremium) {
       if (userTypeChanged) {
         console.log(`📝 Step 1: Updating UserProfile.UserType from '${currentUserType}' to 'Premium' for user ${userIdInt}`);
@@ -2840,11 +2840,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     } else if (shouldDowngrade) {
       // Downgrade to Free if subscription is canceled, past due, or cancellation scheduled and period ended
       if (userTypeChanged) {
-        const reason = cancellationScheduled === true && periodEnded 
-          ? 'cancellation scheduled and period ended' 
+        const reason = cancellationScheduled === true && periodEnded
+          ? 'cancellation scheduled and period ended'
           : subscriptionStatus === 'canceled' || subscriptionStatus === 'past_due'
-          ? `subscription ${subscriptionStatus}`
-          : 'unknown reason';
+            ? `subscription ${subscriptionStatus}`
+            : 'unknown reason';
         console.log(`📝 Step 1: Downgrading UserProfile.UserType from '${currentUserType}' to 'Free' for user ${userIdInt} (${reason})`);
         const userProfileRequest = new mssql.Request(transaction);
         await userProfileRequest
@@ -2863,7 +2863,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     console.log(`📝 Step 2: Upserting [dbo].[user_subscriptions] for user ${userIdInt}`);
     console.log(`   subscriptionId: ${subscriptionId || 'N/A'}, customerId: ${customerId || 'N/A'}`);
     console.log(`   currentPeriodStart: ${currentPeriodStart || 'N/A'}, currentPeriodEnd: ${currentPeriodEnd || 'N/A'}`);
-    
+
     const checkSubRequest = new mssql.Request(transaction);
     const existingSub = await checkSubRequest
       .input('userId', mssql.Int, userIdInt)
@@ -2874,14 +2874,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       const existingRecord = existingSub.recordset[0];
       console.log(`   Existing subscription_id: ${existingRecord.subscription_id || 'NULL'}`);
       console.log(`   Existing customer_id: ${existingRecord.customer_id || 'NULL'}`);
-      
+
       // Build UPDATE query with available fields
       const updateFields = [
         '[plan] = @plan',
         'status = @status',
         'updated_at = SYSDATETIMEOFFSET()'
       ];
-      
+
       // Always update subscription_id if provided (even if it's the same)
       if (subscriptionId) {
         updateFields.push('subscription_id = @subscriptionId');
@@ -2917,14 +2917,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         updateFields.push('cancellation_scheduled = @cancellationScheduled');
         console.log(`   ✅ Will update cancellation_scheduled to: ${cancellationScheduled}`);
       }
-      
+
       const updateQuery = `UPDATE [dbo].[user_subscriptions] SET ${updateFields.join(', ')} WHERE UserId = @userId`;
-      
+
       const updateRequest = new mssql.Request(transaction);
       updateRequest.input('userId', mssql.Int, userIdInt);
       updateRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
       updateRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
-      
+
       if (subscriptionId) updateRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) updateRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) updateRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
@@ -2932,14 +2932,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (paymentIntentId) updateRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       if (cancellationScheduled !== null) updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
-      
+
       await updateRequest.query(updateQuery);
       console.log(`✅ Step 2a complete: Subscription updated`);
     } else {
       console.log(`📝 Step 2b: Inserting new subscription`);
       const insertFields = ['UserId', '[plan]', 'status', 'started_at', 'updated_at'];
       const insertValues = ['@userId', '@plan', '@status', 'SYSDATETIMEOFFSET()', 'SYSDATETIMEOFFSET()'];
-      
+
       // Always include subscription_id and customer_id if available
       if (subscriptionId) {
         insertFields.push('subscription_id');
@@ -2982,14 +2982,14 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
         insertValues.push('@cancellationScheduled');
         console.log(`   ✅ Including cancellation_scheduled: ${cancellationScheduled}`);
       }
-      
+
       const insertQuery = `INSERT INTO [dbo].[user_subscriptions] (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
-      
+
       const insertRequest = new mssql.Request(transaction);
       insertRequest.input('userId', mssql.Int, userIdInt);
       insertRequest.input('plan', mssql.NVarChar(32), databasePlanCode);
       insertRequest.input('status', mssql.NVarChar(32), subscriptionStatus);
-      
+
       if (subscriptionId) insertRequest.input('subscriptionId', mssql.NVarChar(128), subscriptionId);
       if (customerId) insertRequest.input('customerId', mssql.NVarChar(128), customerId);
       if (currentPeriodStart) insertRequest.input('currentPeriodStart', mssql.DateTimeOffset, currentPeriodStart);
@@ -2997,7 +2997,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
       if (paymentIntentId) insertRequest.input('paymentIntentId', mssql.NVarChar(128), paymentIntentId);
       if (billingInterval) insertRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
       if (cancellationScheduled !== null) insertRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
-      
+
       await insertRequest.query(insertQuery);
     }
     console.log(`✅ Step 2 complete: user_subscriptions updated`);
@@ -3035,11 +3035,11 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     console.log(`✅ All steps complete: Subscription updated for user ${userIdInt}: ${databasePlanCode} - ${subscriptionStatus}`);
     console.log(`   Payment: ${currency} ${amount}, Status: ${paymentStatus}, Method: ${finalPaymentMethod}`);
 
-    return { 
-      ok: true, 
-      userId: userIdInt, 
-      subscriptionStatus, 
-      plan: databasePlanCode, 
+    return {
+      ok: true,
+      userId: userIdInt,
+      subscriptionStatus,
+      plan: databasePlanCode,
       paymentIntentId: paymentIntentId || null,
       subscriptionId: subscriptionId || null,
       customerId: customerId || null
@@ -3052,7 +3052,7 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
     } catch (rollbackErr) {
       console.error('❌ Error rolling back transaction:', rollbackErr.message);
     }
-    
+
     console.error('❌ Database error:', dbErr.message);
     console.error('❌ Error code:', dbErr.code);
     if (dbErr.originalError) {
@@ -3068,21 +3068,21 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
   console.log(`[${timestamp}] 🚀 updateSubscription endpoint called`);
   console.log(`[${timestamp}] 📥 Request body:`, JSON.stringify(req.body));
   console.log(`[${timestamp}] 👤 User from token:`, req.user?.userId);
-  
+
   try {
     const userId = req.user.userId || req.body.userId;
-    
+
     // Validate userId
     try {
       validateUserId(userId);
     } catch (validationErr) {
       return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
     }
-    
-    const { 
-      subscriptionStatus = 'active', 
+
+    const {
+      subscriptionStatus = 'active',
       plan = 'monthly', // Default to monthly, will be mapped correctly in updateSubscriptionInDatabase 
-      paymentIntentId, 
+      paymentIntentId,
       paymentMethod = 'card',
       subscriptionId,
       customerId,
@@ -3091,16 +3091,16 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
       billingInterval,
       cancellationScheduled = null
     } = req.body || {};
-    
+
     console.log(`[${timestamp}] 📋 Parsed: userId=${userId}, plan=${plan}, status=${subscriptionStatus}`);
     console.log(`[${timestamp}]    subscriptionId=${subscriptionId || 'N/A'}, paymentIntentId=${paymentIntentId || 'N/A'}`);
-    
+
     // Require either subscriptionId or paymentIntentId (for backward compatibility)
     if (!subscriptionId && !paymentIntentId) {
-      return sendErrorResponse(res, 400, 'Validation Error', 
+      return sendErrorResponse(res, 400, 'Validation Error',
         'subscriptionId or paymentIntentId is required');
     }
-    
+
     // Validate IDs if provided
     if (subscriptionId) {
       try {
@@ -3109,7 +3109,7 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
         return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
       }
     }
-    
+
     if (paymentIntentId) {
       try {
         validatePaymentIntentId(paymentIntentId);
@@ -3117,7 +3117,7 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
         return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
       }
     }
-    
+
     if (customerId) {
       try {
         validateCustomerId(customerId);
@@ -3125,11 +3125,11 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
         return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
       }
     }
-    
+
     // Validate dates if provided
     let validatedPeriodStart = null;
     let validatedPeriodEnd = null;
-    
+
     if (currentPeriodStart) {
       try {
         validatedPeriodStart = validateDateString(currentPeriodStart, 'currentPeriodStart');
@@ -3137,7 +3137,7 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
         return sendErrorResponse(res, 400, 'Validation Error', validationErr.message);
       }
     }
-    
+
     if (currentPeriodEnd) {
       try {
         validatedPeriodEnd = validateDateString(currentPeriodEnd, 'currentPeriodEnd');
@@ -3156,41 +3156,41 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
           const refreshedSubscription = await stripe.subscriptions.retrieve(subscriptionId, {
             expand: ['items.data.price']
           });
-          
+
           if (refreshedSubscription.current_period_start && typeof refreshedSubscription.current_period_start === 'number') {
             const refreshedStart = new Date(refreshedSubscription.current_period_start * 1000).toISOString();
             currentPeriodStart = refreshedStart;
             validatedPeriodStart = refreshedStart;
             console.log(`✅ Retrieved current_period_start from Stripe: ${currentPeriodStart}`);
           }
-          
+
           if (refreshedSubscription.current_period_end && typeof refreshedSubscription.current_period_end === 'number') {
             const refreshedEnd = new Date(refreshedSubscription.current_period_end * 1000).toISOString();
             currentPeriodEnd = refreshedEnd;
             validatedPeriodEnd = refreshedEnd;
             console.log(`✅ Retrieved current_period_end from Stripe: ${currentPeriodEnd}`);
           }
-          
+
           // Also update subscriptionStatus if it changed (e.g., from 'incomplete' to 'active')
           if (refreshedSubscription.status && refreshedSubscription.status !== subscriptionStatus) {
             subscriptionStatus = refreshedSubscription.status;
             console.log(`📝 Updated subscription status to: ${subscriptionStatus}`);
           }
-          
+
           // Update customerId if missing
           if (!customerId && refreshedSubscription.customer) {
-            customerId = typeof refreshedSubscription.customer === 'string' 
-              ? refreshedSubscription.customer 
+            customerId = typeof refreshedSubscription.customer === 'string'
+              ? refreshedSubscription.customer
               : refreshedSubscription.customer.id;
             console.log(`📝 Retrieved customerId from Stripe: ${customerId}`);
           }
-          
+
           // Extract billingInterval from subscription metadata if not provided
           if (!billingInterval && refreshedSubscription.metadata?.billingInterval) {
             billingInterval = refreshedSubscription.metadata.billingInterval;
             console.log(`📝 Retrieved billingInterval from Stripe subscription metadata: ${billingInterval}`);
           }
-          
+
           // Extract cancellation_scheduled from subscription if not provided
           if (refreshedSubscription.cancel_at_period_end !== undefined) {
             cancellationScheduled = refreshedSubscription.cancel_at_period_end === true;
@@ -3208,10 +3208,10 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
     console.log(`   billingInterval: ${billingInterval || 'NULL'}`);
     console.log(`   cancellationScheduled: ${cancellationScheduled !== null ? cancellationScheduled : 'NULL'}`);
     const result = await updateSubscriptionInDatabase(
-      userId, 
-      subscriptionStatus, 
-      plan, 
-      paymentIntentId, 
+      userId,
+      subscriptionStatus,
+      plan,
+      paymentIntentId,
       paymentMethod,
       subscriptionId,
       customerId,
@@ -3224,13 +3224,13 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
     return res.json(result);
   } catch (err) {
     if (err.code === 'EREQUEST') {
-      return sendErrorResponse(res, 500, 'Database Error', 
-        err.message, 
+      return sendErrorResponse(res, 500, 'Database Error',
+        err.message,
         'Check if tables exist and schema is correct');
     }
-    
-    return sendErrorResponse(res, 500, 'Update Failed', 
-      err.message || 'Failed to update subscription', 
+
+    return sendErrorResponse(res, 500, 'Update Failed',
+      err.message || 'Failed to update subscription',
       err.stack);
   }
 });
@@ -3240,10 +3240,10 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
 router.get('/users/subscription/status', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Subscription status request received`);
-  
+
   try {
     const userId = req.user.userId;
-    
+
     // Validate userId
     try {
       validateUserId(userId);
@@ -3259,7 +3259,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     // Get subscription data from user_subscriptions table
     const subscriptionRequest = pool.request();
     subscriptionRequest.input('userId', mssql.Int, parseInt(userId, 10));
-    
+
     const subscriptionResult = await subscriptionRequest.query(`
       SELECT 
         [plan],
@@ -3279,7 +3279,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     // Get UserType from UserProfile
     const userProfileRequest = pool.request();
     userProfileRequest.input('userId', mssql.Int, parseInt(userId, 10));
-    
+
     const userProfileResult = await userProfileRequest.query(`
       SELECT UserType, UserTypeChangedDate
       FROM [dbo].[UserProfile]
@@ -3308,7 +3308,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
     let cancellationScheduled = subscription.cancellation_scheduled === true || subscription.cancellation_scheduled === 1;
     let needsBillingIntervalUpdate = false;
     let needsCancellationUpdate = false;
-    
+
     // Check if period has ended for canceled subscriptions - downgrade if needed
     if (cancellationScheduled && subscription.current_period_end) {
       const periodEndDate = new Date(subscription.current_period_end);
@@ -3327,12 +3327,12 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         }
       }
     }
-    
+
     // Always fetch from Stripe for active/trialing subscriptions to ensure we have the latest billing dates
     // This ensures billing dates are always up-to-date, even if database values exist
-    const shouldFetchFromStripe = subscription.subscription_id && 
-                                   (subscription.status === 'active' || subscription.status === 'trialing');
-    
+    const shouldFetchFromStripe = subscription.subscription_id &&
+      (subscription.status === 'active' || subscription.status === 'trialing');
+
     if (shouldFetchFromStripe) {
       try {
         if (stripe && process.env.STRIPE_SECRET_KEY) {
@@ -3340,7 +3340,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
           const stripeSubscription = await stripe.subscriptions.retrieve(subscription.subscription_id, {
             expand: ['latest_invoice', 'items.data.price']
           });
-          
+
           // Check and update cancellation_scheduled flag from Stripe
           const stripeCancellationScheduled = stripeSubscription.cancel_at_period_end === true;
           if (stripeCancellationScheduled !== cancellationScheduled) {
@@ -3348,9 +3348,9 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
             needsCancellationUpdate = true;
             console.log(`📝 Cancellation scheduled flag changed: ${cancellationScheduled}`);
           }
-          
+
           // Derive billing_interval from price ID if not in database or if it's incorrect
-          
+
           if (stripeSubscription.items.data.length > 0) {
             const currentPriceId = stripeSubscription.items.data[0].price.id;
             const priceIdMap = {
@@ -3358,19 +3358,19 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
               [process.env.STRIPE_PRICE_ID_SEMI_ANNUAL]: 'semi_annual',
               [process.env.STRIPE_PRICE_ID_ANNUAL]: 'annual'
             };
-            
+
             const derivedBillingInterval = priceIdMap[currentPriceId];
-            
+
             if (derivedBillingInterval) {
               // If database billing_interval doesn't match current price, update it
               if (!billingInterval || billingInterval !== derivedBillingInterval) {
                 console.log(`📝 Billing interval mismatch - DB: ${billingInterval || 'NULL'}, Stripe: ${derivedBillingInterval}`);
                 billingInterval = derivedBillingInterval;
                 needsBillingIntervalUpdate = true;
-                
+
                 // Also update Stripe metadata if it's missing or incorrect
-                if (!stripeSubscription.metadata?.billingInterval || 
-                    stripeSubscription.metadata.billingInterval !== derivedBillingInterval) {
+                if (!stripeSubscription.metadata?.billingInterval ||
+                  stripeSubscription.metadata.billingInterval !== derivedBillingInterval) {
                   try {
                     await stripe.subscriptions.update(stripeSubscription.id, {
                       metadata: {
@@ -3386,43 +3386,43 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
               }
             }
           }
-          
+
           // First try to get dates from subscription object
           if (stripeSubscription.current_period_end) {
             nextBillingDate = new Date(stripeSubscription.current_period_end * 1000).toISOString();
-            currentPeriodStart = stripeSubscription.current_period_start 
+            currentPeriodStart = stripeSubscription.current_period_start
               ? new Date(stripeSubscription.current_period_start * 1000).toISOString()
               : null;
-            
+
             console.log(`✅ Retrieved dates from Stripe subscription - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
           } else {
             // Fallback: Try to get dates from latest invoice if subscription doesn't have them
             console.log(`⚠️ Stripe subscription missing billing dates, checking latest invoice...`);
-            
+
             if (stripeSubscription.latest_invoice) {
-              const invoiceId = typeof stripeSubscription.latest_invoice === 'string' 
-                ? stripeSubscription.latest_invoice 
+              const invoiceId = typeof stripeSubscription.latest_invoice === 'string'
+                ? stripeSubscription.latest_invoice
                 : stripeSubscription.latest_invoice.id;
-              
+
               try {
                 const invoice = await stripe.invoices.retrieve(invoiceId);
-                
+
                 if (invoice.period_start && invoice.period_end) {
                   let periodStart = invoice.period_start;
                   let periodEnd = invoice.period_end;
-                  
+
                   // If dates are the same (invalid for monthly subscription), calculate proper end date
                   if (periodStart === periodEnd) {
                     console.log(`⚠️ Invoice has same start/end dates, calculating monthly period_end from subscription...`);
-                    
+
                     // Try to get billing interval from subscription items
                     if (stripeSubscription.items && stripeSubscription.items.data && stripeSubscription.items.data.length > 0) {
                       const price = stripeSubscription.items.data[0].price;
-                      
+
                       // If price has interval, use it; otherwise default to 1 month
                       const interval = price?.recurring?.interval || 'month';
                       const intervalCount = price?.recurring?.interval_count || 1;
-                      
+
                       // Calculate period_end based on interval
                       let secondsToAdd = 0;
                       if (interval === 'month') {
@@ -3435,7 +3435,7 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
                       } else if (interval === 'day') {
                         secondsToAdd = intervalCount * 24 * 60 * 60;
                       }
-                      
+
                       periodEnd = periodStart + Math.round(secondsToAdd);
                       console.log(`   Calculated period_end: ${intervalCount} ${interval}(s) from period_start`);
                     } else {
@@ -3444,58 +3444,58 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
                       console.log(`   Using fallback: 30 days from period_start`);
                     }
                   }
-                  
+
                   currentPeriodStart = new Date(periodStart * 1000).toISOString();
                   nextBillingDate = new Date(periodEnd * 1000).toISOString();
-                  
+
                   console.log(`✅ Retrieved dates from invoice - period_end: ${nextBillingDate}, period_start: ${currentPeriodStart}`);
                 }
               } catch (invoiceErr) {
                 console.warn(`⚠️ Could not retrieve invoice ${invoiceId}:`, invoiceErr.message);
               }
             }
-            
+
             if (!nextBillingDate) {
               console.warn(`⚠️ Stripe subscription ${subscription.subscription_id} missing current_period_end and invoice dates unavailable`);
             }
           }
-          
+
           // Save dates, billing_interval, and cancellation_scheduled to database if they need update
           if (nextBillingDate || needsBillingIntervalUpdate || needsCancellationUpdate) {
             try {
               const updateRequest = pool.request();
               updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
-              
+
               const updateFields = ['updated_at = SYSDATETIMEOFFSET()'];
-              
+
               if (nextBillingDate) {
                 updateRequest.input('periodEnd', mssql.DateTimeOffset, nextBillingDate);
                 updateFields.push('current_period_end = @periodEnd');
               }
-              
+
               if (currentPeriodStart) {
                 updateRequest.input('periodStart', mssql.DateTimeOffset, currentPeriodStart);
                 updateFields.push('current_period_start = @periodStart');
               }
-              
+
               if (needsBillingIntervalUpdate && billingInterval) {
                 updateRequest.input('billingInterval', mssql.NVarChar(32), billingInterval);
                 updateFields.push('billing_interval = @billingInterval');
                 console.log(`✅ Will update billing_interval to: ${billingInterval}`);
               }
-              
+
               if (needsCancellationUpdate) {
                 updateRequest.input('cancellationScheduled', mssql.Bit, cancellationScheduled);
                 updateFields.push('cancellation_scheduled = @cancellationScheduled');
                 console.log(`✅ Will update cancellation_scheduled to: ${cancellationScheduled}`);
               }
-              
+
               await updateRequest.query(`
                 UPDATE [dbo].[user_subscriptions]
                 SET ${updateFields.join(', ')}
                 WHERE UserId = @userId
               `);
-              
+
               if (nextBillingDate) {
                 console.log(`✅ Synced subscription dates from Stripe to database`);
               }
@@ -3516,22 +3516,22 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         // Continue with database values (which may be null)
       }
     }
-    
+
     // Use database values if Stripe fetch didn't work or wasn't needed
     // Also use database values if they're valid (not NULL and start != end)
     if (!nextBillingDate && subscription.current_period_end) {
       // Handle both DATETIMEOFFSET and string formats
-      const periodEnd = subscription.current_period_end instanceof Date 
-        ? subscription.current_period_end 
+      const periodEnd = subscription.current_period_end instanceof Date
+        ? subscription.current_period_end
         : new Date(subscription.current_period_end);
-      
+
       // Only use database value if it's valid (not the same as start date)
-      const periodStart = subscription.current_period_start instanceof Date 
-        ? subscription.current_period_start 
-        : subscription.current_period_start 
+      const periodStart = subscription.current_period_start instanceof Date
+        ? subscription.current_period_start
+        : subscription.current_period_start
           ? new Date(subscription.current_period_start)
           : null;
-      
+
       // Check if dates are valid (not the same)
       if (!periodStart || periodEnd.getTime() !== periodStart.getTime()) {
         nextBillingDate = periodEnd.toISOString();
@@ -3540,10 +3540,10 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
         console.warn(`⚠️ Database has invalid dates (start = end), skipping database value`);
       }
     }
-    
+
     if (!currentPeriodStart && subscription.current_period_start) {
-      const periodStart = subscription.current_period_start instanceof Date 
-        ? subscription.current_period_start 
+      const periodStart = subscription.current_period_start instanceof Date
+        ? subscription.current_period_start
         : new Date(subscription.current_period_start);
       currentPeriodStart = periodStart.toISOString();
     }
@@ -3563,8 +3563,8 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
       updatedAt: subscription.updated_at ? (subscription.updated_at instanceof Date ? subscription.updated_at.toISOString() : new Date(subscription.updated_at).toISOString()) : null
     });
   } catch (err) {
-    return sendErrorResponse(res, 500, 'Status Retrieval Failed', 
-      err.message || 'Failed to get subscription status', 
+    return sendErrorResponse(res, 500, 'Status Retrieval Failed',
+      err.message || 'Failed to get subscription status',
       err.stack);
   }
 });
@@ -3647,7 +3647,7 @@ router.post('/webhooks/stripe', async (req, res) => {
   try {
     // req.body should be a Buffer if express.raw() middleware is configured correctly
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
-    
+
     if (webhookSecret) {
       event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
     } else {
@@ -3669,14 +3669,14 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           let subscription = event.data.object;
           const userId = subscription.metadata?.userId;
-          
+
           if (!userId) {
             console.warn('⚠️ Subscription webhook missing userId in metadata');
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing subscription ${event.type} for user ${userId}`);
-          
+
           // Retrieve subscription with expanded items to get price details
           // This ensures updateSubscriptionInDatabase can derive billingInterval from price ID if metadata is missing
           try {
@@ -3688,35 +3688,35 @@ router.post('/webhooks/stripe', async (req, res) => {
             console.warn('⚠️ Could not retrieve subscription with expanded items:', retrieveErr.message);
             // Continue with event data object - updateSubscriptionInDatabase will try to retrieve it
           }
-          
+
           // Update subscription in database
           // billingInterval will be derived from price ID if not in metadata
           // Extract cancel_at_period_end flag from Stripe subscription
           const cancellationScheduled = subscription.cancel_at_period_end === true;
-          
+
           // Map plan from metadata or derive from billingInterval/price ID
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
+
           await updateSubscriptionInDatabase(
-                    userId,
-                    subscription.status,
-                    mappedPlan,
-                    subscription.latest_invoice?.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
-                    subscription.id,
-                    subscription.customer,
-                    subscription.current_period_start && typeof subscription.current_period_start === 'number' 
-                      ? new Date(subscription.current_period_start * 1000).toISOString() 
-                      : null,
-                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
-                      ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null,
-                    subscription.metadata?.billingInterval || null,
-                    cancellationScheduled
-                  );
-          
+            userId,
+            subscription.status,
+            mappedPlan,
+            subscription.latest_invoice?.payment_intent?.id || null,
+            mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start && typeof subscription.current_period_start === 'number'
+              ? new Date(subscription.current_period_start * 1000).toISOString()
+              : null,
+            subscription.current_period_end && typeof subscription.current_period_end === 'number'
+              ? new Date(subscription.current_period_end * 1000).toISOString()
+              : null,
+            subscription.metadata?.billingInterval || null,
+            cancellationScheduled
+          );
+
           console.log(`✅ Subscription ${event.type} processed successfully`);
         }
         break;
@@ -3725,38 +3725,38 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const subscription = event.data.object;
           const userId = subscription.metadata?.userId;
-          
+
           if (!userId) {
             console.warn('⚠️ Subscription deletion webhook missing userId in metadata');
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing subscription deletion for user ${userId}`);
-          
+
           // Update subscription status to canceled
           // When subscription is deleted, cancellation_scheduled should be false (already canceled)
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
+
           await updateSubscriptionInDatabase(
-                    userId,
-                    'canceled',
-                    mappedPlan,
-                    null,
-                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
-                    subscription.id,
-                    subscription.customer,
-                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
-                      ? new Date(subscription.current_period_start * 1000).toISOString()
-                      : null,
-                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
-                      ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null,
-                    subscription.metadata?.billingInterval || null,
-                    false // cancellation_scheduled = false when subscription is deleted
-                  );
-          
+            userId,
+            'canceled',
+            mappedPlan,
+            null,
+            mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start && typeof subscription.current_period_start === 'number'
+              ? new Date(subscription.current_period_start * 1000).toISOString()
+              : null,
+            subscription.current_period_end && typeof subscription.current_period_end === 'number'
+              ? new Date(subscription.current_period_end * 1000).toISOString()
+              : null,
+            subscription.metadata?.billingInterval || null,
+            false // cancellation_scheduled = false when subscription is deleted
+          );
+
           console.log(`✅ Subscription deletion processed successfully`);
         }
         break;
@@ -3765,7 +3765,7 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const invoice = event.data.object;
           const subscriptionId = invoice.subscription;
-          
+
           if (!subscriptionId) {
             console.warn('⚠️ Invoice payment_succeeded webhook missing subscription ID');
             return res.json({ received: true });
@@ -3776,39 +3776,39 @@ router.post('/webhooks/stripe', async (req, res) => {
             expand: ['items.data.price']
           });
           const userId = subscription.metadata?.userId;
-          
+
           if (!userId) {
             console.warn('⚠️ Invoice payment_succeeded webhook missing userId');
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing invoice payment succeeded for user ${userId}, subscription ${subscriptionId}`);
-          
+
           // Update subscription - payment succeeded means subscription should be active
           // billingInterval will be derived from price ID if not in metadata
           const cancellationScheduled = subscription.cancel_at_period_end === true;
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
+
           await updateSubscriptionInDatabase(
-                    userId,
-                    subscription.status,
-                    mappedPlan,
-                    invoice.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
-                    subscription.id,
-                    subscription.customer,
-                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
-                      ? new Date(subscription.current_period_start * 1000).toISOString()
-                      : null,
-                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
-                      ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null,
-                    subscription.metadata?.billingInterval || null,
-                    cancellationScheduled
-                  );
-          
+            userId,
+            subscription.status,
+            mappedPlan,
+            invoice.payment_intent?.id || null,
+            mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start && typeof subscription.current_period_start === 'number'
+              ? new Date(subscription.current_period_start * 1000).toISOString()
+              : null,
+            subscription.current_period_end && typeof subscription.current_period_end === 'number'
+              ? new Date(subscription.current_period_end * 1000).toISOString()
+              : null,
+            subscription.metadata?.billingInterval || null,
+            cancellationScheduled
+          );
+
           console.log(`✅ Invoice payment succeeded processed successfully`);
         }
         break;
@@ -3817,7 +3817,7 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const invoice = event.data.object;
           const subscriptionId = invoice.subscription;
-          
+
           if (!subscriptionId) {
             console.warn('⚠️ Invoice payment_failed webhook missing subscription ID');
             return res.json({ received: true });
@@ -3828,39 +3828,39 @@ router.post('/webhooks/stripe', async (req, res) => {
             expand: ['items.data.price']
           });
           const userId = subscription.metadata?.userId;
-          
+
           if (!userId) {
             console.warn('⚠️ Invoice payment_failed webhook missing userId');
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing invoice payment failed for user ${userId}, subscription ${subscriptionId}`);
-          
+
           // Update subscription status - payment failed might set status to past_due
           // billingInterval will be derived from price ID if not in metadata
           const cancellationScheduled = subscription.cancel_at_period_end === true;
           const planFromMetadata = subscription.metadata?.plan || 'premium';
           const billingIntervalFromMetadata = subscription.metadata?.billingInterval || null;
           const mappedPlan = mapPlanToDatabaseCode(planFromMetadata, billingIntervalFromMetadata);
-          
+
           await updateSubscriptionInDatabase(
-                    userId,
-                    subscription.status, // Could be 'past_due' or 'unpaid'
-                    mappedPlan,
-                    invoice.payment_intent?.id || null,
-                    mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
-                    subscription.id,
-                    subscription.customer,
-                    subscription.current_period_start && typeof subscription.current_period_start === 'number'
-                      ? new Date(subscription.current_period_start * 1000).toISOString()
-                      : null,
-                    subscription.current_period_end && typeof subscription.current_period_end === 'number'
-                      ? new Date(subscription.current_period_end * 1000).toISOString()
-                      : null,
-                    subscription.metadata?.billingInterval || null,
-                    cancellationScheduled
-                  );
-          
+            userId,
+            subscription.status, // Could be 'past_due' or 'unpaid'
+            mappedPlan,
+            invoice.payment_intent?.id || null,
+            mapPaymentMethodToDatabase(subscription.metadata?.paymentMethod || 'card'),
+            subscription.id,
+            subscription.customer,
+            subscription.current_period_start && typeof subscription.current_period_start === 'number'
+              ? new Date(subscription.current_period_start * 1000).toISOString()
+              : null,
+            subscription.current_period_end && typeof subscription.current_period_end === 'number'
+              ? new Date(subscription.current_period_end * 1000).toISOString()
+              : null,
+            subscription.metadata?.billingInterval || null,
+            cancellationScheduled
+          );
+
           console.log(`✅ Invoice payment failed processed successfully`);
         }
         break;
@@ -3869,19 +3869,19 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const paymentMethod = event.data.object;
           const customerId = paymentMethod.customer;
-          
+
           if (!customerId) {
             console.warn('⚠️ payment_method.attached webhook missing customer ID');
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing payment method attached for customer ${customerId}`);
-          
+
           // Get userId from customer metadata or database
           try {
             const customer = await stripe.customers.retrieve(customerId);
             const userId = customer.metadata?.userId;
-            
+
             if (userId) {
               console.log(`✅ Payment method ${paymentMethod.id} attached to customer ${customerId} (user ${userId})`);
               // You can update your database here if needed to track payment methods
@@ -3898,14 +3898,14 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const paymentMethod = event.data.object;
           const customerId = paymentMethod.customer;
-          
+
           console.log(`🔄 Processing payment method detached: ${paymentMethod.id} from customer ${customerId || 'N/A'}`);
-          
+
           if (customerId) {
             try {
               const customer = await stripe.customers.retrieve(customerId);
               const userId = customer.metadata?.userId;
-              
+
               if (userId) {
                 console.log(`✅ Payment method ${paymentMethod.id} detached from customer ${customerId} (user ${userId})`);
                 // You can update your database here if needed
@@ -3921,14 +3921,14 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const customer = event.data.object;
           const userId = customer.metadata?.userId;
-          
+
           if (!userId) {
             console.log(`ℹ️ customer.updated webhook - no userId in metadata, skipping database update`);
             return res.json({ received: true });
           }
 
           console.log(`🔄 Processing customer update for user ${userId}`);
-          
+
           // Update customer information in database if needed
           // Note: Only update billing-related info, not authentication credentials
           const pool = getPool();
@@ -3939,21 +3939,21 @@ router.post('/webhooks/stripe', async (req, res) => {
                 const updateRequest = pool.request();
                 updateRequest.input('userId', mssql.Int, parseInt(userId, 10));
                 updateRequest.input('customerId', mssql.NVarChar(128), customer.id);
-                
+
                 // Update customer_id in user_subscriptions if it exists
                 await updateRequest.query(`
                   UPDATE [dbo].[user_subscriptions] 
                   SET customer_id = @customerId, updated_at = SYSDATETIMEOFFSET()
                   WHERE UserId = @userId
                 `);
-                
+
                 console.log(`✅ Updated customer_id for user ${userId} in database`);
               }
             } catch (dbErr) {
               console.warn('⚠️ Could not update customer in database:', dbErr.message);
             }
           }
-          
+
           console.log(`✅ Customer update processed for user ${userId}`);
         }
         break;
@@ -3962,13 +3962,13 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const taxId = event.data.object;
           const customerId = taxId.customer;
-          
+
           console.log(`🔄 Processing tax ID created for customer ${customerId}`);
-          
+
           try {
             const customer = await stripe.customers.retrieve(customerId);
             const userId = customer.metadata?.userId;
-            
+
             if (userId) {
               console.log(`✅ Tax ID ${taxId.id} created for customer ${customerId} (user ${userId})`);
               // You can store tax ID information in your database if needed
@@ -3983,13 +3983,13 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const taxId = event.data.object;
           const customerId = taxId.customer;
-          
+
           console.log(`🔄 Processing tax ID deleted for customer ${customerId}`);
-          
+
           try {
             const customer = await stripe.customers.retrieve(customerId);
             const userId = customer.metadata?.userId;
-            
+
             if (userId) {
               console.log(`✅ Tax ID ${taxId.id} deleted for customer ${customerId} (user ${userId})`);
               // You can update your database here if needed
@@ -4004,13 +4004,13 @@ router.post('/webhooks/stripe', async (req, res) => {
         {
           const taxId = event.data.object;
           const customerId = taxId.customer;
-          
+
           console.log(`🔄 Processing tax ID updated for customer ${customerId}`);
-          
+
           try {
             const customer = await stripe.customers.retrieve(customerId);
             const userId = customer.metadata?.userId;
-            
+
             if (userId) {
               console.log(`✅ Tax ID ${taxId.id} updated for customer ${customerId} (user ${userId})`);
               // You can update your database here if needed
@@ -4082,7 +4082,7 @@ router.get('/deviceData/lastSync/:deviceType', authenticateToken, async (req, re
 router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const deviceType = req.params.deviceType;
-  const { 
+  const {
     deviceData
   } = req.body;
 
@@ -4205,31 +4205,32 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       const sleepRating = item.sleep.score;
 
       await pool.request()
-        .input('userId', userId)
-        .input('deviceType', 'oura')
-        .input('collectedDate', collectedDate)
+        .input('userId', userId) // actual variable, not string
+        .input('deviceType', deviceType)
         .input('stepCount', stepCount)
         .input('calories', calories)
         .input('sleepRating', sleepRating)
+        .input('collectedDate', collectedDate)
         .query(`
-          MERGE DeviceDataTemp AS target
-          USING (SELECT 
-                  'userId' AS UserID, 
-                  'oura' AS DeviceType, 
-                  'collectedDate' AS CollectedDate
-                ) AS source
-          ON target.UserID = source.UserID
-             AND target.DeviceType = source.DeviceType
-             AND target.CollectedDate = source.CollectedDate
-          WHEN MATCHED THEN
-            UPDATE SET 
-              StepCount = 'stepCount',
-              Calories = 'calories',
-              SleepRating = 'sleepRating'
-          WHEN NOT MATCHED THEN
-            INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
-            VALUES ('oura', 'stepCount', 'calories', 'sleepRating', 'collectedDate', 'userId');
-        `);
+    MERGE DeviceDataTemp AS target
+    USING (SELECT 
+            @userId AS UserID, 
+            @deviceType AS DeviceType, 
+            @collectedDate AS CollectedDate
+          ) AS source
+    ON target.UserID = source.UserID
+       AND target.DeviceType = source.DeviceType
+       AND target.CollectedDate = source.CollectedDate
+    WHEN MATCHED THEN
+      UPDATE SET 
+        StepCount = @stepCount,
+        Calories = @calories,
+        SleepRating = @sleepRating
+    WHEN NOT MATCHED THEN
+      INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+      VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+  `);
+
     }
 
     return res.status(200).json({ message: 'Oura data synced successfully' });

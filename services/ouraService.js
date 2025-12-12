@@ -48,9 +48,9 @@ const refreshOuraToken = async (userId, refreshToken) => {
       .input('accessToken', access_token)
       .input('refreshToken', refresh_token)
       .query(`
-        UPDATE Users
-        SET OuraAccessToken = 'accessToken',
-            OuraRefreshToken = 'refreshToken'
+        UPDATE OuraTokens
+        SET accessToken = 'accessToken',
+            RefreshToken = 'refreshToken'
         WHERE UserID = 'userId'
       `);
 
