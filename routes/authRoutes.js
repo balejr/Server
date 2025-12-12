@@ -432,10 +432,14 @@ router.get("/oura/getCode/:userId", (req, res) => {
 });
 
 router.get("/oura/callback", async (req, res) => {
+  console.log("[OuraCallback] Route hit");
+  console.log("[OuraCallback] Query params:", req.query);
+
   const code = req.query.code;
-  const token = req.query.token; // direct token (optional)
+  const token = req.query.token; // optional direct token
 
   if (!code && !token) {
+    console.log("[OuraCallback] Missing code or token");
     return res.status(400).send("Missing code or token");
   }
 
@@ -443,45 +447,76 @@ router.get("/oura/callback", async (req, res) => {
     let accessToken;
 
     if (token) {
-      // If a token is sent directly, use it
+      // Token passed directly
       accessToken = token;
-      console.log("Received token directly:", accessToken);
+      console.log("[OuraCallback] Received token directly:", accessToken);
     } else if (code) {
-      // If code is sent, exchange it for a token
-      console.log("Received OAuth code:", code);
-      const tokenData = await exchangeCodeForToken(code);
-      accessToken = tokenData.access_token;
+      // Exchange OAuth code for token
+      console.log("[OuraCallback] Received OAuth code:", code);
+      try {
+        const tokenData = await exchangeCodeForToken(code);
+        accessToken = tokenData.access_token;
+        console.log("[OuraCallback] Token received from exchange:", accessToken);
+      } catch (exchangeErr) {
+        console.error("[OuraCallback] Error exchanging code:", exchangeErr);
+        return res.status(400).send("Invalid or expired code");
+      }
     }
 
-    // Save accessToken to DB (example using userId from state)
+    // Get userId from state
     const userId = req.query.state;
-    if (!userId) return res.status(400).send("Missing userId (state)");
+    if (!userId) {
+      console.log("[OuraCallback] Missing userId (state)");
+      return res.status(400).send("Missing userId (state)");
+    }
+    const userIdInt = parseInt(userId, 10);
+    if (isNaN(userIdInt)) {
+      console.log("[OuraCallback] Invalid userId (not a number):", userId);
+      return res.status(400).send("Invalid userId");
+    }
+    console.log("[OuraCallback] Using userId:", userIdInt);
 
-    const pool = await getPool();
-    await pool.request()
-      .input("userId", sql.Int, userId)
-      .input("accessToken", sql.VarChar, accessToken)
-      .query(`
-        IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
-        BEGIN
-          UPDATE OuraTokens
-          SET accessToken = @accessToken,
-              updatedAt = GETDATE()
-          WHERE userId = @userId;
-        END
-        ELSE
-        BEGIN
-          INSERT INTO OuraTokens (userId, accessToken, createdAt, updatedAt)
-          VALUES (@userId, @accessToken, GETDATE(), GETDATE());
-        END
-      `);
+    // Save token to DB
+    let pool;
+    try {
+      pool = await getPool();
+      console.log("[OuraCallback] DB pool acquired");
+    } catch (poolErr) {
+      console.error("[OuraCallback] Error getting DB pool:", poolErr);
+      return res.status(500).send("Database connection error");
+    }
+
+    try {
+      await pool.request()
+        .input("userId", sql.Int, userIdInt)
+        .input("accessToken", sql.VarChar, accessToken)
+        .query(`
+          IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
+          BEGIN
+            UPDATE OuraTokens
+            SET accessToken = @accessToken,
+                updatedAt = GETDATE()
+            WHERE userId = @userId;
+          END
+          ELSE
+          BEGIN
+            INSERT INTO OuraTokens (userId, accessToken, createdAt, updatedAt)
+            VALUES (@userId, @accessToken, GETDATE(), GETDATE());
+          END
+        `);
+      console.log("[OuraCallback] Token saved to DB successfully");
+    } catch (dbErr) {
+      console.error("[OuraCallback] Error saving token to DB:", dbErr);
+      return res.status(500).send("Database query error");
+    }
 
     res.send("Oura connected successfully! You can close this window.");
   } catch (err) {
-    console.error("OAuth Error:", err);
-    res.status(500).send("Error processing callback");
+    console.error("[OuraCallback] Unexpected error:", err);
+    res.status(500).send("Unexpected error processing callback");
   }
 });
+
 
 
 
