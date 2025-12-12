@@ -477,8 +477,8 @@ router.get("/oura/callback", async (req, res) => {
 
     const pool = await getPool();
     await pool.request()
-      .input("userId", sql.Int, userId)
-      .input("accessToken", sql.VarChar, accessToken)
+      .input('userId', userId)
+      .input('accessToken', sql.VarChar, accessToken)
       .query(`
         IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
         BEGIN
