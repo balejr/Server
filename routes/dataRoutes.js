@@ -4151,13 +4151,13 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
     const tokenResult = await pool.request()
       .input('userId', userId)
       .query(`
-        SELECT OuraAccessToken, OuraRefreshToken
+        SELECT accessToken, RefreshToken
         FROM Users
         WHERE UserID = 'userId'
       `);
 
-    let ouraAccessToken = tokenResult.recordset[0]?.OuraAccessToken;
-    const refreshToken = tokenResult.recordset[0]?.OuraRefreshToken;
+    let ouraAccessToken = tokenResult.recordset[0]?.accessToken;
+    const refreshToken = tokenResult.recordset[0]?.RefreshToken;
 
     if (!ouraAccessToken && !refreshToken) {
       return res.status(400).json({ message: 'No Oura token found for this user' });
