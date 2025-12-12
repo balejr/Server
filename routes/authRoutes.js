@@ -411,7 +411,7 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // --------------- OURA --------------
-router.get("/oura/:userId", (req, res) => {
+router.get("/oura/getCode/:userId", (req, res) => {
   const userId = req.params.userId;  // <-- userId comes from the route param
 
   if (!userId) {
@@ -432,8 +432,6 @@ router.get("/oura/:userId", (req, res) => {
 });
 
 router.get("/oura/callback", async (req, res) => {
-  console.log("Query received:", req.query);
-  return res.status(400).send("Missing code or token");
   const code = req.query.code;
   const token = req.query.token; // direct token (optional)
 
