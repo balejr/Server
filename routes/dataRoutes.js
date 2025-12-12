@@ -4147,12 +4147,12 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
   const pool = getPool();
 
   try {
-    // Step 0: Get user tokens
+    // Get user tokens
     const tokenResult = await pool.request()
       .input('userId', userId)
       .query(`
         SELECT OuraAccessToken, OuraRefreshToken
-        FROM OuraTokens
+        FROM Users
         WHERE UserID = 'userId'
       `);
 
@@ -4163,49 +4163,46 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'No Oura token found for this user' });
     }
 
-    // Step 1: Refresh token if needed
-    if (!ouraAccessToken && refreshToken) {
-      ouraAccessToken = await refreshOuraToken(userId, refreshToken);
+    // Function to fetch Oura data
+    const fetchOuraData = async (token) => {
+      const response = await axios.get(
+        'https://api.ouraring.com/v1/user/daily_activity',
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            start: new Date(new Date().setDate(new Date().getDate() - 7))
+              .toISOString()
+              .split('T')[0], // last 7 days
+            end: new Date().toISOString().split('T')[0],
+          },
+        }
+      );
+      return response.data.data;
+    };
+
+    let deviceData;
+    try {
+      deviceData = await fetchOuraData(ouraAccessToken);
+    } catch (err) {
+      if (err.response?.status === 401 && refreshToken) {
+        // Access token expired → refresh it
+        ouraAccessToken = await refreshOuraToken(userId, refreshToken);
+        deviceData = await fetchOuraData(ouraAccessToken);
+      } else {
+        throw err;
+      }
     }
-
-    // Step 2: Get last sync date
-    const lastSyncResult = await pool.request()
-      .input('userId', userId)
-      .query(`
-        SELECT MAX(CollectedDate) AS LastSync
-        FROM DeviceDataTemp
-        WHERE UserID = 'userId' AND DeviceType = 'oura'
-      `);
-
-    let lastSync = lastSyncResult.recordset[0].LastSync;
-    if (!lastSync) {
-      lastSync = new Date();
-      lastSync.setDate(lastSync.getDate() - 7); // default to 1 week ago
-    }
-
-    // Step 3: Fetch new Oura data
-    const ouraResponse = await axios.get('https://api.ouraring.com/v1/user/daily_activity', {
-      headers: { Authorization: `Bearer ${ouraAccessToken}` },
-      params: {
-        start: lastSync.toISOString().split('T')[0],
-        end: new Date().toISOString().split('T')[0],
-      },
-    });
-
-    const deviceData = ouraResponse.data.data.map(item => ({
-      collectedDate: item.summary_date,
-      stepCount: item.activity.summary.steps,
-      calories: item.activity.summary.calories,
-      sleepRating: item.sleep.score,
-    }));
 
     if (!deviceData.length) {
       return res.status(200).json({ message: 'No new Oura data to sync' });
     }
 
-    // Step 4: Upsert data into SQL
+    // Upsert data into SQL
     for (const item of deviceData) {
-      const { collectedDate, stepCount, calories, sleepRating } = item;
+      const collectedDate = item.summary_date;
+      const stepCount = item.activity.summary.steps;
+      const calories = item.activity.summary.calories;
+      const sleepRating = item.sleep.score;
 
       await pool.request()
         .input('userId', userId)
@@ -4224,13 +4221,11 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
           ON target.UserID = source.UserID
              AND target.DeviceType = source.DeviceType
              AND target.CollectedDate = source.CollectedDate
-
           WHEN MATCHED THEN
             UPDATE SET 
               StepCount = 'stepCount',
               Calories = 'calories',
               SleepRating = 'sleepRating'
-
           WHEN NOT MATCHED THEN
             INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
             VALUES ('oura', 'stepCount', 'calories', 'sleepRating', 'collectedDate', 'userId');
@@ -4247,6 +4242,7 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
     });
   }
 });
+
 
 
 
