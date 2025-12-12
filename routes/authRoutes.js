@@ -430,5 +430,49 @@ router.get("/oura/:userId", (req, res) => {
   res.redirect(`${base}?${params.toString()}`);
 });
 
+router.get("/oura/callback", async (req, res) => {
+  const code = req.query.code;
+  const userId = req.query.state;  // <-- userId passed through OAuth "state"
+
+  if (!code) {
+    return res.status(400).send("Missing auth code");
+  }
+  if (!userId) {
+    return res.status(400).send("Missing userId (state)");
+  }
+
+  try {
+    // Step 1: Exchange code for Oura access token
+    const tokenData = await exchangeCodeForToken(code);
+    const accessToken = tokenData.access_token;
+
+    // Step 2: Save token using the same SQL style as your lastSync route
+    const pool = await getPool();  // <-- SAME AS YOUR OTHER ROUTES
+
+    await pool.request()
+      .input("userId", sql.Int, userId)
+      .input("accessToken", sql.VarChar, accessToken)
+      .query(`
+        IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
+        BEGIN
+          UPDATE OuraTokens
+          SET accessToken = @accessToken
+          WHERE userId = @userId;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO OuraTokens (userId, accessToken)
+          VALUES (@userId, @accessToken);
+        END
+      `);
+
+    res.send("Oura connected successfully! You can close this window.");
+  } catch (err) {
+    console.error("OAuth Error:", err);
+    res.status(500).send("Error during Oura OAuth");
+  }
+});
+
+
 
 module.exports = router;
