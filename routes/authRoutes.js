@@ -437,32 +437,53 @@ router.get("/oura", authenticateToken, (req, res) => {
 
 router.get("/oura/callback", async (req, res) => {
   const code = req.query.code;
+  const token = req.query.token; // direct token (optional)
 
-  if (!code) return res.status(400).send("Missing auth code");
+  if (!code && !token) {
+    return res.status(400).send("Missing code or token");
+  }
 
   try {
-    // Step 1: Exchange for token
-    const tokenData = await exchangeCodeForToken(code);
-    const accessToken = tokenData.access_token;
+    let accessToken;
 
-    // Step 2: Save token to Azure SQL (userId example = 1)
-    const pool = await sql.connect(config);
+    if (token) {
+      // If a token is sent directly, use it
+      accessToken = token;
+      console.log("Received token directly:", accessToken);
+    } else if (code) {
+      // If code is sent, exchange it for a token
+      console.log("Received OAuth code:", code);
+      const tokenData = await exchangeCodeForToken(code);
+      accessToken = tokenData.access_token;
+    }
 
+    // Save accessToken to DB (example using userId from state)
+    const userId = req.query.state;
+    if (!userId) return res.status(400).send("Missing userId (state)");
+
+    const pool = await getPool();
     await pool.request()
-      .input("userId", sql.Int, 1)
+      .input("userId", sql.Int, userId)
       .input("accessToken", sql.VarChar, accessToken)
       .query(`
-        IF EXISTS (SELECT * FROM OuraTokens WHERE userId = @userId)
-          UPDATE OuraTokens SET accessToken = @accessToken WHERE userId = @userId
+        IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
+        BEGIN
+          UPDATE OuraTokens
+          SET accessToken = @accessToken,
+              updatedAt = GETDATE()
+          WHERE userId = @userId;
+        END
         ELSE
-          INSERT INTO OuraTokens (userId, accessToken)
-          VALUES (@userId, @accessToken)
+        BEGIN
+          INSERT INTO OuraTokens (userId, accessToken, createdAt, updatedAt)
+          VALUES (@userId, @accessToken, GETDATE(), GETDATE());
+        END
       `);
 
-    res.send("Oura connected! You can close this window.");
+    res.send("Oura connected successfully! You can close this window.");
   } catch (err) {
     console.error("OAuth Error:", err);
-    res.status(500).send("Error during Oura OAuth");
+    res.status(500).send("Error processing callback");
   }
 });
 
