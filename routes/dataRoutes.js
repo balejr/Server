@@ -4152,7 +4152,7 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       .input('userId', userId)
       .query(`
         SELECT OuraAccessToken, OuraRefreshToken
-        FROM Users
+        FROM OuraTokens
         WHERE UserID = 'userId'
       `);
 
