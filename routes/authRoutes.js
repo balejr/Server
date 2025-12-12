@@ -432,6 +432,7 @@ router.get("/oura/:userId", (req, res) => {
 });
 
 router.get("/oura/callback", async (req, res) => {
+  console.log("Query received:", req.query);
   return res.status(400).send("Missing code or token");
   const code = req.query.code;
   const token = req.query.token; // direct token (optional)
