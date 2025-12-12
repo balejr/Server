@@ -29,7 +29,7 @@ async function exchangeCodeForToken(code) {
     console.error("[OuraToken] Error exchanging code:", error.response?.data || error.message);
     throw error;
   }
-},
+};
 
 const refreshOuraToken = async (userId, refreshToken) => {
   try {
@@ -60,7 +60,7 @@ const refreshOuraToken = async (userId, refreshToken) => {
     console.error('Failed to refresh Oura token:', err);
     throw new Error('Could not refresh Oura token');
   }
-}
+};
 
 
 module.exports = { exchangeCodeForToken };
