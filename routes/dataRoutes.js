@@ -4142,89 +4142,112 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
   }
 });
 
-router.get('/oura/sync', authenticateToken, async (req, res) => {
+router.post('/oura/sync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
+  const pool = getPool();
 
   try {
-    // 1. Get user's Oura access token from database
-    const pool = getPool();
+    // Step 0: Get user tokens
     const tokenResult = await pool.request()
       .input('userId', userId)
       .query(`
-        SELECT AccessToken 
-        FROM OuraTokens
-        WHERE UserID = @userId
+        SELECT OuraAccessToken, OuraRefreshToken
+        FROM Users
+        WHERE UserID = 'userId'
       `);
 
-    if (tokenResult.recordset.length === 0) {
-      return res.status(400).json({ message: 'No Oura token found for user' });
+    let ouraAccessToken = tokenResult.recordset[0]?.OuraAccessToken;
+    const refreshToken = tokenResult.recordset[0]?.OuraRefreshToken;
+
+    if (!ouraAccessToken && !refreshToken) {
+      return res.status(400).json({ message: 'No Oura token found for this user' });
     }
 
-    const accessToken = tokenResult.recordset[0].AccessToken;
+    // Step 1: Refresh token if needed
+    if (!ouraAccessToken && refreshToken) {
+      ouraAccessToken = await refreshOuraToken(userId, refreshToken);
+    }
 
-    // 2. Fetch Oura activity (steps + calories)
-    const activityRes = await axios.get('https://api.ouraring.com/v2/usercollection/daily_activity', {
-      headers: { Authorization: 'Bearer ' + accessToken }
+    // Step 2: Get last sync date
+    const lastSyncResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT MAX(CollectedDate) AS LastSync
+        FROM DeviceDataTemp
+        WHERE UserID = 'userId' AND DeviceType = 'oura'
+      `);
+
+    let lastSync = lastSyncResult.recordset[0].LastSync;
+    if (!lastSync) {
+      lastSync = new Date();
+      lastSync.setDate(lastSync.getDate() - 7); // default to 1 week ago
+    }
+
+    // Step 3: Fetch new Oura data
+    const ouraResponse = await axios.get('https://api.ouraring.com/v1/user/daily_activity', {
+      headers: { Authorization: `Bearer ${ouraAccessToken}` },
+      params: {
+        start: lastSync.toISOString().split('T')[0],
+        end: new Date().toISOString().split('T')[0],
+      },
     });
 
-    // 3. Fetch Oura sleep data
-    const sleepRes = await axios.get('https://api.ouraring.com/v2/usercollection/daily_sleep', {
-      headers: { Authorization: 'Bearer ' + accessToken }
-    });
+    const deviceData = ouraResponse.data.data.map(item => ({
+      collectedDate: item.summary_date,
+      stepCount: item.activity.summary.steps,
+      calories: item.activity.summary.calories,
+      sleepRating: item.sleep.score,
+    }));
 
-    const activity = activityRes.data.data;
-    const sleep = sleepRes.data.data;
+    if (!deviceData.length) {
+      return res.status(200).json({ message: 'No new Oura data to sync' });
+    }
 
-    // 4. Merge records and UPSERT
-    for (const day of activity) {
-      const date = day.day;
-      const steps = day.steps ?? 0;
-      const calories = day.cal_total ?? 0;
-
-      // match sleep data by date
-      const sleepDay = sleep.find(s => s.day === date);
-      const sleepScore = sleepDay ? sleepDay.score ?? 0 : 0;
+    // Step 4: Upsert data into SQL
+    for (const item of deviceData) {
+      const { collectedDate, stepCount, calories, sleepRating } = item;
 
       await pool.request()
         .input('userId', userId)
-        .input('date', date)
-        .input('steps', steps)
+        .input('deviceType', 'oura')
+        .input('collectedDate', collectedDate)
+        .input('stepCount', stepCount)
         .input('calories', calories)
-        .input('sleepScore', sleepScore)
+        .input('sleepRating', sleepRating)
         .query(`
-          MERGE OuraDailyData AS target
+          MERGE DeviceDataTemp AS target
           USING (SELECT 
-                  @userId AS UserID,
-                  @date AS Date
+                  'userId' AS UserID, 
+                  'oura' AS DeviceType, 
+                  'collectedDate' AS CollectedDate
                 ) AS source
           ON target.UserID = source.UserID
-             AND target.Date = source.Date
+             AND target.DeviceType = source.DeviceType
+             AND target.CollectedDate = source.CollectedDate
 
           WHEN MATCHED THEN
-            UPDATE SET
-              Steps = @steps,
-              Calories = @calories,
-              SleepScore = @sleepScore,
-              UpdatedAt = GETDATE()
+            UPDATE SET 
+              StepCount = 'stepCount',
+              Calories = 'calories',
+              SleepRating = 'sleepRating'
 
           WHEN NOT MATCHED THEN
-            INSERT (UserID, Date, Steps, Calories, SleepScore, CreatedAt)
-            VALUES (@userId, @date, @steps, @calories, @sleepScore, GETDATE());
+            INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+            VALUES ('oura', 'stepCount', 'calories', 'sleepRating', 'collectedDate', 'userId');
         `);
     }
 
-    return res.status(200).json({
-      message: 'Oura steps, sleep, and calories synced successfully'
-    });
+    return res.status(200).json({ message: 'Oura data synced successfully' });
 
   } catch (err) {
-    console.error('Oura Sync Error:', err);
+    console.error('Oura Data Sync Error:', err);
     return res.status(500).json({
       message: 'Failed to sync Oura data',
-      error: err.message
+      error: err.message,
     });
   }
 });
+
 
 
 

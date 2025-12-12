@@ -29,6 +29,38 @@ async function exchangeCodeForToken(code) {
     console.error("[OuraToken] Error exchanging code:", error.response?.data || error.message);
     throw error;
   }
+},
+
+const refreshOuraToken = async (userId, refreshToken) => {
+  try {
+    const response = await axios.post('https://api.ouraring.com/oauth/token', {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: process.env.OURA_CLIENT_ID,
+      client_secret: process.env.OURA_CLIENT_SECRET,
+    });
+
+    const { access_token, refresh_token } = response.data;
+
+    const pool = getPool();
+    await pool.request()
+      .input('userId', userId)
+      .input('accessToken', access_token)
+      .input('refreshToken', refresh_token)
+      .query(`
+        UPDATE Users
+        SET OuraAccessToken = 'accessToken',
+            OuraRefreshToken = 'refreshToken'
+        WHERE UserID = 'userId'
+      `);
+
+    return access_token;
+
+  } catch (err) {
+    console.error('Failed to refresh Oura token:', err);
+    throw new Error('Could not refresh Oura token');
+  }
 }
+
 
 module.exports = { exchangeCodeForToken };
