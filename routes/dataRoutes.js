@@ -4294,4 +4294,41 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
   }
 });
 
+router.post('/oura/disconnect', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const pool = getPool();
+
+  try {
+    // Check if user has any Oura tokens
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT *
+        FROM OuraTokens
+        WHERE UserID = @userId
+      `);
+
+    if (!tokenResult.recordset.length) {
+      return res.status(400).json({ message: 'No Oura token found for this user' });
+    }
+
+    // Delete the full entry
+    const deleteResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        DELETE FROM OuraTokens
+        WHERE UserID = @userId
+      `);
+
+    return res.status(200).json({ message: 'Oura account disconnected successfully' });
+  } catch (err) {
+    console.error('Oura disconnect error:', err);
+    return res.status(500).json({
+      message: 'Failed to disconnect Oura account',
+      error: err.message
+    });
+  }
+});
+
+
 module.exports = router;
