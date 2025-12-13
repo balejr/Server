@@ -4164,18 +4164,37 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
     }
 
     const result = await pool.request()
-    .input('userId', userId)
-    .input('deviceType', 'oura')
-    .query(`
+      .input('userId', userId)
+      .input('deviceType', 'oura')
+      .query(`
       SELECT MAX(CollectedDate) AS LastSyncDate
       FROM DeviceDataTemp
       WHERE UserID = @userId
         AND DeviceType = @deviceType
     `);
-    startDate = result.recordset[0].LastSyncDate || null;
+    const lastSyncDate = result.recordset[0].LastSyncDate;
 
+    // End date = today
+    const endDate = new Date();
+
+    // 7 days ago
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    // Decide start date
+    let startDate;
+
+    if (lastSyncDate) {
+      const lastSync = new Date(lastSyncDate);
+      startDate = lastSync > sevenDaysAgo ? lastSync : sevenDaysAgo;
+    } else {
+      startDate = sevenDaysAgo;
+    }
+
+    // Now SAFE to convert to strings
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
+
 
     // Fetch Oura activity and sleep data
     const fetchOuraData = async (token) => {
