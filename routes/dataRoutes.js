@@ -4271,7 +4271,6 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
   }
 });
 
-<<<<<<< HEAD
 // -------------------- ACHIEVEMENTS --------------------
 
 // Helper function to calculate FitPoints tier
@@ -4790,6 +4789,269 @@ router.get('/achievements/all', authenticateToken, async (req, res) => {
   }
 });
 
+// POST generate AI achievements when user runs out
+router.post('/achievements/generate', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { category, rewardType } = req.body; // category: 'Daily', 'Weekly', 'Monthly', 'Universal', rewardType: 'FP' or 'XP'
+
+  if (!category || !rewardType) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'Category and rewardType are required' 
+    });
+  }
+
+  const validCategories = ['Daily', 'Weekly', 'Monthly', 'Universal'];
+  const validRewardTypes = ['FP', 'XP'];
+
+  if (!validCategories.includes(category) || !validRewardTypes.includes(rewardType)) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'Invalid category or rewardType' 
+    });
+  }
+
+  try {
+    const pool = getPool();
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+    // Get user's current FP tier to verify XP eligibility
+    const userPointsResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitPoints
+        FROM dbo.UserPoints
+        WHERE UserID = @userId
+      `);
+
+    const canEarnXP = userPointsResult.recordset.length > 0 && 
+                      (userPointsResult.recordset[0].FitPoints || 0) >= 1000;
+
+    // Don't allow XP achievements if user hasn't unlocked them
+    if (rewardType === 'XP' && !canEarnXP) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'XP achievements are locked until you reach Gold tier (1000+ FP)' 
+      });
+    }
+
+    // Check if user already has incomplete achievements in this category
+    const checkResult = await pool.request()
+      .input('userId', userId)
+      .input('category', category)
+      .input('rewardType', rewardType)
+      .query(`
+        SELECT COUNT(*) AS count
+        FROM dbo.Achievements a
+        LEFT JOIN dbo.UserAchievements ua 
+          ON a.AchievementID = ua.AchievementID 
+          AND ua.UserID = @userId
+        WHERE a.Category = @category 
+          AND a.RewardType = @rewardType
+          AND a.IsActive = 1
+          AND a.Type = 'progress'
+          AND (ua.IsCompleted IS NULL OR ua.IsCompleted = 0)
+      `);
+
+    const incompleteCount = checkResult.recordset[0].count || 0;
+
+    // Only generate if user has no incomplete achievements
+    if (incompleteCount > 0) {
+      return res.status(200).json({ 
+        success: false,
+        message: `You still have ${incompleteCount} incomplete achievement(s) in this category`,
+        incompleteCount
+      });
+    }
+
+    // Get user's fitness profile for context
+    const userProfileResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitnessGoal, FitnessLevel, Age, Gender
+        FROM dbo.UserProfile
+        WHERE UserID = @userId
+      `);
+
+    const userProfile = userProfileResult.recordset[0] || {};
+    const fitnessGoal = userProfile.FitnessGoal || 'general fitness';
+    const fitnessLevel = userProfile.FitnessLevel || 'intermediate';
+    const age = userProfile.Age || null;
+    const gender = userProfile.Gender || null;
+
+    // Prepare AI prompt
+    const GOOGLE_API_KEY = process.env.GEMINI_API_KEY || "undefined";
+    const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
+
+    if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
+      return res.status(500).json({ 
+        success: false,
+        message: 'AI service not configured' 
+      });
+    }
+
+    const ai = new GoogleGenerativeAI({
+      apiKey: GOOGLE_API_KEY,
+    });
+
+    // Achievement generation schema
+    const ACHIEVEMENT_SCHEMA = {
+      type: "object",
+      required: ["achievements"],
+      properties: {
+        achievements: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["title", "description", "goalValue", "icon", "rewardAmount"],
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+              goalValue: { type: "integer" },
+              icon: { type: "string" },
+              rewardAmount: { type: "integer" }
+            }
+          },
+          minItems: 3,
+          maxItems: 3
+        }
+      }
+    };
+
+    const prompt = `You are a fitness achievement generator for a fitness app. Generate exactly 3 personalized fitness achievements/challenges for a user.
+
+User Profile:
+- Fitness Goal: ${fitnessGoal}
+- Fitness Level: ${fitnessLevel}
+${age ? `- Age: ${age}` : ''}
+${gender ? `- Gender: ${gender}` : ''}
+
+Requirements:
+- Category: ${category} (${category === 'Daily' ? 'should be completable within a day' : category === 'Weekly' ? 'should be completable within a week' : category === 'Monthly' ? 'should be completable within a month' : 'can be completed anytime'})
+- Reward Type: ${rewardType} (${rewardType === 'FP' ? 'FitPoints - available to all users' : 'Experience Points - for advanced users'})
+- Type: progress (trackable over time)
+- Each achievement should have:
+  * A clear, motivating title (max 60 characters)
+  * A brief description explaining what needs to be done
+  * A realistic goal value (integer, appropriate for the category)
+  * An icon name from Ionicons (e.g., "fitness-outline", "flame-outline", "time-outline", "water-outline", "calendar-outline", "trophy-outline", "checkmark-circle-outline", "barbell-outline", "heart-outline", "leaf-outline", "school-outline", "people-outline")
+  * A reward amount (${rewardType === 'FP' ? 'between 5-100 FP' : 'between 10-250 XP'})
+
+Make achievements:
+- Personalized to the user's fitness goal and level
+- Realistic and achievable
+- Varied in type (not all the same)
+- Motivating and engaging
+- Appropriate for the ${category} timeframe
+
+Return exactly 3 achievements in the specified JSON format.`;
+
+    const config = {
+      temperature: 0.7,
+      responseMimeType: "application/json",
+      responseSchema: ACHIEVEMENT_SCHEMA,
+    };
+
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      config,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    // Extract response
+    let responseText;
+    if (typeof response.text === "function") {
+      responseText = response.text();
+    } else if (response.response && typeof response.response.text === "function") {
+      responseText = response.response.text();
+    } else if (response.candidates && response.candidates[0] && response.candidates[0].content) {
+      responseText = response.candidates[0].content.parts[0].text;
+    } else {
+      throw new Error("Unable to extract text from Gemini response");
+    }
+
+    const aiResponse = JSON.parse(responseText);
+    const generatedAchievements = aiResponse.achievements || [];
+
+    if (!generatedAchievements || generatedAchievements.length === 0) {
+      return res.status(500).json({ 
+        success: false,
+        message: 'Failed to generate achievements' 
+      });
+    }
+
+    // Insert achievements into database
+    const insertedAchievements = [];
+    const transaction = pool.transaction();
+    await transaction.begin();
+
+    try {
+      for (const achievement of generatedAchievements) {
+        const achievementRequest = new (require('mssql').Request)(transaction);
+        const result = await achievementRequest
+          .input('title', achievement.title)
+          .input('description', achievement.description || null)
+          .input('category', category)
+          .input('type', 'progress')
+          .input('goalValue', achievement.goalValue)
+          .input('rewardType', rewardType)
+          .input('rewardAmount', achievement.rewardAmount)
+          .input('icon', achievement.icon)
+          .query(`
+            INSERT INTO dbo.Achievements 
+            (Title, Description, Category, Type, GoalValue, RewardType, RewardAmount, Icon, IsActive)
+            OUTPUT INSERTED.AchievementID, INSERTED.Title, INSERTED.GoalValue, INSERTED.Icon, INSERTED.RewardType, INSERTED.RewardAmount
+            VALUES (@title, @description, @category, @type, @goalValue, @rewardType, @rewardAmount, @icon, 1)
+          `);
+
+        const newAchievement = result.recordset[0];
+        
+        // Create UserAchievements entry with 0 progress
+        const userAchievementRequest = new (require('mssql').Request)(transaction);
+        await userAchievementRequest
+          .input('userId', userId)
+          .input('achievementId', newAchievement.AchievementID)
+          .input('currentValue', 0)
+          .input('isCompleted', 0)
+          .query(`
+            INSERT INTO dbo.UserAchievements 
+            (UserID, AchievementID, CurrentValue, IsCompleted, PointsAwarded)
+            VALUES (@userId, @achievementId, @currentValue, @isCompleted, 0)
+          `);
+
+        insertedAchievements.push({
+          id: newAchievement.AchievementID,
+          title: newAchievement.Title,
+          progress: 0,
+          goal: newAchievement.GoalValue,
+          icon: newAchievement.Icon,
+          completed: false,
+          rewardType: newAchievement.RewardType,
+          rewardAmount: newAchievement.RewardAmount
+        });
+      }
+
+      await transaction.commit();
+
+      res.status(200).json({
+        success: true,
+        message: `Generated ${insertedAchievements.length} new achievements`,
+        achievements: insertedAchievements
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (err) {
+    console.error('Error generating AI achievements:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to generate achievements', 
+      error: err.message 
+    });
+  }
+});
+
 /**
  * POST /api/data/subscriptions/pause
  * Pause subscription for 1-3 months
@@ -4899,7 +5161,6 @@ router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
     });
   }
 });
->>>>>>> azure/main
 
 /**
  * POST /api/data/subscriptions/cancel
