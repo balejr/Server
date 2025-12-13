@@ -4208,15 +4208,25 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       ]);
 
       // Merge activity + sleep per day
-      const mergedData = activityRes.data.map(activityItem => {
-        const sleepItem = sleepRes.data.find(s => s.summary_date === activityItem.summary_date);
+      const activityData = activityRes.data?.data ?? [];
+      const sleepData = sleepRes.data?.data ?? [];
+
+      // Build a lookup map for sleep by date (O(n), fast)
+      const sleepByDate = new Map(
+        sleepData.map(s => [s.day, s])
+      );
+
+      const mergedData = activityData.map(activityItem => {
+        const sleepItem = sleepByDate.get(activityItem.day);
+
         return {
-          collectedDate: activityItem.summary_date,
-          stepCount: activityItem.steps,
-          calories: activityItem.calories,
-          sleepRating: sleepItem?.score || null
+          collectedDate: activityItem.day,
+          stepCount: activityItem.steps ?? 0,
+          calories: activityItem.total_calories ?? null,
+          sleepRating: sleepItem?.score ?? null
         };
       });
+
 
       return mergedData;
     };
