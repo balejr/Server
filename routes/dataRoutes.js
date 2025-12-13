@@ -4163,21 +4163,29 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'No Oura token found for this user' });
     }
 
-    // Function to fetch Oura data
+    // Fetch Oura activity and sleep data
     const fetchOuraData = async (token) => {
-      const response = await axios.get(
-        'https://api.ouraring.com/v1/user/daily_activity',
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          params: {
-            start: new Date(new Date().setDate(new Date().getDate() - 7))
-              .toISOString()
-              .split('T')[0], // last 7 days
-            end: new Date().toISOString().split('T')[0],
-          },
-        }
-      );
-      return response.data.data;
+      const [activityRes, sleepRes] = await Promise.all([
+        axios.get(`https://api.ouraring.com/v2/usercollection/daily_activity?start_date=${startStr}&end_date=${endStr}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.get(`https://api.ouraring.com/v2/usercollection/daily_sleep?start_date=${startStr}&end_date=${endStr}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+
+      // Merge activity + sleep per day
+      const mergedData = activityRes.data.map(activityItem => {
+        const sleepItem = sleepRes.data.find(s => s.summary_date === activityItem.summary_date);
+        return {
+          collectedDate: activityItem.summary_date,
+          stepCount: activityItem.steps,
+          calories: activityItem.calories,
+          sleepRating: sleepItem?.score || null
+        };
+      });
+
+      return mergedData;
     };
 
     let deviceData;
