@@ -4163,6 +4163,17 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'No Oura token found for this user' });
     }
 
+    const result = await pool.request()
+    .input('userId', userId)
+    .input('deviceType', 'oura')
+    .query(`
+      SELECT MAX(CollectedDate) AS LastSyncDate
+      FROM DeviceDataTemp
+      WHERE UserID = @userId
+        AND DeviceType = @deviceType
+    `);
+    startDate = result.recordset[0].LastSyncDate || null;
+
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
 
