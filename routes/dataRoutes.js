@@ -4163,6 +4163,9 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'No Oura token found for this user' });
     }
 
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
     // Fetch Oura activity and sleep data
     const fetchOuraData = async (token) => {
       const [activityRes, sleepRes] = await Promise.all([
@@ -4238,7 +4241,6 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
       VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
   `);
-
     }
 
     return res.status(200).json({ message: 'Oura data synced successfully' });
@@ -4251,9 +4253,5 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
     });
   }
 });
-
-
-
-
 
 module.exports = router;
