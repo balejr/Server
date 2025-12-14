@@ -392,7 +392,8 @@ const recordOTPAttempt = async (
  */
 const updateOTPStatus = async (pool, phoneOrEmail, purpose, status) => {
   try {
-    await pool
+    // First try to update with exact purpose match
+    const result = await pool
       .request()
       .input("phoneOrEmail", phoneOrEmail)
       .input("purpose", purpose)
@@ -404,6 +405,46 @@ const updateOTPStatus = async (pool, phoneOrEmail, purpose, status) => {
           AND Purpose = @purpose
           AND Status = 'pending'
       `);
+
+    // If no rows affected, try with related purposes
+    if (result.rowsAffected[0] === 0) {
+      // For signup-related purposes, also check related variants
+      if (
+        purpose === "signup" ||
+        purpose === "verification" ||
+        purpose === "phone_verify"
+      ) {
+        const fallbackResult = await pool
+          .request()
+          .input("phoneOrEmail", phoneOrEmail)
+          .input("status", status).query(`
+            UPDATE dbo.OTPVerifications
+            SET Status = @status,
+                AttemptCount = AttemptCount + 1
+            WHERE PhoneOrEmail = @phoneOrEmail
+              AND Purpose IN ('signup', 'verification', 'phone_verify')
+              AND Status = 'pending'
+          `);
+
+        console.log("OTP status update (fallback):", {
+          phoneOrEmail: phoneOrEmail.includes("@")
+            ? phoneOrEmail
+            : phoneOrEmail.slice(-4),
+          purpose,
+          newStatus: status,
+          rowsAffected: fallbackResult.rowsAffected[0],
+        });
+      }
+    } else {
+      console.log("OTP status update result:", {
+        phoneOrEmail: phoneOrEmail.includes("@")
+          ? phoneOrEmail
+          : phoneOrEmail.slice(-4),
+        purpose,
+        newStatus: status,
+        rowsAffected: result.rowsAffected[0],
+      });
+    }
   } catch (error) {
     console.error("Update OTP status error:", error);
   }

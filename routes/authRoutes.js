@@ -124,21 +124,28 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
     // This is more secure than trusting a frontend flag
     let phoneVerified = false;
     if (phoneNumber) {
-      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      // Extended to 30 minutes to give users more time to complete signup
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
       const otpCheck = await pool
         .request()
         .input("phoneNumber", phoneNumber)
-        .input("tenMinutesAgo", tenMinutesAgo).query(`
+        .input("thirtyMinutesAgo", thirtyMinutesAgo).query(`
           SELECT TOP 1 Status
           FROM dbo.OTPVerifications
           WHERE PhoneOrEmail = @phoneNumber
-            AND Purpose = 'signup'
+            AND Purpose IN ('signup', 'phone_verify', 'verification')
             AND Status = 'approved'
-            AND CreatedAt > @tenMinutesAgo
+            AND CreatedAt > @thirtyMinutesAgo
           ORDER BY CreatedAt DESC
         `);
 
       phoneVerified = otpCheck.recordset.length > 0;
+
+      console.log("Phone verification check during signup:", {
+        phoneNumber: phoneNumber.slice(-4),
+        foundApprovedOTP: phoneVerified,
+        recordCount: otpCheck.recordset.length,
+      });
     }
 
     // Begin transaction
@@ -237,12 +244,30 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
           P.PhoneNumber, P.PhoneVerified
         FROM dbo.UserLogin A
         INNER JOIN dbo.UserProfile P ON A.UserID = P.UserID
-        INNER JOIN (SELECT Email, MAX(UserID) as UserId FROM dbo.UserLogin GROUP BY Email) B
-          ON A.UserID = B.UserID AND A.Email = B.Email
+        INNER JOIN (SELECT Email, MAX(UserID) as MaxUserID FROM dbo.UserLogin GROUP BY Email) B
+          ON A.UserID = B.MaxUserID AND A.Email = B.Email
         WHERE A.Email = @email
       `);
 
+    // Debug: Check for duplicate accounts
+    const allAccounts = await pool.request().input("email", email).query(`
+        SELECT UserID, Email, Password FROM dbo.UserLogin WHERE Email = @email ORDER BY UserID
+      `);
+    console.log("Signin attempt for email:", email);
+    console.log(
+      "Total accounts found with this email:",
+      allAccounts.recordset.length
+    );
+    if (allAccounts.recordset.length > 1) {
+      console.log("WARNING: Multiple accounts detected for email:", email);
+      console.log(
+        "Account UserIDs:",
+        allAccounts.recordset.map((a) => a.UserID)
+      );
+    }
+
     if (result.recordset.length === 0) {
+      console.log("No account found matching email (after MAX filter):", email);
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -250,9 +275,20 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
     }
 
     const user = result.recordset[0];
+    console.log(
+      "Found user for signin - UserID:",
+      user.UserID,
+      "Has password:",
+      !!user.Password,
+      "Password length:",
+      user.Password?.length
+    );
+
     const isPasswordMatch = await bcrypt.compare(password, user.Password);
+    console.log("Password match result:", isPasswordMatch);
 
     if (!isPasswordMatch) {
+      console.log("Password mismatch for UserID:", user.UserID);
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -266,8 +302,20 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
     if (user.MFAEnabled) {
       // Generate a temporary session token for MFA flow
       const mfaSessionToken = crypto.randomBytes(32).toString("hex");
+      const mfaSessionExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-      // Store MFA session in database
+      // Store MFA session token in UserLogin table for validation
+      await pool
+        .request()
+        .input("userId", user.UserID)
+        .input("mfaSessionToken", mfaSessionToken)
+        .input("mfaSessionExpires", mfaSessionExpires).query(`
+          UPDATE dbo.UserLogin 
+          SET MFASessionToken = @mfaSessionToken, MFASessionExpires = @mfaSessionExpires
+          WHERE UserID = @userId
+        `);
+
+      // Also store in OTPVerifications for tracking
       await pool
         .request()
         .input("userId", user.UserID)
@@ -462,13 +510,72 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
     // For signin/login: phone must be registered and verified
     if (purpose === "signin" || purpose === "login") {
       if (!phoneExists) {
+        console.log("Phone signin failed - phone not registered:", {
+          phoneNumber: phoneNumber.slice(-4),
+        });
         return res.status(404).json({
           success: false,
           message: "Phone number not registered",
         });
       }
 
-      if (!userResult.recordset[0].PhoneVerified) {
+      const user = userResult.recordset[0];
+      console.log("Phone signin check:", {
+        phoneNumber: phoneNumber.slice(-4),
+        userId: user.UserID,
+        phoneVerified: user.PhoneVerified,
+        phoneVerifiedType: typeof user.PhoneVerified,
+      });
+
+      // Check PhoneVerified - handle both boolean and numeric (0/1) values
+      let isPhoneVerified =
+        user.PhoneVerified === true || user.PhoneVerified === 1;
+
+      // Fallback: If phone not marked as verified, check OTPVerifications table
+      // This handles cases where signup didn't properly record the verification
+      if (!isPhoneVerified) {
+        console.log(
+          "Phone not marked verified, checking OTPVerifications table..."
+        );
+
+        const otpCheck = await pool.request().input("phoneNumber", phoneNumber)
+          .query(`
+            SELECT TOP 1 Status, CreatedAt, Purpose
+            FROM dbo.OTPVerifications
+            WHERE PhoneOrEmail = @phoneNumber
+              AND Purpose IN ('signup', 'phone_verify', 'verification', 'signin')
+              AND Status = 'approved'
+            ORDER BY CreatedAt DESC
+          `);
+
+        if (otpCheck.recordset.length > 0) {
+          console.log(
+            "Found approved OTP verification, updating PhoneVerified status:",
+            {
+              phoneNumber: phoneNumber.slice(-4),
+              userId: user.UserID,
+              otpPurpose: otpCheck.recordset[0].Purpose,
+              otpCreatedAt: otpCheck.recordset[0].CreatedAt,
+            }
+          );
+
+          // Update the user's PhoneVerified status
+          await pool.request().input("userId", user.UserID).query(`
+              UPDATE dbo.UserProfile
+              SET PhoneVerified = 1
+              WHERE UserID = @userId
+            `);
+
+          isPhoneVerified = true;
+        }
+      }
+
+      if (!isPhoneVerified) {
+        console.log("Phone signin failed - phone not verified:", {
+          phoneNumber: phoneNumber.slice(-4),
+          userId: user.UserID,
+          rawPhoneVerified: user.PhoneVerified,
+        });
         return res.status(400).json({
           success: false,
           message:
@@ -527,6 +634,12 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
   const { phoneNumber, code, purpose = "signin" } = req.body;
 
   try {
+    console.log("Verify phone OTP request:", {
+      phoneNumber: phoneNumber ? phoneNumber.slice(-4) : "missing",
+      purpose,
+      codeProvided: !!code,
+    });
+
     // Validate inputs
     if (!phoneNumber || !code) {
       return res.status(400).json({
@@ -553,11 +666,40 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
 
     const pool = getPool();
 
+    // Normalize purpose for storage - map variants to canonical values
+    const normalizedPurpose = purpose === "verification" ? "signup" : purpose;
+
     // Update OTP status
-    await updateOTPStatus(pool, phoneNumber, purpose, "approved");
+    await updateOTPStatus(pool, phoneNumber, normalizedPurpose, "approved");
+
+    console.log("Phone OTP verified successfully:", {
+      phoneNumber: phoneNumber.slice(-4),
+      purpose: normalizedPurpose,
+    });
 
     // Reset rate limit on success
     resetAuthRateLimit(req);
+
+    // Handle signup/verification purposes FIRST - no user lookup needed!
+    // The user doesn't exist yet, we just need to verify the phone is valid
+    if (
+      purpose === "signup" ||
+      purpose === "verification" ||
+      normalizedPurpose === "signup"
+    ) {
+      console.log(
+        "Signup phone verification complete - no user lookup needed:",
+        {
+          phoneNumber: phoneNumber.slice(-4),
+          purpose,
+        }
+      );
+      return res.status(200).json({
+        success: true,
+        message: "Phone number verified successfully",
+        phoneVerified: true,
+      });
+    }
 
     // Handle signin/login - return tokens for existing user
     if (purpose === "signin" || purpose === "login") {
@@ -823,7 +965,140 @@ router.post("/send-mfa-code", async (req, res) => {
 });
 
 // ============================================
-// VERIFY MFA CODE - Complete MFA verification
+// VERIFY MFA LOGIN - Complete MFA verification during login flow
+// Validates the mfaSessionToken from signin response
+// ============================================
+router.post("/verify-mfa-login", async (req, res) => {
+  const { mfaSessionToken, code, userId } = req.body;
+
+  try {
+    if (!userId || !code || !mfaSessionToken) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID, code, and MFA session token are required",
+      });
+    }
+
+    const pool = getPool();
+
+    // Get user info and validate MFA session
+    const result = await pool.request().input("userId", userId).query(`
+        SELECT L.UserID, L.Email, L.MFAMethod, L.MFAEnabled, L.MFASessionToken, L.MFASessionExpires,
+               P.PhoneNumber, P.PhoneVerified, L.PreferredLoginMethod, L.BiometricEnabled
+        FROM dbo.UserLogin L
+        INNER JOIN dbo.UserProfile P ON L.UserID = P.UserID
+        WHERE L.UserID = @userId
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const user = result.recordset[0];
+
+    // Validate MFA session token
+    if (!user.MFASessionToken || user.MFASessionToken !== mfaSessionToken) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid MFA session. Please sign in again.",
+        errorCode: "MFA_SESSION_INVALID",
+      });
+    }
+
+    // Check if MFA session has expired
+    if (
+      user.MFASessionExpires &&
+      new Date(user.MFASessionExpires) < new Date()
+    ) {
+      // Clear expired session
+      await pool.request().input("userId", userId).query(`
+        UPDATE dbo.UserLogin 
+        SET MFASessionToken = NULL, MFASessionExpires = NULL
+        WHERE UserID = @userId
+      `);
+      return res.status(401).json({
+        success: false,
+        message: "MFA session expired. Please sign in again.",
+        errorCode: "MFA_SESSION_EXPIRED",
+      });
+    }
+
+    const mfaMethod = user.MFAMethod || "email";
+    const destination = mfaMethod === "sms" ? user.PhoneNumber : user.Email;
+
+    // Verify OTP
+    let verifyResult;
+    if (mfaMethod === "sms") {
+      verifyResult = await verifyPhoneOTP(user.PhoneNumber, code);
+    } else {
+      verifyResult = await verifyEmailOTP(user.Email, code);
+    }
+
+    if (!verifyResult.success) {
+      await updateOTPStatus(pool, destination, "mfa", "failed");
+      return res.status(400).json({
+        success: false,
+        message: verifyResult.error || "Invalid verification code",
+        errorCode: "OTP_INVALID",
+      });
+    }
+
+    // Record successful MFA verification
+    await recordMFAVerification(pool, userId, mfaMethod);
+    await updateOTPStatus(pool, destination, "mfa", "approved");
+
+    // Clear MFA session token (one-time use)
+    await pool.request().input("userId", userId).query(`
+      UPDATE dbo.UserLogin 
+      SET MFASessionToken = NULL, MFASessionExpires = NULL
+      WHERE UserID = @userId
+    `);
+
+    // Generate tokens
+    const tokens = generateTokenPair({ userId: user.UserID });
+    const refreshTokenExpiry = getRefreshTokenExpiry();
+
+    // Store refresh token
+    await pool
+      .request()
+      .input("userId", user.UserID)
+      .input("refreshToken", tokens.refreshToken)
+      .input("refreshTokenExpires", refreshTokenExpiry).query(`
+        UPDATE dbo.UserLogin 
+        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+        WHERE UserID = @userId
+      `);
+
+    res.status(200).json({
+      success: true,
+      message: "MFA verification successful",
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+      user: {
+        id: user.UserID,
+        email: user.Email,
+        phoneNumber: user.PhoneNumber,
+        phoneVerified: user.PhoneVerified,
+        preferredLoginMethod: user.PreferredLoginMethod,
+        mfaEnabled: user.MFAEnabled,
+        biometricEnabled: user.BiometricEnabled,
+      },
+    });
+  } catch (error) {
+    console.error("Verify MFA Login Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error verifying MFA code",
+    });
+  }
+});
+
+// ============================================
+// VERIFY MFA CODE - Complete MFA verification (legacy endpoint)
 // ============================================
 router.post("/verify-mfa-code", async (req, res) => {
   const { userId, code, method } = req.body;
@@ -1460,6 +1735,204 @@ router.post("/disable-biometric", authenticateToken, async (req, res) => {
 });
 
 // ============================================
+// SEND EMAIL OTP - Send verification code via email (Twilio Verify)
+// Used for password reset and other email verification flows
+// ============================================
+router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
+  const { email, purpose = "password_reset" } = req.body;
+
+  try {
+    // Validate email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email format",
+      });
+    }
+
+    const pool = getPool();
+
+    // For password_reset, check if user exists (but don't reveal this in error)
+    let userId = null;
+    if (purpose === "password_reset") {
+      const userResult = await pool.request().input("email", email).query(`
+        SELECT TOP 1 UserID
+        FROM dbo.UserLogin
+        WHERE Email = @email
+        ORDER BY UserID DESC
+      `);
+
+      if (userResult.recordset.length === 0) {
+        // Don't reveal if email exists - return success anyway
+        return res.status(200).json({
+          success: true,
+          message: "If an account exists, a verification code has been sent.",
+        });
+      }
+      userId = userResult.recordset[0].UserID;
+    }
+
+    // Check rate limit
+    const rateLimitResult = await checkRateLimit(pool, userId, email, purpose);
+    if (!rateLimitResult.allowed) {
+      return res.status(429).json({
+        success: false,
+        message: rateLimitResult.error,
+        remainingAttempts: 0,
+      });
+    }
+
+    // Send OTP via Twilio
+    const otpResult = await sendEmailOTP(email);
+
+    if (!otpResult.success) {
+      console.error("Failed to send email OTP:", otpResult.error);
+      return res.status(500).json({
+        success: false,
+        message: otpResult.error || "Failed to send verification code",
+      });
+    }
+
+    // Record OTP attempt
+    await recordOTPAttempt(
+      pool,
+      userId,
+      email,
+      otpResult.verificationSid,
+      purpose
+    );
+
+    console.log("Email OTP sent successfully:", {
+      email: email.substring(0, 3) + "***",
+      purpose,
+      verificationSid: otpResult.verificationSid,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Verification code sent successfully",
+      remainingAttempts: rateLimitResult.remainingAttempts - 1,
+    });
+  } catch (error) {
+    console.error("Send Email OTP Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error sending verification code",
+    });
+  }
+});
+
+// ============================================
+// VERIFY EMAIL OTP - Verify email verification code (Twilio Verify)
+// Used for password reset and other email verification flows
+// ============================================
+router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
+  const { email, code, purpose = "password_reset" } = req.body;
+
+  try {
+    // Validate inputs
+    if (!email || !code) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and code are required",
+      });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email format",
+      });
+    }
+
+    // Verify OTP with Twilio
+    const verifyResult = await verifyEmailOTP(email, code);
+
+    if (!verifyResult.success) {
+      console.log("Email OTP verification failed:", {
+        email: email.substring(0, 3) + "***",
+        error: verifyResult.error,
+        status: verifyResult.status,
+      });
+      return res.status(400).json({
+        success: false,
+        message: verifyResult.error || "Invalid verification code",
+        errorCode: "OTP_INVALID",
+      });
+    }
+
+    const pool = getPool();
+
+    // Update OTP status
+    await updateOTPStatus(pool, email, purpose, "approved");
+
+    // Reset rate limit on success
+    resetAuthRateLimit(req);
+
+    console.log("Email OTP verified successfully:", {
+      email: email.substring(0, 3) + "***",
+      purpose,
+    });
+
+    // For password_reset, return a token that can be used to reset the password
+    if (purpose === "password_reset") {
+      // Get user ID for the email
+      const userResult = await pool.request().input("email", email).query(`
+        SELECT TOP 1 UserID
+        FROM dbo.UserLogin
+        WHERE Email = @email
+        ORDER BY UserID DESC
+      `);
+
+      if (userResult.recordset.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      const userId = userResult.recordset[0].UserID;
+
+      // Generate a temporary reset token (valid for 10 minutes)
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetTokenExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+      // Store reset token in database
+      await pool
+        .request()
+        .input("userId", userId)
+        .input("resetToken", resetToken)
+        .input("resetTokenExpires", resetTokenExpires).query(`
+          UPDATE dbo.UserLogin
+          SET PasswordResetToken = @resetToken, PasswordResetExpires = @resetTokenExpires
+          WHERE UserID = @userId
+        `);
+
+      return res.status(200).json({
+        success: true,
+        message: "Email verified successfully",
+        verified: true,
+        resetToken, // Frontend can use this to authorize the password reset
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Email verified successfully",
+      verified: true,
+    });
+  } catch (error) {
+    console.error("Verify Email OTP Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error verifying code",
+    });
+  }
+});
+
+// ============================================
 // FORGOT PASSWORD - Updated to use Twilio
 // ============================================
 router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
@@ -1554,16 +2027,24 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
 });
 
 // ============================================
-// RESET PASSWORD - Updated to support Twilio OTP
+// RESET PASSWORD - Updated to support Twilio OTP and reset token
 // ============================================
 router.post("/reset-password", async (req, res) => {
-  const { email, code, newPassword, useTwilio = false } = req.body;
+  const { email, code, newPassword, useTwilio = false, resetToken } = req.body;
   const pool = getPool();
 
   try {
+    // Validate new password
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+    }
+
     // Get latest UserID for the email
     const userResult = await pool.request().input("email", email).query(`
-        SELECT TOP 1 UserID
+        SELECT TOP 1 UserID, PasswordResetToken, PasswordResetExpires
         FROM dbo.UserLogin
         WHERE Email = @email
         ORDER BY UserID DESC
@@ -1576,11 +2057,39 @@ router.post("/reset-password", async (req, res) => {
       });
     }
 
-    const userId = userResult.recordset[0].UserID;
+    const user = userResult.recordset[0];
+    const userId = user.UserID;
 
-    // Verify OTP
-    if (useTwilio) {
-      // Verify with Twilio
+    // Method 1: Verify using resetToken (from verify-email-otp endpoint)
+    if (resetToken) {
+      // Validate reset token
+      if (user.PasswordResetToken !== resetToken) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid or expired reset token",
+        });
+      }
+
+      // Check if token has expired
+      if (
+        user.PasswordResetExpires &&
+        new Date(user.PasswordResetExpires) < new Date()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Reset token has expired. Please request a new code.",
+        });
+      }
+
+      // Clear the reset token after use
+      await pool.request().input("userId", userId).query(`
+        UPDATE dbo.UserLogin
+        SET PasswordResetToken = NULL, PasswordResetExpires = NULL
+        WHERE UserID = @userId
+      `);
+    }
+    // Method 2: Verify OTP directly with Twilio
+    else if (useTwilio && code) {
       const verifyResult = await verifyEmailOTP(email, code);
 
       if (!verifyResult.success) {
@@ -1591,8 +2100,9 @@ router.post("/reset-password", async (req, res) => {
       }
 
       await updateOTPStatus(pool, email, "password_reset", "approved");
-    } else {
-      // Legacy verification with PasswordResets table
+    }
+    // Method 3: Legacy verification with PasswordResets table
+    else if (code) {
       await pool
         .request()
         .query(`DELETE FROM dbo.PasswordResets WHERE ExpiresAt < GETDATE()`);
@@ -1619,6 +2129,11 @@ router.post("/reset-password", async (req, res) => {
           SET Used = 1
           WHERE UserID = @userId AND Code = @code
         `);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Verification code or reset token is required",
+      });
     }
 
     // Update password
@@ -1632,6 +2147,8 @@ router.post("/reset-password", async (req, res) => {
         SET Password = @password
         WHERE UserID = @userId
       `);
+
+    console.log("Password reset successful for user:", userId);
 
     res.status(200).json({
       success: true,
