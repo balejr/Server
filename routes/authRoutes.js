@@ -30,13 +30,15 @@ router.post('/signup', upload.single('profileImage'), async (req, res) => {
   let profileImageUrl = null;
 
   try {
-    if (file) {
+    if (file && containerClient) {
       const blobName = `profile_${Date.now()}.jpg`;
       const blockBlobClient = containerClient.getBlockBlobClient(blobName);
       await blockBlobClient.uploadData(file.buffer, {
         blobHTTPHeaders: { blobContentType: file.mimetype },
       });
       profileImageUrl = blockBlobClient.url;
+    } else if (file && !containerClient) {
+      console.warn('Profile image upload skipped - Azure Storage not configured');
     }
     
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -112,7 +114,7 @@ router.patch('/update-profile/:userId', upload.single('profileImage'), async (re
   let profileImageUrl = null;
 
   try {
-    if (file) {
+    if (file && containerClient) {
       const blobName = `profile_${userId}_${Date.now()}.jpg`;
       const blockBlobClient = containerClient.getBlockBlobClient(`profile-pictures/${blobName}`);
 
@@ -121,6 +123,8 @@ router.patch('/update-profile/:userId', upload.single('profileImage'), async (re
       });
 
       profileImageUrl = blockBlobClient.url;
+    } else if (file && !containerClient) {
+      console.warn('Profile image upload skipped - Azure Storage not configured');
     }
 
     const pool = await getPool();

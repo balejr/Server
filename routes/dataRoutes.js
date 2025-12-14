@@ -987,6 +987,31 @@ router.get('/exercises/history/:userId', async (req, res) => {
 });
 
 
+// GET /api/deviceData/lastSync
+router.get('/deviceData/lastSync', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const {
+    deviceType
+  } = req.query;
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('deviceType', deviceType)
+      .query(`
+            SELECT TOP 1 CollectedDate
+            FROM DeviceDataTemp
+            WHERE UserID = @UserId
+              AND DeviceType = @deviceType
+            ORDER BY CollectedDate DESC;
+      `);
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch last sync date' });
+  }
+});
+
+// // PAYMENTS
 
 // // PAYMENTS
 
@@ -1779,6 +1804,28 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     return sendErrorResponse(res, 500, 'Initialization Failed', 
       err?.message || 'Stripe subscription creation failed', 
       err.stack);
+  }
+});
+
+//  PATCH  /api/deviceData/sync
+router.patch('/deviceData/sync', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { 
+    deviceType,
+    deviceData
+  } = req.body;
+  
+  try {
+    const pool = getPool();
+    if (!pool) {
+      return res.status(500).json({ message: 'Database connection not available' });
+    }
+    
+    // TODO: Implement device data sync logic
+    res.status(200).json({ message: 'Device data sync endpoint - implementation pending' });
+  } catch (err) {
+    console.error('Error syncing device data:', err);
+    res.status(500).json({ message: 'Failed to sync device data', error: err.message });
   }
 });
 
@@ -4234,6 +4281,787 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
     return res.status(500).json({ 
       error: 'Plan change failed',
       message: error.message
+    });
+  }
+});
+
+// -------------------- ACHIEVEMENTS --------------------
+
+// Helper function to calculate FitPoints tier
+function calculateFPTier(fitPoints) {
+  if (fitPoints >= 2000) return 'Exclusive';
+  if (fitPoints >= 1000) return 'Gold';
+  if (fitPoints >= 500) return 'Silver';
+  if (fitPoints >= 100) return 'Bronze';
+  return 'Stone';
+}
+
+// Helper function to calculate Experience Points tier
+function calculateXPTier(experiencePoints) {
+  if (experiencePoints >= 5001) return 'Champion';
+  if (experiencePoints >= 3001) return 'Elite';
+  if (experiencePoints >= 1501) return 'Advanced';
+  if (experiencePoints >= 501) return 'Intermediate';
+  return 'Beginner';
+}
+
+// Helper function to update user points and tiers
+async function updateUserPoints(pool, userId, fitPointsDelta = 0, experiencePointsDelta = 0) {
+  // Get current user points
+  const pointsResult = await pool.request()
+    .input('userId', userId)
+    .query(`
+      SELECT FitPoints, ExperiencePoints, FitPointsTier
+      FROM dbo.UserPoints
+      WHERE UserID = @userId
+    `);
+
+  let currentFP = 0;
+  let currentXP = 0;
+  let currentFPTier = 'Stone';
+  let canEarnXP = false;
+
+  if (pointsResult.recordset.length > 0) {
+    currentFP = pointsResult.recordset[0].FitPoints || 0;
+    currentXP = pointsResult.recordset[0].ExperiencePoints || 0;
+    currentFPTier = pointsResult.recordset[0].FitPointsTier || 'Stone';
+    canEarnXP = currentFP >= 1000; // Gold tier or higher
+  }
+
+  // Calculate new totals
+  const newFP = currentFP + fitPointsDelta;
+  const newXP = canEarnXP ? (currentXP + experiencePointsDelta) : currentXP; // Only award XP if Gold+ FP tier
+
+  // Calculate new tiers
+  const newFPTier = calculateFPTier(newFP);
+  const newXPTier = canEarnXP && newXP > 0 ? calculateXPTier(newXP) : null;
+
+  // Upsert user points
+  await pool.request()
+    .input('userId', userId)
+    .input('fitPoints', newFP)
+    .input('experiencePoints', newXP)
+    .input('fitPointsTier', newFPTier)
+    .input('experiencePointsTier', newXPTier)
+    .query(`
+      MERGE dbo.UserPoints AS target
+      USING (SELECT @userId AS UserID) AS source
+      ON target.UserID = source.UserID
+      WHEN MATCHED THEN
+        UPDATE SET
+          FitPoints = @fitPoints,
+          ExperiencePoints = @experiencePoints,
+          FitPointsTier = @fitPointsTier,
+          ExperiencePointsTier = @experiencePointsTier,
+          LastModified = GETDATE()
+      WHEN NOT MATCHED THEN
+        INSERT (UserID, FitPoints, ExperiencePoints, FitPointsTier, ExperiencePointsTier)
+        VALUES (@userId, @fitPoints, @experiencePoints, @fitPointsTier, @experiencePointsTier);
+    `);
+
+  return {
+    fitPoints: newFP,
+    experiencePoints: newXP,
+    fitPointsTier: newFPTier,
+    experiencePointsTier: newXPTier,
+    canEarnXP: newFP >= 1000
+  };
+}
+
+// GET progress achievements
+router.get('/achievements/progress', authenticateToken, async (req, res) => {
+  const period = req.query.period || 'Daily';
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+    
+    // Get user's current FP tier to determine if XP achievements should be shown
+    const userPointsResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitPoints, FitPointsTier
+        FROM dbo.UserPoints
+        WHERE UserID = @userId
+      `);
+
+    const canEarnXP = userPointsResult.recordset.length > 0 && 
+                      (userPointsResult.recordset[0].FitPoints || 0) >= 1000;
+
+    // Get all active achievements for the specified category
+    // Filter XP achievements if user hasn't reached Gold FP tier
+    let query = `
+      SELECT 
+        a.AchievementID AS id,
+        a.Title AS title,
+        ISNULL(ua.CurrentValue, 0) AS progress,
+        a.GoalValue AS goal,
+        a.Icon AS icon,
+        ISNULL(ua.IsCompleted, 0) AS completed,
+        a.RewardType AS rewardType,
+        a.RewardAmount AS rewardAmount
+      FROM dbo.Achievements a
+      LEFT JOIN dbo.UserAchievements ua 
+        ON a.AchievementID = ua.AchievementID 
+        AND ua.UserID = @userId
+      WHERE a.Category = @category 
+        AND a.IsActive = 1
+        AND a.Type = 'progress'
+    `;
+
+    const request = pool.request()
+      .input('userId', userId)
+      .input('category', period);
+
+    // Only show XP achievements if user has Gold+ FP tier
+    if (!canEarnXP) {
+      query += ` AND a.RewardType = 'FP'`;
+    }
+
+    query += ` ORDER BY a.AchievementID`;
+
+    const result = await request.query(query);
+
+    // Transform to match expected format
+    const achievements = result.recordset.map(achievement => ({
+      id: achievement.id,
+      title: achievement.title,
+      progress: achievement.progress,
+      goal: achievement.goal,
+      icon: achievement.icon,
+      completed: achievement.completed === 1,
+      rewardType: achievement.rewardType,
+      rewardAmount: achievement.rewardAmount
+    }));
+
+    res.status(200).json({
+      userId,
+      period,
+      achievements
+    });
+  } catch (err) {
+    console.error('Error fetching progress achievements:', err);
+    res.status(500).json({ message: 'Failed to fetch progress achievements', error: err.message });
+  }
+});
+
+// GET completed achievements
+router.get('/achievements/completed', authenticateToken, async (req, res) => {
+  const search = req.query.search || '';
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+    
+    let query = `
+      SELECT 
+        a.AchievementID AS id,
+        a.Title AS title,
+        ua.CompletedDate AS date,
+        a.Icon AS icon,
+        a.RewardType AS rewardType,
+        a.RewardAmount AS rewardAmount
+      FROM dbo.Achievements a
+      INNER JOIN dbo.UserAchievements ua 
+        ON a.AchievementID = ua.AchievementID
+      WHERE ua.UserID = @userId
+        AND ua.IsCompleted = 1
+        AND a.IsActive = 1
+    `;
+
+    const request = pool.request().input('userId', userId);
+
+    // Add search filter if provided
+    if (search) {
+      query += ` AND a.Title LIKE @search`;
+      request.input('search', `%${search}%`);
+    }
+
+    query += ` ORDER BY ua.CompletedDate DESC`;
+
+    const result = await request.query(query);
+
+    // Transform to match expected format
+    const completed = result.recordset.map(achievement => ({
+      id: achievement.id,
+      title: achievement.title,
+      date: achievement.date,
+      icon: achievement.icon,
+      rewardType: achievement.rewardType,
+      rewardAmount: achievement.rewardAmount
+    }));
+
+    res.status(200).json({
+      userId,
+      search,
+      completed
+    });
+  } catch (err) {
+    console.error('Error fetching completed achievements:', err);
+    res.status(500).json({ message: 'Failed to fetch completed achievements', error: err.message });
+  }
+});
+
+// DELETE progress achievement (removes user's progress tracking)
+router.delete('/achievements/progress/:id', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const achievementId = req.params.id;
+  const period = req.query.period || 'Daily';
+
+  try {
+    const pool = getPool();
+
+    // Verify the achievement exists and belongs to the category
+    const checkResult = await pool.request()
+      .input('achievementId', achievementId)
+      .input('category', period)
+      .query(`
+        SELECT AchievementID 
+        FROM dbo.Achievements 
+        WHERE AchievementID = @achievementId 
+          AND Category = @category
+          AND IsActive = 1
+      `);
+
+    if (checkResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Achievement not found or invalid category' 
+      });
+    }
+
+    // Delete user's progress for this achievement
+    const deleteResult = await pool.request()
+      .input('userId', userId)
+      .input('achievementId', achievementId)
+      .query(`
+        DELETE FROM dbo.UserAchievements
+        WHERE UserID = @userId 
+          AND AchievementID = @achievementId
+      `);
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Achievement progress deleted successfully' 
+    });
+  } catch (err) {
+    console.error('Error deleting achievement progress:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to delete achievement progress', 
+      error: err.message 
+    });
+  }
+});
+
+// POST create or update user achievement progress
+router.post('/achievements/progress', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { achievementId, currentValue } = req.body;
+
+  if (!achievementId || currentValue === undefined) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'achievementId and currentValue are required' 
+    });
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get achievement details including reward information
+    const achievementResult = await pool.request()
+      .input('achievementId', achievementId)
+      .query(`
+        SELECT GoalValue, RewardType, RewardAmount
+        FROM dbo.Achievements 
+        WHERE AchievementID = @achievementId 
+          AND IsActive = 1
+      `);
+
+    if (achievementResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Achievement not found' 
+      });
+    }
+
+    const achievement = achievementResult.recordset[0];
+    const goalValue = achievement.GoalValue;
+    const rewardType = achievement.RewardType;
+    const rewardAmount = achievement.RewardAmount;
+    const isCompleted = currentValue >= goalValue;
+
+    // Check if this achievement was already completed and points were awarded
+    const existingResult = await pool.request()
+      .input('userId', userId)
+      .input('achievementId', achievementId)
+      .query(`
+        SELECT IsCompleted, PointsAwarded
+        FROM dbo.UserAchievements
+        WHERE UserID = @userId AND AchievementID = @achievementId
+      `);
+
+    const wasAlreadyCompleted = existingResult.recordset.length > 0 && 
+                                 existingResult.recordset[0].IsCompleted === 1;
+    const pointsAlreadyAwarded = existingResult.recordset.length > 0 && 
+                                  existingResult.recordset[0].PointsAwarded === 1;
+
+    // Award points only if newly completed and points haven't been awarded
+    let pointsAwarded = false;
+    let newUserPoints = null;
+
+    if (isCompleted && !pointsAlreadyAwarded) {
+      const fitPointsDelta = rewardType === 'FP' ? rewardAmount : 0;
+      const experiencePointsDelta = rewardType === 'XP' ? rewardAmount : 0;
+      
+      newUserPoints = await updateUserPoints(pool, userId, fitPointsDelta, experiencePointsDelta);
+      pointsAwarded = true;
+    }
+
+    // Upsert user achievement
+    await pool.request()
+      .input('userId', userId)
+      .input('achievementId', achievementId)
+      .input('currentValue', currentValue)
+      .input('isCompleted', isCompleted ? 1 : 0)
+      .input('pointsAwarded', pointsAwarded ? 1 : (pointsAlreadyAwarded ? 1 : 0))
+      .input('completedDate', isCompleted ? new Date() : null)
+      .query(`
+        MERGE dbo.UserAchievements AS target
+        USING (SELECT @userId AS UserID, @achievementId AS AchievementID) AS source
+        ON target.UserID = source.UserID AND target.AchievementID = source.AchievementID
+        WHEN MATCHED THEN
+          UPDATE SET 
+            CurrentValue = @currentValue,
+            IsCompleted = @isCompleted,
+            PointsAwarded = CASE WHEN @pointsAwarded = 1 THEN 1 ELSE PointsAwarded END,
+            CompletedDate = CASE WHEN @isCompleted = 1 AND CompletedDate IS NULL 
+                              THEN GETDATE() 
+                              ELSE CompletedDate END,
+            LastModified = GETDATE()
+        WHEN NOT MATCHED THEN
+          INSERT (UserID, AchievementID, CurrentValue, IsCompleted, CompletedDate, PointsAwarded)
+          VALUES (@userId, @achievementId, @currentValue, @isCompleted, 
+                  CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END,
+                  CASE WHEN @pointsAwarded = 1 THEN 1 ELSE 0 END);
+      `);
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Achievement progress updated successfully',
+      completed: isCompleted,
+      pointsAwarded: pointsAwarded,
+      rewardType: pointsAwarded ? rewardType : null,
+      rewardAmount: pointsAwarded ? rewardAmount : null,
+      userPoints: newUserPoints
+    });
+  } catch (err) {
+    console.error('Error updating achievement progress:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update achievement progress', 
+      error: err.message 
+    });
+  }
+});
+
+// GET user points and tiers
+router.get('/achievements/points', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT 
+          FitPoints,
+          ExperiencePoints,
+          FitPointsTier,
+          ExperiencePointsTier
+        FROM dbo.UserPoints
+        WHERE UserID = @userId
+      `);
+
+    if (result.recordset.length === 0) {
+      // Initialize user points if they don't exist
+      await updateUserPoints(pool, userId, 0, 0);
+      return res.status(200).json({
+        fitPoints: 0,
+        experiencePoints: 0,
+        fitPointsTier: 'Stone',
+        experiencePointsTier: null,
+        canEarnXP: false
+      });
+    }
+
+    const userPoints = result.recordset[0];
+    const canEarnXP = (userPoints.FitPoints || 0) >= 1000;
+
+    res.status(200).json({
+      fitPoints: userPoints.FitPoints || 0,
+      experiencePoints: userPoints.ExperiencePoints || 0,
+      fitPointsTier: userPoints.FitPointsTier || 'Stone',
+      experiencePointsTier: userPoints.ExperiencePointsTier || null,
+      canEarnXP: canEarnXP
+    });
+  } catch (err) {
+    console.error('Error fetching user points:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch user points', 
+      error: err.message 
+    });
+  }
+});
+
+// GET all achievements (for admin or user to see available achievements)
+router.get('/achievements/all', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const category = req.query.category; // Optional filter by category
+
+  try {
+    const pool = getPool();
+
+    // Get user's current FP tier to determine if XP achievements should be shown
+    const userPointsResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitPoints
+        FROM dbo.UserPoints
+        WHERE UserID = @userId
+      `);
+
+    const canEarnXP = userPointsResult.recordset.length > 0 && 
+                      (userPointsResult.recordset[0].FitPoints || 0) >= 1000;
+
+    let query = `
+      SELECT 
+        a.AchievementID AS id,
+        a.Title AS title,
+        a.Description AS description,
+        a.Category AS category,
+        a.Type AS type,
+        a.GoalValue AS goalValue,
+        a.RewardType AS rewardType,
+        a.RewardAmount AS rewardAmount,
+        a.Icon AS icon,
+        ISNULL(ua.IsCompleted, 0) AS completed,
+        ISNULL(ua.CurrentValue, 0) AS currentValue
+      FROM dbo.Achievements a
+      LEFT JOIN dbo.UserAchievements ua 
+        ON a.AchievementID = ua.AchievementID 
+        AND ua.UserID = @userId
+      WHERE a.IsActive = 1
+    `;
+
+    const request = pool.request().input('userId', userId);
+
+    // Filter by category if provided
+    if (category) {
+      query += ` AND a.Category = @category`;
+      request.input('category', category);
+    }
+
+    // Only show XP achievements if user has Gold+ FP tier
+    if (!canEarnXP) {
+      query += ` AND a.RewardType = 'FP'`;
+    }
+
+    query += ` ORDER BY a.Category, a.AchievementID`;
+
+    const result = await request.query(query);
+
+    const achievements = result.recordset.map(achievement => ({
+      id: achievement.id,
+      title: achievement.title,
+      description: achievement.description,
+      category: achievement.category,
+      type: achievement.type,
+      goalValue: achievement.goalValue,
+      rewardType: achievement.rewardType,
+      rewardAmount: achievement.rewardAmount,
+      icon: achievement.icon,
+      completed: achievement.completed === 1,
+      currentValue: achievement.currentValue
+    }));
+
+    res.status(200).json({
+      userId,
+      achievements,
+      canEarnXP
+    });
+  } catch (err) {
+    console.error('Error fetching all achievements:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch achievements', 
+      error: err.message 
+    });
+  }
+});
+
+// POST generate AI achievements when user runs out
+router.post('/achievements/generate', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { category, rewardType } = req.body; // category: 'Daily', 'Weekly', 'Monthly', 'Universal', rewardType: 'FP' or 'XP'
+
+  if (!category || !rewardType) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'Category and rewardType are required' 
+    });
+  }
+
+  const validCategories = ['Daily', 'Weekly', 'Monthly', 'Universal'];
+  const validRewardTypes = ['FP', 'XP'];
+
+  if (!validCategories.includes(category) || !validRewardTypes.includes(rewardType)) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'Invalid category or rewardType' 
+    });
+  }
+
+  try {
+    const pool = getPool();
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+    // Get user's current FP tier to verify XP eligibility
+    const userPointsResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitPoints
+        FROM dbo.UserPoints
+        WHERE UserID = @userId
+      `);
+
+    const canEarnXP = userPointsResult.recordset.length > 0 && 
+                      (userPointsResult.recordset[0].FitPoints || 0) >= 1000;
+
+    // Don't allow XP achievements if user hasn't unlocked them
+    if (rewardType === 'XP' && !canEarnXP) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'XP achievements are locked until you reach Gold tier (1000+ FP)' 
+      });
+    }
+
+    // Check if user already has incomplete achievements in this category
+    const checkResult = await pool.request()
+      .input('userId', userId)
+      .input('category', category)
+      .input('rewardType', rewardType)
+      .query(`
+        SELECT COUNT(*) AS count
+        FROM dbo.Achievements a
+        LEFT JOIN dbo.UserAchievements ua 
+          ON a.AchievementID = ua.AchievementID 
+          AND ua.UserID = @userId
+        WHERE a.Category = @category 
+          AND a.RewardType = @rewardType
+          AND a.IsActive = 1
+          AND a.Type = 'progress'
+          AND (ua.IsCompleted IS NULL OR ua.IsCompleted = 0)
+      `);
+
+    const incompleteCount = checkResult.recordset[0].count || 0;
+
+    // Only generate if user has no incomplete achievements
+    if (incompleteCount > 0) {
+      return res.status(200).json({ 
+        success: false,
+        message: `You still have ${incompleteCount} incomplete achievement(s) in this category`,
+        incompleteCount
+      });
+    }
+
+    // Get user's fitness profile for context
+    const userProfileResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT FitnessGoal, FitnessLevel, Age, Gender
+        FROM dbo.UserProfile
+        WHERE UserID = @userId
+      `);
+
+    const userProfile = userProfileResult.recordset[0] || {};
+    const fitnessGoal = userProfile.FitnessGoal || 'general fitness';
+    const fitnessLevel = userProfile.FitnessLevel || 'intermediate';
+    const age = userProfile.Age || null;
+    const gender = userProfile.Gender || null;
+
+    // Prepare AI prompt
+    const GOOGLE_API_KEY = process.env.GEMINI_API_KEY || "undefined";
+    const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
+
+    if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
+      return res.status(500).json({ 
+        success: false,
+        message: 'AI service not configured' 
+      });
+    }
+
+    const ai = new GoogleGenerativeAI({
+      apiKey: GOOGLE_API_KEY,
+    });
+
+    // Achievement generation schema
+    const ACHIEVEMENT_SCHEMA = {
+      type: "object",
+      required: ["achievements"],
+      properties: {
+        achievements: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["title", "description", "goalValue", "icon", "rewardAmount"],
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+              goalValue: { type: "integer" },
+              icon: { type: "string" },
+              rewardAmount: { type: "integer" }
+            }
+          },
+          minItems: 3,
+          maxItems: 3
+        }
+      }
+    };
+
+    const prompt = `You are a fitness achievement generator for a fitness app. Generate exactly 3 personalized fitness achievements/challenges for a user.
+
+User Profile:
+- Fitness Goal: ${fitnessGoal}
+- Fitness Level: ${fitnessLevel}
+${age ? `- Age: ${age}` : ''}
+${gender ? `- Gender: ${gender}` : ''}
+
+Requirements:
+- Category: ${category} (${category === 'Daily' ? 'should be completable within a day' : category === 'Weekly' ? 'should be completable within a week' : category === 'Monthly' ? 'should be completable within a month' : 'can be completed anytime'})
+- Reward Type: ${rewardType} (${rewardType === 'FP' ? 'FitPoints - available to all users' : 'Experience Points - for advanced users'})
+- Type: progress (trackable over time)
+- Each achievement should have:
+  * A clear, motivating title (max 60 characters)
+  * A brief description explaining what needs to be done
+  * A realistic goal value (integer, appropriate for the category)
+  * An icon name from Ionicons (e.g., "fitness-outline", "flame-outline", "time-outline", "water-outline", "calendar-outline", "trophy-outline", "checkmark-circle-outline", "barbell-outline", "heart-outline", "leaf-outline", "school-outline", "people-outline")
+  * A reward amount (${rewardType === 'FP' ? 'between 5-100 FP' : 'between 10-250 XP'})
+
+Make achievements:
+- Personalized to the user's fitness goal and level
+- Realistic and achievable
+- Varied in type (not all the same)
+- Motivating and engaging
+- Appropriate for the ${category} timeframe
+
+Return exactly 3 achievements in the specified JSON format.`;
+
+    const config = {
+      temperature: 0.7,
+      responseMimeType: "application/json",
+      responseSchema: ACHIEVEMENT_SCHEMA,
+    };
+
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      config,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    // Extract response
+    let responseText;
+    if (typeof response.text === "function") {
+      responseText = response.text();
+    } else if (response.response && typeof response.response.text === "function") {
+      responseText = response.response.text();
+    } else if (response.candidates && response.candidates[0] && response.candidates[0].content) {
+      responseText = response.candidates[0].content.parts[0].text;
+    } else {
+      throw new Error("Unable to extract text from Gemini response");
+    }
+
+    const aiResponse = JSON.parse(responseText);
+    const generatedAchievements = aiResponse.achievements || [];
+
+    if (!generatedAchievements || generatedAchievements.length === 0) {
+      return res.status(500).json({ 
+        success: false,
+        message: 'Failed to generate achievements' 
+      });
+    }
+
+    // Insert achievements into database
+    const insertedAchievements = [];
+    const transaction = pool.transaction();
+    await transaction.begin();
+
+    try {
+      for (const achievement of generatedAchievements) {
+        const achievementRequest = new (require('mssql').Request)(transaction);
+        const result = await achievementRequest
+          .input('title', achievement.title)
+          .input('description', achievement.description || null)
+          .input('category', category)
+          .input('type', 'progress')
+          .input('goalValue', achievement.goalValue)
+          .input('rewardType', rewardType)
+          .input('rewardAmount', achievement.rewardAmount)
+          .input('icon', achievement.icon)
+          .query(`
+            INSERT INTO dbo.Achievements 
+            (Title, Description, Category, Type, GoalValue, RewardType, RewardAmount, Icon, IsActive)
+            OUTPUT INSERTED.AchievementID, INSERTED.Title, INSERTED.GoalValue, INSERTED.Icon, INSERTED.RewardType, INSERTED.RewardAmount
+            VALUES (@title, @description, @category, @type, @goalValue, @rewardType, @rewardAmount, @icon, 1)
+          `);
+
+        const newAchievement = result.recordset[0];
+        
+        // Create UserAchievements entry with 0 progress
+        const userAchievementRequest = new (require('mssql').Request)(transaction);
+        await userAchievementRequest
+          .input('userId', userId)
+          .input('achievementId', newAchievement.AchievementID)
+          .input('currentValue', 0)
+          .input('isCompleted', 0)
+          .query(`
+            INSERT INTO dbo.UserAchievements 
+            (UserID, AchievementID, CurrentValue, IsCompleted, PointsAwarded)
+            VALUES (@userId, @achievementId, @currentValue, @isCompleted, 0)
+          `);
+
+        insertedAchievements.push({
+          id: newAchievement.AchievementID,
+          title: newAchievement.Title,
+          progress: 0,
+          goal: newAchievement.GoalValue,
+          icon: newAchievement.Icon,
+          completed: false,
+          rewardType: newAchievement.RewardType,
+          rewardAmount: newAchievement.RewardAmount
+        });
+      }
+
+      await transaction.commit();
+
+      res.status(200).json({
+        success: true,
+        message: `Generated ${insertedAchievements.length} new achievements`,
+        achievements: insertedAchievements
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (err) {
+    console.error('Error generating AI achievements:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to generate achievements', 
+      error: err.message 
     });
   }
 });
