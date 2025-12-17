@@ -496,21 +496,64 @@ const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
   }
 
   if (isWorkoutRequest) {
+    // Return a full mock workout plan for testing without API key
     return {
-      mode: "WORKOUT_CONFIRM",
+      mode: "WORKOUT_CREATE",
       intent: "WORKOUT_REQUEST",
       message: {
-        title: "Confirm your plan",
-        body: "I can create a personalized workout plan based on your request. Shall I create it now?",
+        title: "Your Personalized Plan",
+        body: "Based on your profile and goals, I've created a 3-day full body workout plan to help you build strength and improve overall fitness.",
       },
       payload: {
-        confirmQuestion: "Would you like me to create a workout plan now?",
         summary: {
-          goal: "General fitness",
+          goal: "General Fitness",
           daysPerWeek: 3,
           experience: "intermediate",
-          equipment: ["bodyweight", "dumbbells"],
+          equipment: ["dumbbells", "barbell", "bench"],
           constraints: [],
+        },
+        plan: {
+          goal: "General Fitness & Strength",
+          split: "3-Day Full Body",
+          WorkoutGuide: "Perform each workout with 60-90 seconds rest between sets. Focus on controlled movements and proper form. Increase weight gradually as you get stronger.",
+          days: [
+            {
+              dayIndex: 1,
+              label: "Full Body A",
+              main: [
+                { name: "Barbell Squat", sets: 4, reps: "8-10", rpe: 7 },
+                { name: "Bench Press", sets: 4, reps: "8-10", rpe: 7 },
+                { name: "Bent Over Row", sets: 3, reps: "10-12", rpe: 7 },
+                { name: "Overhead Press", sets: 3, reps: "8-10", rpe: 7 },
+                { name: "Romanian Deadlift", sets: 3, reps: "10-12", rpe: 7 },
+                { name: "Plank", sets: 3, reps: "30-45 sec", rpe: 6 },
+              ],
+            },
+            {
+              dayIndex: 2,
+              label: "Full Body B",
+              main: [
+                { name: "Deadlift", sets: 4, reps: "6-8", rpe: 8 },
+                { name: "Incline Dumbbell Press", sets: 3, reps: "10-12", rpe: 7 },
+                { name: "Pull-ups or Lat Pulldown", sets: 3, reps: "8-10", rpe: 7 },
+                { name: "Dumbbell Lunges", sets: 3, reps: "10 each leg", rpe: 7 },
+                { name: "Dumbbell Lateral Raise", sets: 3, reps: "12-15", rpe: 6 },
+                { name: "Bicycle Crunches", sets: 3, reps: "15-20", rpe: 6 },
+              ],
+            },
+            {
+              dayIndex: 3,
+              label: "Full Body C",
+              main: [
+                { name: "Front Squat", sets: 4, reps: "8-10", rpe: 7 },
+                { name: "Dumbbell Chest Fly", sets: 3, reps: "12-15", rpe: 6 },
+                { name: "Seated Cable Row", sets: 3, reps: "10-12", rpe: 7 },
+                { name: "Arnold Press", sets: 3, reps: "10-12", rpe: 7 },
+                { name: "Leg Curl", sets: 3, reps: "12-15", rpe: 6 },
+                { name: "Hanging Leg Raise", sets: 3, reps: "10-15", rpe: 7 },
+              ],
+            },
+          ],
         },
       },
       errors: [],

@@ -4285,7 +4285,6 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
   }
 });
 
-<<<<<<< HEAD
 // -------------------- ACHIEVEMENTS --------------------
 
 // Helper function to calculate FitPoints tier
@@ -4905,7 +4904,6 @@ router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
     });
   }
 });
->>>>>>> azure/main
 
 /**
  * POST /api/data/subscriptions/cancel
