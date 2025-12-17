@@ -288,4 +288,86 @@ router.delete('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// ========== PRE-WORKOUT ASSESSMENT ==========
+
+// POST save pre-workout assessment
+router.post('/preworkout', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { feeling, waterIntake, sleepQuality, sleepHours, recoveryStatus, workoutPlanId } = req.body;
+
+  console.log(`📝 Saving pre-workout assessment for user ${userId}`);
+
+  try {
+    const pool = getPool();
+    
+    await pool.request()
+      .input('userId', userId)
+      .input('workoutPlanId', workoutPlanId || null)
+      .input('feeling', feeling)
+      .input('waterIntake', waterIntake)
+      .input('sleepQuality', sleepQuality)
+      .input('sleepHours', sleepHours)
+      .input('recoveryStatus', recoveryStatus)
+      .query(`
+        INSERT INTO [dbo].[PreWorkoutAssessment]
+        (UserID, WorkoutPlanID, Feeling, WaterIntake, SleepQuality, SleepHours, RecoveryStatus, CreatedAt)
+        VALUES
+        (@userId, @workoutPlanId, @feeling, @waterIntake, @sleepQuality, @sleepHours, @recoveryStatus, GETDATE())
+      `);
+
+    res.status(200).json({ success: true, message: 'Pre-workout assessment saved successfully' });
+  } catch (error) {
+    console.error('Save Pre-Workout Assessment Error:', error);
+    if (error.message && error.message.includes('Invalid object name')) {
+      return res.status(500).json({ 
+        error: 'Database table missing', 
+        message: 'Please run MIGRATION_PREWORKOUT.sql to create the PreWorkoutAssessment table.' 
+      });
+    }
+    res.status(500).json({ 
+      error: 'Failed to save pre-workout assessment',
+      message: error.message 
+    });
+  }
+});
+
+// GET latest pre-workout assessment for user
+router.get('/preworkout/latest', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+    
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT TOP 1 
+          AssessmentID,
+          UserID,
+          WorkoutPlanID,
+          Feeling,
+          WaterIntake,
+          SleepQuality,
+          SleepHours,
+          RecoveryStatus,
+          CreatedAt
+        FROM [dbo].[PreWorkoutAssessment]
+        WHERE UserID = @userId
+        ORDER BY CreatedAt DESC
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ message: 'No pre-workout assessment found' });
+    }
+
+    res.status(200).json(result.recordset[0]);
+  } catch (error) {
+    console.error('Get Pre-Workout Assessment Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get pre-workout assessment',
+      message: error.message 
+    });
+  }
+});
+
 module.exports = router;
