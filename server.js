@@ -52,4 +52,4 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Force reload routes Wed Dec 10 14:58:35 PST 2025
+// Force reload routes Tue Dec 16 19:20:00 PST 2025 - Added preworkout endpoints
