@@ -120,6 +120,25 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       });
     }
 
+    // Check if phone number already exists (if provided)
+    if (phoneNumber) {
+      const existingPhone = await pool
+        .request()
+        .input("phoneNumber", phoneNumber)
+        .query(`
+          SELECT COUNT(*) as count 
+          FROM dbo.UserProfile 
+          WHERE PhoneNumber = @phoneNumber AND PhoneVerified = 1
+        `);
+
+      if (existingPhone.recordset[0].count > 0) {
+        return res.status(409).json({
+          success: false,
+          message: "Phone number already registered",
+        });
+      }
+    }
+
     // Check if phone was verified during signup flow
     // This is more secure than trusting a frontend flag
     let phoneVerified = false;
