@@ -348,7 +348,7 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     }
 
     // Initialize Google Generative AI with new SDK
-    const ai = new GoogleGenAI({
+    const ai = new GoogleGenerativeAI({
       apiKey: GOOGLE_API_KEY,
     });
 
