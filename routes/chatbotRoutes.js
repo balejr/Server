@@ -23,13 +23,7 @@ const API_BASE_URL =
   "https://generativelanguage.googleapis.com";
 const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
 
-// Debug: Log API configuration at startup
-console.log("🔧 Chatbot Routes - API Configuration:", {
-  hasApiKey: !!GOOGLE_API_KEY && GOOGLE_API_KEY !== "undefined",
-  apiKeyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
-  modelName: MODEL_NAME,
-  apiBaseUrl: API_BASE_URL,
-});
+// API configuration loaded from environment
 
 // Structured response configuration for FitNext AI
 const FITNEXT_SYSTEM_INSTRUCTION = `You are FitNext AI, the in-app health & fitness assistant.
@@ -218,12 +212,7 @@ const saveMessageToDatabase = async (chatSessionId, userId, role, content) => {
 
     return true;
   } catch (error) {
-    console.error("Error saving message to database:", error);
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-      state: error.state,
-    });
+    console.error("Error saving message to database:", error.message);
     return false;
   }
 };
@@ -296,12 +285,7 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
       return sessionId;
     }
   } catch (error) {
-    console.error("Error creating/getting chat session:", error);
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-      state: error.state,
-    });
+    console.error("Error creating/getting chat session:", error.message);
     throw error;
   }
 };
@@ -314,26 +298,12 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
  */
 const callGeminiAPI = async (userMessage, conversationHistory = []) => {
   try {
-    console.log("🔍 Debug - API Key check:", {
-      hasKey: !!GOOGLE_API_KEY,
-      keyValue: GOOGLE_API_KEY
-        ? `${GOOGLE_API_KEY.substring(0, 10)}...`
-        : "undefined",
-      keyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
-    });
-
-    console.log("🔍 Debug - Model check:", {
-      modelName: MODEL_NAME,
-      isValidModel: MODEL_NAME && MODEL_NAME.includes("gemini"),
-    });
-
+    // Validate API configuration
     if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
-      console.log("❌ API key not configured, returning mock response");
       return getMockStructuredResponse(userMessage, conversationHistory);
     }
 
     if (!MODEL_NAME || !MODEL_NAME.includes("gemini")) {
-      console.log("❌ Invalid model name, returning mock response");
       return getMockStructuredResponse(userMessage, conversationHistory);
     }
 
@@ -348,104 +318,102 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     }
 
     // Initialize Google Generative AI with new SDK
-    const ai = new GoogleGenAI({
-      apiKey: GOOGLE_API_KEY,
-    });
+    const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
+    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-    // Configuration for structured response
-    const config = {
-      temperature: 0.3,
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
-      systemInstruction: [
-        {
-          text: FITNEXT_SYSTEM_INSTRUCTION,
-        },
-      ],
-    };
+    // Build the prompt with system instruction and conversation context
+    const prompt = `${FITNEXT_SYSTEM_INSTRUCTION}
 
-    // Build the conversation content
-    const contents = [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${conversationContext}**Current User Message:** "${userMessage}"`,
-          },
-        ],
+${conversationContext}
+
+**Current User Message:** "${userMessage}"
+
+Please respond in valid JSON format following the schema provided.`;
+
+    // Generate content using the model
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 4096,
       },
-    ];
-
-    // Generate structured content
-    console.log("🚀 Making API call to Gemini with:", {
-      model: MODEL_NAME,
-      userMessage: userMessage.substring(0, 50) + "...",
-      hasConfig: !!config,
-      hasSchema: !!config.responseSchema,
     });
 
-    // Try the exact structure from Google AI Studio
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      config,
-      contents,
-    });
+    const response = await result.response;
+    const responseText = response.text();
 
-    // Parse the structured response
-    console.log("📝 Response object:", response);
-    console.log("📝 Response type:", typeof response);
-    console.log("📝 Response methods:", Object.getOwnPropertyNames(response));
-
-    // Try different ways to get the text content
-    let responseText;
-    if (typeof response.text === "function") {
-      responseText = response.text();
-    } else if (
-      response.response &&
-      typeof response.response.text === "function"
-    ) {
-      responseText = response.response.text();
-    } else if (
-      response.candidates &&
-      response.candidates[0] &&
-      response.candidates[0].content
-    ) {
-      responseText = response.candidates[0].content.parts[0].text;
-    } else {
-      console.log("❌ Could not extract text from response");
-      throw new Error("Unable to extract text from Gemini response");
-    }
-
-    console.log("📝 Raw API Response:", responseText.substring(0, 200) + "...");
-
-    const structuredResponse = JSON.parse(responseText);
-    console.log("✅ Parsed structured response:", {
-      mode: structuredResponse.mode,
-      intent: structuredResponse.intent,
-      hasMessage: !!structuredResponse.message,
-    });
-
+    // Parse JSON response with fallback handling
+    const structuredResponse = extractJsonFromResponse(responseText, userMessage, conversationHistory);
     return structuredResponse;
   } catch (error) {
-    console.error("❌ Error calling Gemini API:", error);
-    console.error("❌ Error details:", error.message);
-    console.error("❌ Error stack:", error.stack);
-    console.error("❌ Error name:", error.name);
-    console.error("❌ Error cause:", error.cause);
-
-    // Check if it's a network error
-    if (error.message.includes("fetch failed")) {
-      console.error("🔍 Network/fetch error detected. Possible causes:");
-      console.error("   - Internet connection issues");
-      console.error("   - API key invalid or expired");
-      console.error("   - Model name incorrect");
-      console.error("   - API endpoint issues");
-      console.error("   - Rate limiting");
-    }
-
+    console.error("Error calling Gemini API:", error.message);
     // Return fallback structured response
     return getMockStructuredResponse(userMessage, conversationHistory);
   }
+};
+
+/**
+ * Extract and parse JSON from Gemini API response
+ * Handles cases where the response contains markdown code blocks or extra text
+ * @param {string} responseText - Raw response text from Gemini
+ * @param {string} userMessage - Original user message (for fallback)
+ * @param {Array} conversationHistory - Conversation history (for fallback)
+ * @returns {Object} Parsed JSON object
+ */
+const extractJsonFromResponse = (responseText, userMessage, conversationHistory = []) => {
+  // First, try direct JSON parse
+  try {
+    return JSON.parse(responseText);
+  } catch (e) {
+    // Continue to extraction methods
+  }
+
+  // Try to extract JSON from markdown code blocks
+  const codeBlockPatterns = [
+    /```json\s*([\s\S]*?)\s*```/i,  // ```json ... ```
+    /```\s*([\s\S]*?)\s*```/,       // ``` ... ```
+    /\{[\s\S]*\}/                    // Raw JSON object
+  ];
+
+  for (const pattern of codeBlockPatterns) {
+    const match = responseText.match(pattern);
+    if (match) {
+      const jsonString = match[1] || match[0];
+      try {
+        // Clean up the extracted string
+        const cleaned = jsonString.trim();
+        const parsed = JSON.parse(cleaned);
+        
+        // Validate the response has required fields
+        if (parsed && parsed.mode && parsed.message) {
+          return parsed;
+        }
+      } catch (parseError) {
+        // Continue to next pattern
+      }
+    }
+  }
+
+  // If we still can't parse, try to find the first { and last }
+  const firstBrace = responseText.indexOf('{');
+  const lastBrace = responseText.lastIndexOf('}');
+  
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      const jsonSubstring = responseText.substring(firstBrace, lastBrace + 1);
+      const parsed = JSON.parse(jsonSubstring);
+      if (parsed && parsed.mode && parsed.message) {
+        return parsed;
+      }
+    } catch (e) {
+      // Fall through to mock response
+    }
+  }
+
+  // If all parsing fails, return a fallback response
+  console.warn('Failed to parse Gemini response, using fallback. Response preview:', 
+    responseText.substring(0, 200));
+  return getMockStructuredResponse(userMessage, conversationHistory);
 };
 
 /**
@@ -827,5 +795,179 @@ router.delete("/chat/history", authenticateToken, async (req, res) => {
     });
   }
 });
+
+// Analyze pre-assessment data endpoint
+router.post("/analyze-pre-assessment", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { assessmentData, workoutPlanId } = req.body;
+
+  if (!assessmentData) {
+    return res.status(400).json({
+      success: false,
+      message: "Assessment data is required",
+    });
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get the workout plan if ID is provided
+    let workoutPlan = null;
+    if (workoutPlanId) {
+      const planResult = await pool
+        .request()
+        .input("planId", workoutPlanId)
+        .input("userId", userId)
+        .query(`
+          SELECT PlanData, Goal, DaysPerWeek, Split
+          FROM dbo.AIWorkoutPlans 
+          WHERE PlanID = @planId AND UserID = @userId AND IsActive = 1
+        `);
+
+      if (planResult.recordset.length > 0) {
+        workoutPlan = planResult.recordset[0];
+        try {
+          workoutPlan.PlanData = JSON.parse(workoutPlan.PlanData);
+        } catch (e) {
+          workoutPlan.PlanData = [];
+        }
+      }
+    }
+
+    // Analyze readiness based on assessment data
+    const analysis = analyzeReadiness(assessmentData, workoutPlan);
+
+    // Determine if modification is needed
+    const shouldModify = analysis.readinessScore < 70;
+
+    // Generate modified plan if needed
+    let modifiedPlan = null;
+    if (shouldModify && workoutPlan) {
+      modifiedPlan = generateModifiedPlan(workoutPlan, analysis);
+    }
+
+    res.json({
+      success: true,
+      shouldModify,
+      analysis,
+      modifiedPlan,
+    });
+  } catch (error) {
+    console.error("Analyze pre-assessment error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to analyze pre-assessment data",
+    });
+  }
+});
+
+/**
+ * Analyze user readiness based on pre-assessment data
+ * @param {Object} assessmentData - Pre-workout assessment data
+ * @param {Object} workoutPlan - Planned workout (optional)
+ * @returns {Object} Analysis result with readiness score and concerns
+ */
+const analyzeReadiness = (assessmentData, workoutPlan) => {
+  let readinessScore = 100;
+  const concerns = [];
+
+  // Analyze feeling
+  if (assessmentData.feeling === "Bad") {
+    readinessScore -= 25;
+    concerns.push("You reported feeling bad today");
+  } else if (assessmentData.feeling === "Average") {
+    readinessScore -= 10;
+  } else if (assessmentData.feeling === "Unsure") {
+    readinessScore -= 5;
+  }
+
+  // Analyze sleep quality (0-4 scale)
+  if (assessmentData.sleepQuality !== null && assessmentData.sleepQuality !== undefined) {
+    if (assessmentData.sleepQuality <= 1) {
+      readinessScore -= 25;
+      concerns.push(`Poor sleep quality (${assessmentData.sleepQuality}/4)`);
+    } else if (assessmentData.sleepQuality === 2) {
+      readinessScore -= 15;
+      concerns.push(`Below average sleep quality (${assessmentData.sleepQuality}/4)`);
+    }
+  }
+
+  // Analyze sleep hours
+  if (assessmentData.sleepHours) {
+    if (assessmentData.sleepHours === "<6") {
+      readinessScore -= 20;
+      concerns.push("Less than 6 hours of sleep");
+    } else if (assessmentData.sleepHours === "6-7") {
+      readinessScore -= 10;
+    }
+  }
+
+  // Analyze recovery status
+  if (assessmentData.recoveryStatus === "Not Recovered") {
+    readinessScore -= 30;
+    concerns.push("You reported not being fully recovered");
+  } else if (assessmentData.recoveryStatus === "Sore") {
+    readinessScore -= 15;
+    concerns.push("You reported muscle soreness");
+  }
+
+  // Analyze hydration
+  if (assessmentData.waterIntake === "<50oz") {
+    readinessScore -= 10;
+    concerns.push("Low water intake today");
+  }
+
+  // Ensure score is within bounds
+  readinessScore = Math.max(0, Math.min(100, readinessScore));
+
+  // Generate recommendation
+  let recommendation;
+  if (readinessScore >= 80) {
+    recommendation = "You're in great shape for today's workout! Let's crush it!";
+  } else if (readinessScore >= 60) {
+    recommendation = "Consider reducing intensity slightly to account for your current state.";
+  } else if (readinessScore >= 40) {
+    recommendation = "I recommend a lighter workout today to prioritize recovery.";
+  } else {
+    recommendation = "Taking a rest day or doing light mobility work might be best today.";
+  }
+
+  return {
+    readinessScore,
+    concerns,
+    recommendation,
+  };
+};
+
+/**
+ * Generate a modified workout plan based on analysis
+ * @param {Object} workoutPlan - Original workout plan
+ * @param {Object} analysis - Readiness analysis
+ * @returns {Object} Modified plan
+ */
+const generateModifiedPlan = (workoutPlan, analysis) => {
+  // Calculate intensity reduction factor based on readiness score
+  const reductionFactor = analysis.readinessScore >= 60 ? 0.85 : 0.7;
+
+  const modifiedDays = workoutPlan.PlanData.map((day) => ({
+    ...day,
+    main: day.main.map((exercise) => ({
+      ...exercise,
+      sets: Math.max(1, Math.floor(exercise.sets * reductionFactor)),
+      rpe: Math.max(5, exercise.rpe - (analysis.readinessScore >= 60 ? 1 : 2)),
+      modified: true,
+    })),
+  }));
+
+  return {
+    ...workoutPlan,
+    PlanData: modifiedDays,
+    modifications: {
+      reason: analysis.concerns.join("; "),
+      intensityReduction: Math.round((1 - reductionFactor) * 100) + "%",
+      originalReadinessScore: analysis.readinessScore,
+    },
+  };
+};
 
 module.exports = router;

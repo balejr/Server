@@ -200,7 +200,7 @@ router.post('/profile', authenticateToken, async (req, res) => {
 
     await request.query(updateQuery);
 
-    console.log(`✅ Profile updated for user ${userId}:`, { dob, height, heightUnit, weight, weightUnit, goals });
+    // Profile updated successfully
 
     res.status(200).json({ 
       message: 'Profile updated successfully',
@@ -295,7 +295,52 @@ router.post('/preworkout', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { feeling, waterIntake, sleepQuality, sleepHours, recoveryStatus, workoutPlanId } = req.body;
 
-  console.log(`📝 Saving pre-workout assessment for user ${userId}`);
+  // Validate feeling values
+  const validFeelings = ['Good', 'Average', 'Bad', 'Unsure'];
+  if (feeling && !validFeelings.includes(feeling)) {
+    return res.status(400).json({ 
+      error: 'Invalid feeling value',
+      message: `Feeling must be one of: ${validFeelings.join(', ')}`
+    });
+  }
+
+  // Validate waterIntake values
+  const validWaterIntakes = ['<50oz', '50-70oz', '70-90oz', '90oz+'];
+  if (waterIntake && !validWaterIntakes.includes(waterIntake)) {
+    return res.status(400).json({ 
+      error: 'Invalid water intake value',
+      message: `Water intake must be one of: ${validWaterIntakes.join(', ')}`
+    });
+  }
+
+  // Validate sleepQuality (0-4 scale)
+  if (sleepQuality !== undefined && sleepQuality !== null) {
+    const qualityNum = parseInt(sleepQuality);
+    if (isNaN(qualityNum) || qualityNum < 0 || qualityNum > 4) {
+      return res.status(400).json({ 
+        error: 'Invalid sleep quality value',
+        message: 'Sleep quality must be a number between 0 and 4'
+      });
+    }
+  }
+
+  // Validate sleepHours values
+  const validSleepHours = ['<6', '6-7', '7-8', '8-9', '9+'];
+  if (sleepHours && !validSleepHours.includes(sleepHours)) {
+    return res.status(400).json({ 
+      error: 'Invalid sleep hours value',
+      message: `Sleep hours must be one of: ${validSleepHours.join(', ')}`
+    });
+  }
+
+  // Validate recoveryStatus values
+  const validRecoveryStatuses = ['Not Recovered', 'Sore', 'Well-Recovered'];
+  if (recoveryStatus && !validRecoveryStatuses.includes(recoveryStatus)) {
+    return res.status(400).json({ 
+      error: 'Invalid recovery status value',
+      message: `Recovery status must be one of: ${validRecoveryStatuses.join(', ')}`
+    });
+  }
 
   try {
     const pool = getPool();
