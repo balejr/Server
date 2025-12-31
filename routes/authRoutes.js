@@ -69,8 +69,16 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       });
     }
 
-    // Validate phone number if provided
-    if (phoneNumber && !isValidE164(phoneNumber)) {
+    // Phone number is required
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    // Validate phone number format
+    if (!isValidE164(phoneNumber)) {
       return res.status(400).json({
         success: false,
         message:
