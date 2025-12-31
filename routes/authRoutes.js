@@ -2255,87 +2255,139 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
 
 // ============================================
 // RESET PASSWORD - Updated to support Twilio OTP and reset token
+// Uses transaction to prevent race conditions
 // ============================================
 router.post("/reset-password", async (req, res) => {
   const { email, code, newPassword, useTwilio = false, resetToken } = req.body;
   const pool = getPool();
 
-  try {
-    // Validate new password
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 6 characters",
-      });
-    }
+  // Validate new password before starting transaction
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters",
+    });
+  }
 
-    // Get latest UserID for the email
-    const userResult = await pool.request().input("email", email).query(`
+  // Get latest UserID for the email (before transaction, read-only)
+  let userResult;
+  try {
+    userResult = await pool.request().input("email", email).query(`
         SELECT TOP 1 UserID, PasswordResetToken, PasswordResetExpires
         FROM dbo.UserLogin
         WHERE Email = @email
         ORDER BY UserID DESC
       `);
+  } catch (error) {
+    console.error("Reset Password - User lookup error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong while resetting password.",
+    });
+  }
 
-    if (userResult.recordset.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid reset attempt",
-      });
-    }
+  if (userResult.recordset.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid reset attempt",
+    });
+  }
 
-    const user = userResult.recordset[0];
-    const userId = user.UserID;
+  const user = userResult.recordset[0];
+  const userId = user.UserID;
+
+  // Begin transaction for atomic password reset
+  const transaction = pool.transaction();
+  await transaction.begin();
+
+  try {
+    // Hash password before database operations
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
 
     // Method 1: Verify using resetToken (from verify-email-otp endpoint)
     if (resetToken) {
-      // Validate reset token
+      // Validate reset token (pre-check for better error messages)
       if (user.PasswordResetToken !== resetToken) {
+        await transaction.rollback();
         return res.status(400).json({
           success: false,
           message: "Invalid or expired reset token",
         });
       }
 
-      // Check if token has expired
+      // Check if token has expired (pre-check for better error messages)
       if (
         user.PasswordResetExpires &&
         new Date(user.PasswordResetExpires) < new Date()
       ) {
+        await transaction.rollback();
         return res.status(400).json({
           success: false,
           message: "Reset token has expired. Please request a new code.",
         });
       }
 
-      // Clear the reset token after use
-      await pool.request().input("userId", userId).query(`
-        UPDATE dbo.UserLogin
-        SET PasswordResetToken = NULL, PasswordResetExpires = NULL
-        WHERE UserID = @userId
-      `);
+      // ATOMIC: Update password AND clear token in single query with token verification
+      // This prevents race conditions where two requests could both use the same token
+      const updateRequest = new (require("mssql").Request)(transaction);
+      const updateResult = await updateRequest
+        .input("userId", userId)
+        .input("password", hashedPassword)
+        .input("resetToken", resetToken).query(`
+          UPDATE dbo.UserLogin
+          SET Password = @password,
+              PasswordResetToken = NULL,
+              PasswordResetExpires = NULL
+          WHERE UserID = @userId
+            AND PasswordResetToken = @resetToken
+            AND (PasswordResetExpires IS NULL OR PasswordResetExpires > GETDATE())
+        `);
+
+      // Check if update succeeded (rowsAffected = 0 means token was already used)
+      if (updateResult.rowsAffected[0] === 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message:
+            "Reset token has already been used or expired. Please request a new code.",
+          errorCode: "TOKEN_ALREADY_USED",
+        });
+      }
     }
     // Method 2: Verify OTP directly with Twilio
     else if (useTwilio && code) {
       const verifyResult = await verifyEmailOTP(email, code);
 
       if (!verifyResult.success) {
+        await transaction.rollback();
         return res.status(400).json({
           success: false,
           message: verifyResult.error || "Invalid or expired reset code",
         });
       }
 
+      // Update password inside transaction
+      const updateRequest = new (require("mssql").Request)(transaction);
+      await updateRequest
+        .input("userId", userId)
+        .input("password", hashedPassword).query(`
+          UPDATE dbo.UserLogin
+          SET Password = @password
+          WHERE UserID = @userId
+        `);
+
       await updateOTPStatus(pool, email, "password_reset", "approved");
     }
     // Method 3: Legacy verification with PasswordResets table
     else if (code) {
+      // Clean up expired codes (outside transaction is fine, not critical)
       await pool
         .request()
         .query(`DELETE FROM dbo.PasswordResets WHERE ExpiresAt < GETDATE()`);
 
-      const result = await pool
-        .request()
+      // Check if valid code exists
+      const checkRequest = new (require("mssql").Request)(transaction);
+      const result = await checkRequest
         .input("userId", userId)
         .input("code", code).query(`
           SELECT *
@@ -2344,36 +2396,53 @@ router.post("/reset-password", async (req, res) => {
         `);
 
       if (result.recordset.length === 0) {
+        await transaction.rollback();
         return res.status(400).json({
           success: false,
           message: "Invalid or expired reset code",
         });
       }
 
-      // Mark code as used
-      await pool.request().input("userId", userId).input("code", code).query(`
+      // ATOMIC: Mark code as used with verification in WHERE clause
+      const markUsedRequest = new (require("mssql").Request)(transaction);
+      const markResult = await markUsedRequest
+        .input("userId", userId)
+        .input("code", code).query(`
           UPDATE dbo.PasswordResets
           SET Used = 1
-          WHERE UserID = @userId AND Code = @code
+          WHERE UserID = @userId AND Code = @code AND Used = 0
+        `);
+
+      // Check if code was already used by another concurrent request
+      if (markResult.rowsAffected[0] === 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message:
+            "Reset code has already been used. Please request a new code.",
+          errorCode: "CODE_ALREADY_USED",
+        });
+      }
+
+      // Update password inside transaction
+      const updateRequest = new (require("mssql").Request)(transaction);
+      await updateRequest
+        .input("userId", userId)
+        .input("password", hashedPassword).query(`
+          UPDATE dbo.UserLogin
+          SET Password = @password
+          WHERE UserID = @userId
         `);
     } else {
+      await transaction.rollback();
       return res.status(400).json({
         success: false,
         message: "Verification code or reset token is required",
       });
     }
 
-    // Update password
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
-
-    await pool
-      .request()
-      .input("userId", userId)
-      .input("password", hashedPassword).query(`
-        UPDATE dbo.UserLogin
-        SET Password = @password
-        WHERE UserID = @userId
-      `);
+    // Commit transaction - all operations succeeded
+    await transaction.commit();
 
     console.log("Password reset successful for user:", userId);
 
@@ -2382,6 +2451,12 @@ router.post("/reset-password", async (req, res) => {
       message: "Password reset successful!",
     });
   } catch (error) {
+    // Rollback transaction on any error
+    try {
+      await transaction.rollback();
+    } catch (rollbackError) {
+      console.error("Rollback error:", rollbackError);
+    }
     console.error("Reset Password Error:", error);
     res.status(500).json({
       success: false,
