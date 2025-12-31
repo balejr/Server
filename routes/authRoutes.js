@@ -503,10 +503,33 @@ router.post("/refresh-token", authenticateRefreshToken, async (req, res) => {
       `);
 
     if (result.recordset.length === 0) {
+      // Check if user has a DIFFERENT valid refresh token (logged in elsewhere)
+      const activeSessionCheck = await pool.request().input("userId", userId)
+        .query(`
+          SELECT RefreshToken, RefreshTokenExpires 
+          FROM dbo.UserLogin 
+          WHERE UserID = @userId 
+            AND RefreshToken IS NOT NULL 
+            AND RefreshTokenExpires > GETDATE()
+        `);
+
+      if (activeSessionCheck.recordset.length > 0) {
+        // User has a valid token, but it's different = logged in elsewhere
+        return res.status(401).json({
+          success: false,
+          message:
+            "Your session was ended because you signed in on another device",
+          errorCode: "LOGGED_IN_ELSEWHERE",
+          requireLogin: true,
+        });
+      }
+
+      // No valid token exists - normal invalid token error
       return res.status(401).json({
         success: false,
         message: "Invalid refresh token",
         errorCode: "TOKEN_INVALID",
+        requireLogin: true,
       });
     }
 
