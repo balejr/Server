@@ -96,6 +96,9 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       });
     }
 
+    // Normalize email to prevent case-sensitive duplicates
+    const normalizedEmail = email.toLowerCase().trim();
+
     if (file && containerClient) {
       const blobName = `profile_${Date.now()}.jpg`;
       const blockBlobClient = containerClient.getBlockBlobClient(blobName);
@@ -112,39 +115,6 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 12);
     const pool = getPool();
     const currentDate = new Date();
-
-    // Check if email already exists
-    const existingUser = await pool
-      .request()
-      .input("email", email)
-      .query(
-        "SELECT COUNT(*) as count FROM dbo.UserLogin WHERE Email = @email"
-      );
-
-    if (existingUser.recordset[0].count > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "Email already registered",
-      });
-    }
-
-    // Check if phone number already exists (if provided)
-    if (phoneNumber) {
-      const existingPhone = await pool
-        .request()
-        .input("phoneNumber", phoneNumber).query(`
-          SELECT COUNT(*) as count 
-          FROM dbo.UserProfile 
-          WHERE PhoneNumber = @phoneNumber AND PhoneVerified = 1
-        `);
-
-      if (existingPhone.recordset[0].count > 0) {
-        return res.status(409).json({
-          success: false,
-          message: "Phone number already registered",
-        });
-      }
-    }
 
     // Check if phone was verified during signup flow
     // This is more secure than trusting a frontend flag
@@ -180,7 +150,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
     const emailOtpCheck = await pool
       .request()
-      .input("email", email)
+      .input("email", normalizedEmail)
       .input("thirtyMinutesAgo", thirtyMinutesAgo).query(`
         SELECT TOP 1 Status
         FROM dbo.OTPVerifications
@@ -194,82 +164,127 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
     emailVerified = emailOtpCheck.recordset.length > 0;
 
     console.log("Email verification check during signup:", {
-      email: email.substring(0, 3) + "***",
+      email: normalizedEmail.substring(0, 3) + "***",
       foundApprovedOTP: emailVerified,
       recordCount: emailOtpCheck.recordset.length,
     });
 
-    // Begin transaction
+    // Begin transaction BEFORE duplicate checks to prevent race conditions
     const transaction = pool.transaction();
     await transaction.begin();
 
-    const profileRequest = new (require("mssql").Request)(transaction);
-    const profileResult = await profileRequest
-      .input("firstName", firstName)
-      .input("lastName", lastName)
-      .input("fitnessGoal", fitnessGoal)
-      .input("age", age)
-      .input("weight", weight)
-      .input("height", height)
-      .input("gender", gender)
-      .input("fitnessLevel", fitnessLevel)
-      .input("profileImageUrl", profileImageUrl || null)
-      .input("createDate", currentDate)
-      .input("phoneNumber", phoneNumber || null)
-      .input("phoneVerified", phoneVerified ? 1 : 0).query(`
-        INSERT INTO dbo.UserProfile 
-        (FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, CreateDate, ProfileImageUrl, PhoneNumber, PhoneVerified)
-        OUTPUT INSERTED.UserID
-        VALUES (@firstName, @lastName, @fitnessGoal, @age, @weight, @height, @gender, @fitnessLevel, @createDate, @profileImageUrl, @phoneNumber, @phoneVerified)
-      `);
+    try {
+      // Check if email already exists (inside transaction to prevent race condition)
+      const emailCheckRequest = new (require("mssql").Request)(transaction);
+      const existingUser = await emailCheckRequest
+        .input("email", normalizedEmail)
+        .query(
+          "SELECT COUNT(*) as count FROM dbo.UserLogin WHERE Email = @email"
+        );
 
-    const userId = profileResult.recordset[0].UserID;
+      if (existingUser.recordset[0].count > 0) {
+        await transaction.rollback();
+        return res.status(409).json({
+          success: false,
+          message: "Email already registered",
+        });
+      }
 
-    const loginRequest = new (require("mssql").Request)(transaction);
-    await loginRequest
-      .input("userId", userId)
-      .input("email", email)
-      .input("password", hashedPassword)
-      .input("createDate", currentDate)
-      .input("preferredLoginMethod", preferredLoginMethod)
-      .input("mfaEnabled", 0)
-      .input("biometricEnabled", 0).query(`
-        INSERT INTO dbo.UserLogin (UserID, Email, Password, CreateDate, PreferredLoginMethod, MFAEnabled, BiometricEnabled)
-        VALUES (@userId, @email, @password, @createDate, @preferredLoginMethod, @mfaEnabled, @biometricEnabled)
-      `);
+      // Check if phone number already exists (inside transaction to prevent race condition)
+      if (phoneNumber) {
+        const phoneCheckRequest = new (require("mssql").Request)(transaction);
+        const existingPhone = await phoneCheckRequest
+          .input("phoneNumber", phoneNumber).query(`
+            SELECT COUNT(*) as count 
+            FROM dbo.UserProfile 
+            WHERE PhoneNumber = @phoneNumber AND PhoneVerified = 1
+          `);
 
-    await transaction.commit();
+        if (existingPhone.recordset[0].count > 0) {
+          await transaction.rollback();
+          return res.status(409).json({
+            success: false,
+            message: "Phone number already registered",
+          });
+        }
+      }
 
-    // Generate token pair
-    const tokens = generateTokenPair({ userId });
+      const profileRequest = new (require("mssql").Request)(transaction);
+      const profileResult = await profileRequest
+        .input("firstName", firstName)
+        .input("lastName", lastName)
+        .input("fitnessGoal", fitnessGoal)
+        .input("age", age)
+        .input("weight", weight)
+        .input("height", height)
+        .input("gender", gender)
+        .input("fitnessLevel", fitnessLevel)
+        .input("profileImageUrl", profileImageUrl || null)
+        .input("createDate", currentDate)
+        .input("phoneNumber", phoneNumber || null)
+        .input("phoneVerified", phoneVerified ? 1 : 0).query(`
+          INSERT INTO dbo.UserProfile 
+          (FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, CreateDate, ProfileImageUrl, PhoneNumber, PhoneVerified)
+          OUTPUT INSERTED.UserID
+          VALUES (@firstName, @lastName, @fitnessGoal, @age, @weight, @height, @gender, @fitnessLevel, @createDate, @profileImageUrl, @phoneNumber, @phoneVerified)
+        `);
 
-    // Store refresh token in database
-    const refreshTokenExpiry = getRefreshTokenExpiry();
-    await pool
-      .request()
-      .input("userId", userId)
-      .input("refreshToken", tokens.refreshToken)
-      .input("refreshTokenExpires", refreshTokenExpiry).query(`
-        UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
-        WHERE UserID = @userId
-      `);
+      const userId = profileResult.recordset[0].UserID;
 
-    res.status(200).json({
-      success: true,
-      message: "User created successfully!",
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn,
-      userId,
-      user: {
-        id: userId,
-        email,
-        phoneNumber,
-        phoneVerified,
-        preferredLoginMethod,
-      },
-    });
+      const loginRequest = new (require("mssql").Request)(transaction);
+      await loginRequest
+        .input("userId", userId)
+        .input("email", normalizedEmail)
+        .input("password", hashedPassword)
+        .input("createDate", currentDate)
+        .input("preferredLoginMethod", preferredLoginMethod)
+        .input("mfaEnabled", 0)
+        .input("biometricEnabled", 0).query(`
+          INSERT INTO dbo.UserLogin (UserID, Email, Password, CreateDate, PreferredLoginMethod, MFAEnabled, BiometricEnabled)
+          VALUES (@userId, @email, @password, @createDate, @preferredLoginMethod, @mfaEnabled, @biometricEnabled)
+        `);
+
+      await transaction.commit();
+
+      // Generate token pair
+      const tokens = generateTokenPair({ userId });
+
+      // Store refresh token in database
+      const refreshTokenExpiry = getRefreshTokenExpiry();
+      await pool
+        .request()
+        .input("userId", userId)
+        .input("refreshToken", tokens.refreshToken)
+        .input("refreshTokenExpires", refreshTokenExpiry).query(`
+          UPDATE dbo.UserLogin 
+          SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+          WHERE UserID = @userId
+        `);
+
+      return res.status(200).json({
+        success: true,
+        message: "User created successfully!",
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresIn: tokens.expiresIn,
+        userId,
+        user: {
+          id: userId,
+          email: normalizedEmail,
+          phoneNumber,
+          phoneVerified,
+          preferredLoginMethod,
+        },
+      });
+    } catch (txError) {
+      // Rollback transaction on any error
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Rollback error:", rollbackError);
+      }
+      throw txError; // Re-throw to be caught by outer catch
+    }
   } catch (error) {
     console.error("Signup Error:", error);
     res.status(500).json({
