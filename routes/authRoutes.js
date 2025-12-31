@@ -193,8 +193,10 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       // Check if phone number already exists (inside transaction to prevent race condition)
       if (phoneNumber) {
         const phoneCheckRequest = new (require("mssql").Request)(transaction);
-        const existingPhone = await phoneCheckRequest
-          .input("phoneNumber", phoneNumber).query(`
+        const existingPhone = await phoneCheckRequest.input(
+          "phoneNumber",
+          phoneNumber
+        ).query(`
             SELECT COUNT(*) as count 
             FROM dbo.UserProfile 
             WHERE PhoneNumber = @phoneNumber AND PhoneVerified = 1
@@ -244,15 +246,13 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
           VALUES (@userId, @email, @password, @createDate, @preferredLoginMethod, @mfaEnabled, @biometricEnabled)
         `);
 
-      await transaction.commit();
-
       // Generate token pair
       const tokens = generateTokenPair({ userId });
 
-      // Store refresh token in database
+      // Store refresh token in database (inside transaction for atomicity)
       const refreshTokenExpiry = getRefreshTokenExpiry();
-      await pool
-        .request()
+      const refreshTokenRequest = new (require("mssql").Request)(transaction);
+      await refreshTokenRequest
         .input("userId", userId)
         .input("refreshToken", tokens.refreshToken)
         .input("refreshTokenExpires", refreshTokenExpiry).query(`
@@ -260,6 +260,8 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
           SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
           WHERE UserID = @userId
         `);
+
+      await transaction.commit();
 
       return res.status(200).json({
         success: true,
@@ -407,7 +409,8 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "MFA required. Please select your preferred verification method.",
+        message:
+          "MFA required. Please select your preferred verification method.",
         mfaRequired: true,
         mfaMethod: user.MFAMethod, // User's default preference (can be overridden by frontend)
         mfaSessionToken,
