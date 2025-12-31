@@ -512,16 +512,28 @@ router.post("/refresh-token", authenticateRefreshToken, async (req, res) => {
     const tokens = generateTokenPair({ userId });
     const refreshTokenExpiry = getRefreshTokenExpiry();
 
-    // Update refresh token in database
-    await pool
+    // Update refresh token in database with optimistic locking
+    // Include old token in WHERE clause to detect race conditions
+    const updateResult = await pool
       .request()
       .input("userId", userId)
+      .input("oldRefreshToken", oldRefreshToken)
       .input("refreshToken", tokens.refreshToken)
       .input("refreshTokenExpires", refreshTokenExpiry).query(`
         UPDATE dbo.UserLogin 
         SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
-        WHERE UserID = @userId
+        WHERE UserID = @userId AND RefreshToken = @oldRefreshToken
       `);
+
+    // If no rows affected, the token was already rotated by another request
+    if (updateResult.rowsAffected[0] === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Token has been rotated. Please sign in again.",
+        errorCode: "TOKEN_ALREADY_ROTATED",
+        requireLogin: true,
+      });
+    }
 
     res.status(200).json({
       success: true,
