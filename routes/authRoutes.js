@@ -302,32 +302,43 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
 router.post("/signin", checkAuthRateLimit, async (req, res) => {
   const { email, password } = req.body;
 
+  // Normalize email to lowercase for case-insensitive matching
+  const normalizedEmail = email.toLowerCase().trim();
+
   try {
     const pool = getPool();
 
-    const result = await pool.request().input("email", email).query(`
+    // Query uses case-insensitive matching via LOWER() and groups duplicates by normalized email
+    const result = await pool.request().input("email", normalizedEmail).query(`
         SELECT 
           A.UserID, A.Email, A.Password, A.MFAEnabled, A.MFAMethod, 
           A.PreferredLoginMethod, A.BiometricEnabled,
           P.PhoneNumber, P.PhoneVerified
         FROM dbo.UserLogin A
         INNER JOIN dbo.UserProfile P ON A.UserID = P.UserID
-        INNER JOIN (SELECT Email, MAX(UserID) as MaxUserID FROM dbo.UserLogin GROUP BY Email) B
-          ON A.UserID = B.MaxUserID AND A.Email = B.Email
-        WHERE A.Email = @email
+        INNER JOIN (
+          SELECT LOWER(Email) as NormalizedEmail, MAX(UserID) as MaxUserID 
+          FROM dbo.UserLogin 
+          GROUP BY LOWER(Email)
+        ) B ON A.UserID = B.MaxUserID
+        WHERE LOWER(A.Email) = @email
       `);
 
-    // Debug: Check for duplicate accounts
-    const allAccounts = await pool.request().input("email", email).query(`
-        SELECT UserID, Email, Password FROM dbo.UserLogin WHERE Email = @email ORDER BY UserID
+    // Debug: Check for duplicate accounts (case-insensitive)
+    const allAccounts = await pool.request().input("email", normalizedEmail)
+      .query(`
+        SELECT UserID, Email, Password FROM dbo.UserLogin WHERE LOWER(Email) = @email ORDER BY UserID
       `);
-    console.log("Signin attempt for email:", email);
+    console.log("Signin attempt for email:", normalizedEmail);
     console.log(
       "Total accounts found with this email:",
       allAccounts.recordset.length
     );
     if (allAccounts.recordset.length > 1) {
-      console.log("WARNING: Multiple accounts detected for email:", email);
+      console.log(
+        "WARNING: Multiple accounts detected for email:",
+        normalizedEmail
+      );
       console.log(
         "Account UserIDs:",
         allAccounts.recordset.map((a) => a.UserID)
@@ -335,7 +346,10 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
     }
 
     if (result.recordset.length === 0) {
-      console.log("No account found matching email (after MAX filter):", email);
+      console.log(
+        "No account found matching email (after MAX filter):",
+        normalizedEmail
+      );
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -1886,6 +1900,9 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       });
     }
 
+    // Normalize email to lowercase for case-insensitive matching
+    const normalizedEmail = email.toLowerCase().trim();
+
     // Validate purpose
     const validPurposes = [
       "signup",
@@ -1906,11 +1923,13 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
     let userId = null;
 
     // For password_reset: user must exist (but don't reveal this in error)
+    // Use LOWER() for backward compatibility with old accounts
     if (purpose === "password_reset") {
-      const userResult = await pool.request().input("email", email).query(`
+      const userResult = await pool.request().input("email", normalizedEmail)
+        .query(`
         SELECT TOP 1 UserID
         FROM dbo.UserLogin
-        WHERE Email = @email
+        WHERE LOWER(Email) = @email
         ORDER BY UserID DESC
       `);
 
@@ -1925,9 +1944,11 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
     }
 
     // For signup/verification: user must NOT exist
+    // Use LOWER() for backward compatibility with old accounts
     if (purpose === "signup" || purpose === "verification") {
-      const existingUser = await pool.request().input("email", email).query(`
-        SELECT UserID FROM dbo.UserLogin WHERE Email = @email
+      const existingUser = await pool.request().input("email", normalizedEmail)
+        .query(`
+        SELECT UserID FROM dbo.UserLogin WHERE LOWER(Email) = @email
       `);
 
       if (existingUser.recordset.length > 0) {
@@ -1939,9 +1960,11 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
     }
 
     // For signin/mfa: user must exist
+    // Use LOWER() for backward compatibility with old accounts
     if (purpose === "signin" || purpose === "mfa") {
-      const userResult = await pool.request().input("email", email).query(`
-        SELECT UserID FROM dbo.UserLogin WHERE Email = @email
+      const userResult = await pool.request().input("email", normalizedEmail)
+        .query(`
+        SELECT UserID FROM dbo.UserLogin WHERE LOWER(Email) = @email
       `);
 
       if (userResult.recordset.length === 0) {
@@ -1953,8 +1976,13 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       userId = userResult.recordset[0].UserID;
     }
 
-    // Check rate limit
-    const rateLimitResult = await checkRateLimit(pool, userId, email, purpose);
+    // Check rate limit (use normalized email)
+    const rateLimitResult = await checkRateLimit(
+      pool,
+      userId,
+      normalizedEmail,
+      purpose
+    );
     if (!rateLimitResult.allowed) {
       return res.status(429).json({
         success: false,
@@ -1963,8 +1991,8 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       });
     }
 
-    // Send OTP via Twilio
-    const otpResult = await sendEmailOTP(email);
+    // Send OTP via Twilio (use normalized email)
+    const otpResult = await sendEmailOTP(normalizedEmail);
 
     if (!otpResult.success) {
       console.error("Failed to send email OTP:", otpResult.error);
@@ -1974,17 +2002,17 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       });
     }
 
-    // Record OTP attempt
+    // Record OTP attempt (use normalized email)
     await recordOTPAttempt(
       pool,
       userId,
-      email,
+      normalizedEmail,
       otpResult.verificationSid,
       purpose
     );
 
     console.log("Email OTP sent successfully:", {
-      email: email.substring(0, 3) + "***",
+      email: normalizedEmail.substring(0, 3) + "***",
       purpose,
       verificationSid: otpResult.verificationSid,
     });
@@ -2027,12 +2055,15 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
       });
     }
 
-    // Verify OTP with Twilio
-    const verifyResult = await verifyEmailOTP(email, code);
+    // Normalize email to lowercase for case-insensitive matching
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Verify OTP with Twilio (use normalized email)
+    const verifyResult = await verifyEmailOTP(normalizedEmail, code);
 
     if (!verifyResult.success) {
       console.log("Email OTP verification failed:", {
-        email: email.substring(0, 3) + "***",
+        email: normalizedEmail.substring(0, 3) + "***",
         error: verifyResult.error,
         status: verifyResult.status,
       });
@@ -2045,21 +2076,21 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
 
     const pool = getPool();
 
-    // Update OTP status
-    await updateOTPStatus(pool, email, purpose, "approved");
+    // Update OTP status (use normalized email)
+    await updateOTPStatus(pool, normalizedEmail, purpose, "approved");
 
     // Reset rate limit on success
     resetAuthRateLimit(req);
 
     console.log("Email OTP verified successfully:", {
-      email: email.substring(0, 3) + "***",
+      email: normalizedEmail.substring(0, 3) + "***",
       purpose,
     });
 
     // Handle signup/verification - just confirm email is valid
     if (purpose === "signup" || purpose === "verification") {
       console.log("Signup email verification complete:", {
-        email: email.substring(0, 3) + "***",
+        email: normalizedEmail.substring(0, 3) + "***",
         purpose,
       });
       return res.status(200).json({
@@ -2070,13 +2101,15 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
     }
 
     // Handle signin/mfa - return tokens for existing user
+    // Use LOWER() for backward compatibility with old accounts
     if (purpose === "signin" || purpose === "mfa") {
-      const userResult = await pool.request().input("email", email).query(`
+      const userResult = await pool.request().input("email", normalizedEmail)
+        .query(`
         SELECT P.UserID, L.Email, L.PreferredLoginMethod, L.MFAEnabled, L.BiometricEnabled,
                P.PhoneNumber, P.PhoneVerified
         FROM dbo.UserLogin L
         INNER JOIN dbo.UserProfile P ON L.UserID = P.UserID
-        WHERE L.Email = @email
+        WHERE LOWER(L.Email) = @email
       `);
 
       if (userResult.recordset.length === 0) {
@@ -2119,12 +2152,14 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
     }
 
     // For password_reset, return a token that can be used to reset the password
+    // Use LOWER() for backward compatibility with old accounts
     if (purpose === "password_reset") {
       // Get user ID for the email
-      const userResult = await pool.request().input("email", email).query(`
+      const userResult = await pool.request().input("email", normalizedEmail)
+        .query(`
         SELECT TOP 1 UserID
         FROM dbo.UserLogin
-        WHERE Email = @email
+        WHERE LOWER(Email) = @email
         ORDER BY UserID DESC
       `);
 
@@ -2180,14 +2215,18 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
 // ============================================
 router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
   const { email } = req.body;
+
+  // Normalize email to lowercase for case-insensitive matching
+  const normalizedEmail = email.toLowerCase().trim();
   const pool = getPool();
 
   try {
-    // Get latest UserID for the email
-    const userResult = await pool.request().input("email", email).query(`
+    // Get latest UserID for the email (use LOWER() for backward compatibility)
+    const userResult = await pool.request().input("email", normalizedEmail)
+      .query(`
         SELECT TOP 1 UserID
         FROM dbo.UserLogin
-        WHERE Email = @email
+        WHERE LOWER(Email) = @email
         ORDER BY UserID DESC
       `);
 
@@ -2215,8 +2254,8 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
       });
     }
 
-    // Send OTP via Twilio
-    const otpResult = await sendEmailOTP(email);
+    // Send OTP via Twilio (use normalized email)
+    const otpResult = await sendEmailOTP(normalizedEmail);
 
     if (!otpResult.success) {
       // Fall back to legacy email method
@@ -2243,13 +2282,13 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
           VALUES (@userId, @code, @expiresAt, @lastModified, 0)
         `);
 
-      await sendPasswordResetEmail(email, code);
+      await sendPasswordResetEmail(normalizedEmail, code);
     } else {
-      // Record OTP attempt for Twilio
+      // Record OTP attempt for Twilio (use normalized email)
       await recordOTPAttempt(
         pool,
         userId,
-        email,
+        normalizedEmail,
         otpResult.verificationSid,
         "password_reset"
       );
@@ -2277,6 +2316,9 @@ router.post("/reset-password", async (req, res) => {
   const { email, code, newPassword, useTwilio = false, resetToken } = req.body;
   const pool = getPool();
 
+  // Normalize email to lowercase for case-insensitive matching
+  const normalizedEmail = email.toLowerCase().trim();
+
   // Validate new password before starting transaction
   if (!newPassword || newPassword.length < 6) {
     return res.status(400).json({
@@ -2286,12 +2328,13 @@ router.post("/reset-password", async (req, res) => {
   }
 
   // Get latest UserID for the email (before transaction, read-only)
+  // Use LOWER() for backward compatibility with old accounts
   let userResult;
   try {
-    userResult = await pool.request().input("email", email).query(`
+    userResult = await pool.request().input("email", normalizedEmail).query(`
         SELECT TOP 1 UserID, PasswordResetToken, PasswordResetExpires
         FROM dbo.UserLogin
-        WHERE Email = @email
+        WHERE LOWER(Email) = @email
         ORDER BY UserID DESC
       `);
   } catch (error) {
@@ -2370,9 +2413,9 @@ router.post("/reset-password", async (req, res) => {
         });
       }
     }
-    // Method 2: Verify OTP directly with Twilio
+    // Method 2: Verify OTP directly with Twilio (use normalized email)
     else if (useTwilio && code) {
-      const verifyResult = await verifyEmailOTP(email, code);
+      const verifyResult = await verifyEmailOTP(normalizedEmail, code);
 
       if (!verifyResult.success) {
         await transaction.rollback();
@@ -2392,7 +2435,12 @@ router.post("/reset-password", async (req, res) => {
           WHERE UserID = @userId
         `);
 
-      await updateOTPStatus(pool, email, "password_reset", "approved");
+      await updateOTPStatus(
+        pool,
+        normalizedEmail,
+        "password_reset",
+        "approved"
+      );
     }
     // Method 3: Legacy verification with PasswordResets table
     else if (code) {
@@ -2570,13 +2618,16 @@ router.get("/checkemail", async (req, res) => {
   }
 
   try {
+    // Normalize email to lowercase for case-insensitive matching
+    const normalizedEmail = email.toLowerCase().trim();
     const pool = getPool();
 
+    // Use LOWER() for backward compatibility with old accounts that may have uppercase emails
     const result = await pool
       .request()
-      .input("email", email)
+      .input("email", normalizedEmail)
       .query(
-        "SELECT COUNT(*) AS count FROM dbo.UserLogin WHERE Email = @email"
+        "SELECT COUNT(*) AS count FROM dbo.UserLogin WHERE LOWER(Email) = @email"
       );
 
     const exists = result.recordset[0].count > 0;
