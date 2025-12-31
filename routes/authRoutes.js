@@ -1101,12 +1101,15 @@ router.post("/verify-mfa-login", async (req, res) => {
       user.MFASessionExpires &&
       new Date(user.MFASessionExpires) < new Date()
     ) {
-      // Clear expired session
-      await pool.request().input("userId", userId).query(`
-        UPDATE dbo.UserLogin 
-        SET MFASessionToken = NULL, MFASessionExpires = NULL
-        WHERE UserID = @userId
-      `);
+      // Clear expired session (include token in WHERE for safety)
+      await pool
+        .request()
+        .input("userId", userId)
+        .input("mfaSessionToken", mfaSessionToken).query(`
+          UPDATE dbo.UserLogin 
+          SET MFASessionToken = NULL, MFASessionExpires = NULL
+          WHERE UserID = @userId AND MFASessionToken = @mfaSessionToken
+        `);
       return res.status(401).json({
         success: false,
         message: "MFA session expired. Please sign in again.",
@@ -1164,12 +1167,25 @@ router.post("/verify-mfa-login", async (req, res) => {
     await recordMFAVerification(pool, userId, verificationMethod);
     await updateOTPStatus(pool, destination, "mfa", "approved");
 
-    // Clear MFA session token (one-time use)
-    await pool.request().input("userId", userId).query(`
-      UPDATE dbo.UserLogin 
-      SET MFASessionToken = NULL, MFASessionExpires = NULL
-      WHERE UserID = @userId
-    `);
+    // Clear MFA session token with optimistic locking (one-time use)
+    const clearResult = await pool
+      .request()
+      .input("userId", userId)
+      .input("mfaSessionToken", mfaSessionToken).query(`
+        UPDATE dbo.UserLogin 
+        SET MFASessionToken = NULL, MFASessionExpires = NULL
+        WHERE UserID = @userId AND MFASessionToken = @mfaSessionToken
+      `);
+
+    // If no rows affected, token was already used by another request
+    if (clearResult.rowsAffected[0] === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "MFA session already used. Please sign in again.",
+        errorCode: "MFA_SESSION_ALREADY_USED",
+        requireLogin: true,
+      });
+    }
 
     // Generate tokens
     const tokens = generateTokenPair({ userId: user.UserID });
