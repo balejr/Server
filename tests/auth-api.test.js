@@ -667,13 +667,15 @@ async function testEnableBiometric() {
     const { response, duration } = await request(
       "POST",
       "/auth/enable-biometric",
-      {
-        biometricToken: biometricToken,
-      },
+      {}, // Empty body - server generates token
       authHeader()
     );
 
     if (response.status === 200 && response.data.success === true) {
+      // Capture the server-generated biometric token for use in biometric login test
+      if (response.data.biometricToken) {
+        biometricToken = response.data.biometricToken;
+      }
       recordPass("Biometric enabled", duration);
       return true;
     } else {
