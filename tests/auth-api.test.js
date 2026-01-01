@@ -290,7 +290,7 @@ async function testSignin() {
   try {
     const { response, duration } = await request("POST", "/auth/signin", {
       email: TEST_EMAIL,
-      password: TEST_PASSWORD,
+      password: currentPassword, // Use currentPassword (may change after password reset)
     });
 
     if (response.status === 200 && response.data.success === true) {
@@ -932,7 +932,7 @@ async function testSigninCaseInsensitive() {
   try {
     const { response, duration } = await request("POST", "/auth/signin", {
       email: uppercaseEmail,
-      password: TEST_PASSWORD,
+      password: currentPassword, // Use currentPassword (may change after password reset)
     });
 
     if (response.status === 200 && response.data.success === true) {
@@ -1093,7 +1093,7 @@ async function testLoggedInElsewhere() {
   try {
     const { response: signinResponse } = await request("POST", "/auth/signin", {
       email: TEST_EMAIL,
-      password: TEST_PASSWORD,
+      password: currentPassword, // Use currentPassword (may change after password reset)
     });
 
     if (signinResponse.status === 200 && signinResponse.data.accessToken) {
@@ -1235,7 +1235,7 @@ async function testSigninWithMFA() {
   try {
     const { response, duration } = await request("POST", "/auth/signin", {
       email: TEST_EMAIL,
-      password: TEST_PASSWORD,
+      password: currentPassword, // Use currentPassword (may change after password reset)
     });
 
     if (response.status === 200 && response.data.mfaRequired === true) {
@@ -1852,11 +1852,18 @@ async function runTests() {
         const mfaRequired = await testSigninWithMFA();
         if (mfaRequired) {
           await testSendMFACode();
-          await testVerifyMFALogin();
-        }
+          const mfaVerified = await testVerifyMFALogin();
 
-        // Disable MFA for remaining tests
-        await testDisableMFA();
+          // Only try to disable MFA if we successfully verified and got tokens
+          if (mfaVerified && accessToken) {
+            // Disable MFA for remaining tests
+            await testDisableMFA();
+          } else {
+            log(
+              `\n${colors.yellow}[INFO]${colors.reset} Skipping MFA disable - no valid token after MFA verification`
+            );
+          }
+        }
       }
     }
   } else {
@@ -1894,7 +1901,7 @@ async function runTests() {
   const runPasswordReset = await prompt("Run password reset test? (y/n)");
   if (runPasswordReset.toLowerCase() === "y") {
     await testPasswordResetComplete();
-    // Re-signin with original password if reset changed it
+    // Re-signin with new password (currentPassword is updated in testPasswordResetComplete)
     await testSignin();
   } else {
     log(

@@ -32,6 +32,7 @@ const {
   recordOTPAttempt,
   updateOTPStatus,
 } = require("../utils/twilioService");
+const logger = require("../utils/logger");
 
 const router = express.Router();
 
@@ -66,6 +67,26 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Email and password are required",
+      });
+    }
+
+    // Strong password validation matching frontend requirements
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters",
+      });
+    }
+
+    const hasUpperCase = /[A-Z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+
+    if (!hasUpperCase || !hasNumber || !hasSymbol) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Password must contain at least 1 uppercase letter, 1 number, and 1 symbol",
       });
     }
 
@@ -137,7 +158,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
 
       phoneVerified = otpCheck.recordset.length > 0;
 
-      console.log("Phone verification check during signup:", {
+      logger.debug("Phone verification check during signup:", {
         phoneNumber: phoneNumber.slice(-4),
         foundApprovedOTP: phoneVerified,
         recordCount: otpCheck.recordset.length,
@@ -163,7 +184,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
 
     emailVerified = emailOtpCheck.recordset.length > 0;
 
-    console.log("Email verification check during signup:", {
+    logger.debug("Email verification check during signup:", {
       email: normalizedEmail.substring(0, 3) + "***",
       foundApprovedOTP: emailVerified,
       recordCount: emailOtpCheck.recordset.length,
@@ -340,24 +361,24 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
       .query(`
         SELECT UserID, Email, Password FROM dbo.UserLogin WHERE LOWER(Email) = @email ORDER BY UserID
       `);
-    console.log("Signin attempt for email:", normalizedEmail);
-    console.log(
+    logger.debug("Signin attempt for email:", normalizedEmail);
+    logger.debug(
       "Total accounts found with this email:",
       allAccounts.recordset.length
     );
     if (allAccounts.recordset.length > 1) {
-      console.log(
+      logger.debug(
         "WARNING: Multiple accounts detected for email:",
         normalizedEmail
       );
-      console.log(
+      logger.debug(
         "Account UserIDs:",
         allAccounts.recordset.map((a) => a.UserID)
       );
     }
 
     if (result.recordset.length === 0) {
-      console.log(
+      logger.debug(
         "No account found matching email (after MAX filter):",
         normalizedEmail
       );
@@ -368,20 +389,18 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
     }
 
     const user = result.recordset[0];
-    console.log(
+    logger.debug(
       "Found user for signin - UserID:",
       user.UserID,
       "Has password:",
-      !!user.Password,
-      "Password length:",
-      user.Password?.length
+      !!user.Password
     );
 
     const isPasswordMatch = await bcrypt.compare(password, user.Password);
-    console.log("Password match result:", isPasswordMatch);
+    logger.debug("Password match result:", isPasswordMatch);
 
     if (!isPasswordMatch) {
-      console.log("Password mismatch for UserID:", user.UserID);
+      logger.debug("Password mismatch for UserID:", user.UserID);
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -648,7 +667,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
     // For signin/login: phone must be registered and verified
     if (purpose === "signin" || purpose === "login") {
       if (!phoneExists) {
-        console.log("Phone signin failed - phone not registered:", {
+        logger.debug("Phone signin failed - phone not registered:", {
           phoneNumber: phoneNumber.slice(-4),
         });
         return res.status(404).json({
@@ -658,7 +677,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
       }
 
       const user = userResult.recordset[0];
-      console.log("Phone signin check:", {
+      logger.debug("Phone signin check:", {
         phoneNumber: phoneNumber.slice(-4),
         userId: user.UserID,
         phoneVerified: user.PhoneVerified,
@@ -672,7 +691,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
       // Fallback: If phone not marked as verified, check OTPVerifications table
       // This handles cases where signup didn't properly record the verification
       if (!isPhoneVerified) {
-        console.log(
+        logger.debug(
           "Phone not marked verified, checking OTPVerifications table..."
         );
 
@@ -687,7 +706,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
           `);
 
         if (otpCheck.recordset.length > 0) {
-          console.log(
+          logger.debug(
             "Found approved OTP verification, updating PhoneVerified status:",
             {
               phoneNumber: phoneNumber.slice(-4),
@@ -709,7 +728,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
       }
 
       if (!isPhoneVerified) {
-        console.log("Phone signin failed - phone not verified:", {
+        logger.debug("Phone signin failed - phone not verified:", {
           phoneNumber: phoneNumber.slice(-4),
           userId: user.UserID,
           rawPhoneVerified: user.PhoneVerified,
@@ -772,7 +791,7 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
   const { phoneNumber, code, purpose = "signin" } = req.body;
 
   try {
-    console.log("Verify phone OTP request:", {
+    logger.debug("Verify phone OTP request:", {
       phoneNumber: phoneNumber ? phoneNumber.slice(-4) : "missing",
       purpose,
       codeProvided: !!code,
@@ -790,7 +809,7 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
     const verifyResult = await verifyPhoneOTP(phoneNumber, code);
 
     if (!verifyResult.success) {
-      console.log("Phone OTP verification failed:", {
+      logger.debug("Phone OTP verification failed:", {
         phoneNumber: phoneNumber.slice(-4),
         error: verifyResult.error,
         status: verifyResult.status,
@@ -810,7 +829,7 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
     // Update OTP status
     await updateOTPStatus(pool, phoneNumber, normalizedPurpose, "approved");
 
-    console.log("Phone OTP verified successfully:", {
+    logger.debug("Phone OTP verified successfully:", {
       phoneNumber: phoneNumber.slice(-4),
       purpose: normalizedPurpose,
     });
@@ -825,7 +844,7 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
       purpose === "verification" ||
       normalizedPurpose === "signup"
     ) {
-      console.log(
+      logger.debug(
         "Signup phone verification complete - no user lookup needed:",
         {
           phoneNumber: phoneNumber.slice(-4),
@@ -922,7 +941,7 @@ router.post("/verify-phone-number", authenticateToken, async (req, res) => {
       const verifyResult = await verifyPhoneOTP(phoneNumber, code);
 
       if (!verifyResult.success) {
-        console.log("Phone number verification failed:", {
+        logger.debug("Phone number verification failed:", {
           userId,
           phoneNumber: phoneNumber.slice(-4),
           error: verifyResult.error,
@@ -1109,7 +1128,7 @@ router.post("/send-mfa-code", async (req, res) => {
 // Validates the mfaSessionToken from signin response
 // Accepts optional `method` parameter to verify against correct OTP storage
 // ============================================
-router.post("/verify-mfa-login", async (req, res) => {
+router.post("/verify-mfa-login", checkAuthRateLimit, async (req, res) => {
   const { mfaSessionToken, code, userId, method } = req.body;
 
   try {
@@ -1176,7 +1195,7 @@ router.post("/verify-mfa-login", async (req, res) => {
     const destination =
       verificationMethod === "sms" ? user.PhoneNumber : user.Email;
 
-    console.log("MFA verification attempt:", {
+    logger.debug("MFA verification attempt:", {
       userId,
       requestedMethod: method,
       userStoredMethod: user.MFAMethod,
@@ -1204,7 +1223,7 @@ router.post("/verify-mfa-login", async (req, res) => {
 
     if (!verifyResult.success) {
       await updateOTPStatus(pool, destination, "mfa", "failed");
-      console.log("MFA verification failed:", {
+      logger.debug("MFA verification failed:", {
         userId,
         method: verificationMethod,
         error: verifyResult.error,
@@ -1257,7 +1276,7 @@ router.post("/verify-mfa-login", async (req, res) => {
         WHERE UserID = @userId
       `);
 
-    console.log("MFA verification successful:", {
+    logger.debug("MFA verification successful:", {
       userId,
       method: verificationMethod,
     });
@@ -1290,7 +1309,7 @@ router.post("/verify-mfa-login", async (req, res) => {
 // ============================================
 // VERIFY MFA CODE - Complete MFA verification (legacy endpoint)
 // ============================================
-router.post("/verify-mfa-code", async (req, res) => {
+router.post("/verify-mfa-code", checkAuthRateLimit, async (req, res) => {
   const { userId, code, method } = req.body;
 
   try {
@@ -1388,201 +1407,211 @@ router.post("/verify-mfa-code", async (req, res) => {
 // ============================================
 // SETUP MFA - Enable MFA for user account
 // ============================================
-router.post("/setup-mfa", authenticateToken, async (req, res) => {
-  const { method, code } = req.body;
-  const userId = req.user.userId;
+router.post(
+  "/setup-mfa",
+  authenticateToken,
+  checkAuthRateLimit,
+  async (req, res) => {
+    const { method, code } = req.body;
+    const userId = req.user.userId;
 
-  try {
-    if (!method || !["sms", "email"].includes(method)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid MFA method. Must be "sms" or "email"',
-      });
-    }
+    try {
+      if (!method || !["sms", "email"].includes(method)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid MFA method. Must be "sms" or "email"',
+        });
+      }
 
-    const pool = getPool();
+      const pool = getPool();
 
-    // Get user info
-    const userResult = await pool.request().input("userId", userId).query(`
+      // Get user info
+      const userResult = await pool.request().input("userId", userId).query(`
         SELECT L.Email, P.PhoneNumber, P.PhoneVerified
         FROM dbo.UserLogin L
         INNER JOIN dbo.UserProfile P ON L.UserID = P.UserID
         WHERE L.UserID = @userId
       `);
 
-    if (userResult.recordset.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const user = userResult.recordset[0];
-
-    // For SMS method, verify phone is set and verified
-    if (method === "sms") {
-      if (!user.PhoneNumber || !user.PhoneVerified) {
-        return res.status(400).json({
+      if (userResult.recordset.length === 0) {
+        return res.status(404).json({
           success: false,
-          message: "Phone number must be verified before enabling SMS MFA",
+          message: "User not found",
         });
       }
-    }
 
-    const destination = method === "sms" ? user.PhoneNumber : user.Email;
+      const user = userResult.recordset[0];
 
-    // If code is provided, verify it to complete setup
-    if (code) {
-      let verifyResult;
+      // For SMS method, verify phone is set and verified
       if (method === "sms") {
-        verifyResult = await verifyPhoneOTP(user.PhoneNumber, code);
-      } else {
-        verifyResult = await verifyEmailOTP(user.Email, code);
+        if (!user.PhoneNumber || !user.PhoneVerified) {
+          return res.status(400).json({
+            success: false,
+            message: "Phone number must be verified before enabling SMS MFA",
+          });
+        }
       }
 
-      if (!verifyResult.success) {
-        return res.status(400).json({
-          success: false,
-          message: verifyResult.error || "Invalid verification code",
-        });
-      }
+      const destination = method === "sms" ? user.PhoneNumber : user.Email;
 
-      // Enable MFA
-      await pool.request().input("userId", userId).input("method", method)
-        .query(`
+      // If code is provided, verify it to complete setup
+      if (code) {
+        let verifyResult;
+        if (method === "sms") {
+          verifyResult = await verifyPhoneOTP(user.PhoneNumber, code);
+        } else {
+          verifyResult = await verifyEmailOTP(user.Email, code);
+        }
+
+        if (!verifyResult.success) {
+          return res.status(400).json({
+            success: false,
+            message: verifyResult.error || "Invalid verification code",
+          });
+        }
+
+        // Enable MFA
+        await pool.request().input("userId", userId).input("method", method)
+          .query(`
           UPDATE dbo.UserLogin
           SET MFAEnabled = 1, MFAMethod = @method
           WHERE UserID = @userId
         `);
 
-      return res.status(200).json({
+        return res.status(200).json({
+          success: true,
+          message: "MFA enabled successfully",
+          mfaEnabled: true,
+          mfaMethod: method,
+        });
+      }
+
+      // No code - send verification code
+      const rateLimitResult = await checkRateLimit(
+        pool,
+        userId,
+        destination,
+        "mfa"
+      );
+      if (!rateLimitResult.allowed) {
+        return res.status(429).json({
+          success: false,
+          message: rateLimitResult.error,
+        });
+      }
+
+      let otpResult;
+      if (method === "sms") {
+        otpResult = await sendPhoneOTP(user.PhoneNumber);
+      } else {
+        otpResult = await sendEmailOTP(user.Email);
+      }
+
+      if (!otpResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: otpResult.error || "Failed to send verification code",
+        });
+      }
+
+      await recordOTPAttempt(
+        pool,
+        userId,
+        destination,
+        otpResult.verificationSid,
+        "mfa"
+      );
+
+      res.status(200).json({
         success: true,
-        message: "MFA enabled successfully",
-        mfaEnabled: true,
-        mfaMethod: method,
+        message:
+          "Verification code sent. Enter the code to complete MFA setup.",
+        method,
       });
-    }
-
-    // No code - send verification code
-    const rateLimitResult = await checkRateLimit(
-      pool,
-      userId,
-      destination,
-      "mfa"
-    );
-    if (!rateLimitResult.allowed) {
-      return res.status(429).json({
+    } catch (error) {
+      console.error("Setup MFA Error:", error);
+      res.status(500).json({
         success: false,
-        message: rateLimitResult.error,
+        message: "Error setting up MFA",
       });
     }
-
-    let otpResult;
-    if (method === "sms") {
-      otpResult = await sendPhoneOTP(user.PhoneNumber);
-    } else {
-      otpResult = await sendEmailOTP(user.Email);
-    }
-
-    if (!otpResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: otpResult.error || "Failed to send verification code",
-      });
-    }
-
-    await recordOTPAttempt(
-      pool,
-      userId,
-      destination,
-      otpResult.verificationSid,
-      "mfa"
-    );
-
-    res.status(200).json({
-      success: true,
-      message: "Verification code sent. Enter the code to complete MFA setup.",
-      method,
-    });
-  } catch (error) {
-    console.error("Setup MFA Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error setting up MFA",
-    });
   }
-});
+);
 
 // ============================================
 // ENABLE MFA DIRECT - Enable MFA without additional verification
 // Use when phone/email was already verified (e.g., during signup)
 // ============================================
-router.post("/enable-mfa-direct", authenticateToken, async (req, res) => {
-  const { method, alreadyVerified = true } = req.body;
-  const userId = req.user.userId;
+router.post(
+  "/enable-mfa-direct",
+  authenticateToken,
+  checkAuthRateLimit,
+  async (req, res) => {
+    const { method, alreadyVerified = true } = req.body;
+    const userId = req.user.userId;
 
-  try {
-    // Validate method
-    if (!method || !["sms", "email"].includes(method)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid MFA method. Must be "sms" or "email"',
-      });
-    }
+    try {
+      // Validate method
+      if (!method || !["sms", "email"].includes(method)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid MFA method. Must be "sms" or "email"',
+        });
+      }
 
-    const pool = getPool();
+      const pool = getPool();
 
-    // Get user info
-    const userResult = await pool.request().input("userId", userId).query(`
+      // Get user info
+      const userResult = await pool.request().input("userId", userId).query(`
         SELECT L.Email, L.MFAEnabled, P.PhoneNumber, P.PhoneVerified
         FROM dbo.UserLogin L
         INNER JOIN dbo.UserProfile P ON L.UserID = P.UserID
         WHERE L.UserID = @userId
       `);
 
-    if (userResult.recordset.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const user = userResult.recordset[0];
-
-    // Check if MFA is already enabled
-    if (user.MFAEnabled) {
-      return res.status(200).json({
-        success: true,
-        message: "MFA is already enabled",
-        mfaEnabled: true,
-        mfaMethod: method,
-      });
-    }
-
-    // For SMS method, verify phone is set and verified
-    if (method === "sms") {
-      if (!user.PhoneNumber) {
-        return res.status(400).json({
+      if (userResult.recordset.length === 0) {
+        return res.status(404).json({
           success: false,
-          message: "Phone number is required for SMS MFA",
+          message: "User not found",
         });
       }
 
-      if (!user.PhoneVerified && !alreadyVerified) {
-        return res.status(400).json({
-          success: false,
-          message: "Phone number must be verified before enabling SMS MFA",
+      const user = userResult.recordset[0];
+
+      // Check if MFA is already enabled
+      if (user.MFAEnabled) {
+        return res.status(200).json({
+          success: true,
+          message: "MFA is already enabled",
+          mfaEnabled: true,
+          mfaMethod: method,
         });
       }
 
-      // If alreadyVerified is true, check if there was a recent verification
-      // This provides additional security by verifying the phone was actually verified recently
-      if (alreadyVerified && !user.PhoneVerified) {
-        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-        const otpCheck = await pool
-          .request()
-          .input("phoneNumber", user.PhoneNumber)
-          .input("tenMinutesAgo", tenMinutesAgo).query(`
+      // For SMS method, verify phone is set and verified
+      if (method === "sms") {
+        if (!user.PhoneNumber) {
+          return res.status(400).json({
+            success: false,
+            message: "Phone number is required for SMS MFA",
+          });
+        }
+
+        if (!user.PhoneVerified && !alreadyVerified) {
+          return res.status(400).json({
+            success: false,
+            message: "Phone number must be verified before enabling SMS MFA",
+          });
+        }
+
+        // If alreadyVerified is true, check if there was a recent verification
+        // This provides additional security by verifying the phone was actually verified recently
+        if (alreadyVerified && !user.PhoneVerified) {
+          const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+          const otpCheck = await pool
+            .request()
+            .input("phoneNumber", user.PhoneNumber)
+            .input("tenMinutesAgo", tenMinutesAgo).query(`
             SELECT TOP 1 Status
             FROM dbo.OTPVerifications
             WHERE PhoneOrEmail = @phoneNumber
@@ -1592,48 +1621,50 @@ router.post("/enable-mfa-direct", authenticateToken, async (req, res) => {
             ORDER BY CreatedAt DESC
           `);
 
-        if (otpCheck.recordset.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Phone number verification required. Please verify your phone first.",
-          });
-        }
+          if (otpCheck.recordset.length === 0) {
+            return res.status(400).json({
+              success: false,
+              message:
+                "Phone number verification required. Please verify your phone first.",
+            });
+          }
 
-        // Update PhoneVerified status since we confirmed it was verified
-        await pool.request().input("userId", userId).query(`
+          // Update PhoneVerified status since we confirmed it was verified
+          await pool.request().input("userId", userId).query(`
           UPDATE dbo.UserProfile
           SET PhoneVerified = 1
           WHERE UserID = @userId
         `);
+        }
       }
-    }
 
-    // Enable MFA directly
-    await pool.request().input("userId", userId).input("method", method).query(`
+      // Enable MFA directly
+      await pool.request().input("userId", userId).input("method", method)
+        .query(`
         UPDATE dbo.UserLogin
         SET MFAEnabled = 1, MFAMethod = @method
         WHERE UserID = @userId
       `);
 
-    console.log(
-      `MFA enabled directly for user ${userId} with method: ${method}`
-    );
+      logger.debug(
+        `MFA enabled directly for user ${userId} with method: ${method}`
+      );
 
-    res.status(200).json({
-      success: true,
-      message: "MFA enabled successfully",
-      mfaEnabled: true,
-      mfaMethod: method,
-    });
-  } catch (error) {
-    console.error("Enable MFA Direct Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error enabling MFA",
-    });
+      res.status(200).json({
+        success: true,
+        message: "MFA enabled successfully",
+        mfaEnabled: true,
+        mfaMethod: method,
+      });
+    } catch (error) {
+      console.error("Enable MFA Direct Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Error enabling MFA",
+      });
+    }
   }
-});
+);
 
 // ============================================
 // DISABLE MFA - Remove MFA from account
@@ -1745,21 +1776,24 @@ router.patch(
 );
 
 // ============================================
-// ENABLE BIOMETRIC - Store biometric token
+// ENABLE BIOMETRIC - Generate and store biometric token
 // ============================================
 router.post("/enable-biometric", authenticateToken, async (req, res) => {
-  const { biometricToken } = req.body;
   const userId = req.user.userId;
 
   try {
-    if (!biometricToken) {
-      return res.status(400).json({
+    const pool = getPool();
+
+    // Generate a secure random biometric token (64 hex chars = 32 bytes)
+    const biometricToken = crypto.randomBytes(32).toString("hex");
+
+    // Validate generated token format (defense-in-depth)
+    if (biometricToken.length < 32 || biometricToken.length > 256) {
+      return res.status(500).json({
         success: false,
-        message: "Biometric token is required",
+        message: "Error generating biometric token",
       });
     }
-
-    const pool = getPool();
 
     // Hash the biometric token before storing
     const hashedToken = await bcrypt.hash(biometricToken, 12);
@@ -1773,9 +1807,11 @@ router.post("/enable-biometric", authenticateToken, async (req, res) => {
         WHERE UserID = @userId
       `);
 
+    // Return the plain token to client (they store it, we store the hash)
     res.status(200).json({
       success: true,
       message: "Biometric authentication enabled",
+      biometricToken,
     });
   } catch (error) {
     console.error("Enable Biometric Error:", error);
@@ -2056,7 +2092,7 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       purpose
     );
 
-    console.log("Email OTP sent successfully:", {
+    logger.debug("Email OTP sent successfully:", {
       email: normalizedEmail.substring(0, 3) + "***",
       purpose,
       verificationSid: otpResult.verificationSid,
@@ -2107,7 +2143,7 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
     const verifyResult = await verifyEmailOTP(normalizedEmail, code);
 
     if (!verifyResult.success) {
-      console.log("Email OTP verification failed:", {
+      logger.debug("Email OTP verification failed:", {
         email: normalizedEmail.substring(0, 3) + "***",
         error: verifyResult.error,
         status: verifyResult.status,
@@ -2127,14 +2163,14 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
     // Reset rate limit on success
     resetAuthRateLimit(req);
 
-    console.log("Email OTP verified successfully:", {
+    logger.debug("Email OTP verified successfully:", {
       email: normalizedEmail.substring(0, 3) + "***",
       purpose,
     });
 
     // Handle signup/verification - just confirm email is valid
     if (purpose === "signup" || purpose === "verification") {
-      console.log("Signup email verification complete:", {
+      logger.debug("Signup email verification complete:", {
         email: normalizedEmail.substring(0, 3) + "***",
         purpose,
       });
@@ -2359,18 +2395,30 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
 // RESET PASSWORD - Updated to support Twilio OTP and reset token
 // Uses transaction to prevent race conditions
 // ============================================
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", checkAuthRateLimit, async (req, res) => {
   const { email, code, newPassword, useTwilio = false, resetToken } = req.body;
   const pool = getPool();
 
   // Normalize email to lowercase for case-insensitive matching
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Validate new password before starting transaction
-  if (!newPassword || newPassword.length < 6) {
+  // Strong password validation matching frontend requirements
+  if (!newPassword || newPassword.length < 8) {
     return res.status(400).json({
       success: false,
-      message: "Password must be at least 6 characters",
+      message: "Password must be at least 8 characters",
+    });
+  }
+
+  const hasUpperCase = /[A-Z]/.test(newPassword);
+  const hasNumber = /[0-9]/.test(newPassword);
+  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+
+  if (!hasUpperCase || !hasNumber || !hasSymbol) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Password must contain at least 1 uppercase letter, 1 number, and 1 symbol",
     });
   }
 
@@ -2556,7 +2604,7 @@ router.post("/reset-password", async (req, res) => {
     // Commit transaction - all operations succeeded
     await transaction.commit();
 
-    console.log("Password reset successful for user:", userId);
+    logger.debug("Password reset successful for user:", userId);
 
     res.status(200).json({
       success: true,
@@ -2832,6 +2880,15 @@ router.patch(
 // ============================================
 router.patch("/user/profile/:userId", authenticateToken, async (req, res) => {
   const userId = req.params.userId;
+
+  // Authorization check - user can only update their own profile
+  if (req.user.userId !== parseInt(userId)) {
+    return res.status(403).json({
+      success: false,
+      message: "You can only update your own profile",
+    });
+  }
+
   const fields = req.body;
 
   const allowedFields = [
@@ -2849,7 +2906,7 @@ router.patch("/user/profile/:userId", authenticateToken, async (req, res) => {
   const validKeys = Object.keys(fields).filter((key) =>
     allowedFields.includes(key)
   );
-  console.log("Allowed updates:", validKeys);
+  logger.debug("Allowed updates:", validKeys);
 
   const pool = getPool();
   const request = pool.request().input("userId", userId);
