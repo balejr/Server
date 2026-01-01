@@ -2833,10 +2833,11 @@ router.patch(
       request.input("lastname", lastname);
       request.input("gender", gender);
       request.input("fitnessGoal", fitnessGoal);
-      request.input("weight", weight);
-      request.input("height", height);
+      // Convert empty strings to null for numeric columns to prevent SQL conversion errors
+      request.input("weight", weight === '' ? null : weight);
+      request.input("height", height === '' ? null : height);
       request.input("fitnessLevel", fitnessLevel);
-      request.input("age", age);
+      request.input("age", age === '' ? null : age);
       if (profileImageUrl) {
         request.input("profileImageUrl", profileImageUrl);
       }

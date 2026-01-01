@@ -53,9 +53,10 @@ router.patch("/profile", authenticateToken, async (req, res) => {
       .input("firstName", firstName)
       .input("lastName", lastName)
       .input("fitnessGoal", fitnessGoal)
-      .input("age", age)
-      .input("weight", weight)
-      .input("height", height)
+      // Convert empty strings to null for numeric columns to prevent SQL conversion errors
+      .input("age", age === '' ? null : age)
+      .input("weight", weight === '' ? null : weight)
+      .input("height", height === '' ? null : height)
       .input("gender", gender)
       .input("fitnessLevel", fitnessLevel).query(`
         UPDATE dbo.UserProfile
