@@ -583,9 +583,48 @@ router.post("/chat", authenticateToken, async (req, res) => {
     // Get recent conversation history for context
     const conversationHistory = await getConversationHistory(chatSessionId, 10);
 
+    // Check if this is a confirmation of a previous WORKOUT_CONFIRM
+    let isConfirmingWorkout = false;
+    let workoutSummary = null;
+    
+    if (conversationHistory.length > 0) {
+      const lastAIResponse = conversationHistory
+        .slice()
+        .reverse()
+        .find(msg => msg.Role === 'assistant');
+      
+      if (lastAIResponse) {
+        try {
+          const lastContent = typeof lastAIResponse.Content === 'string' 
+            ? JSON.parse(lastAIResponse.Content) 
+            : lastAIResponse.Content;
+          
+          if (lastContent?.mode === 'WORKOUT_CONFIRM') {
+            // Check if current message is affirmative
+            const affirmativePattern = /^(yes|yeah|yep|sure|ok|okay|confirm|create|go|do it|please|generate)/i;
+            if (affirmativePattern.test(message.trim())) {
+              isConfirmingWorkout = true;
+              workoutSummary = lastContent?.payload?.summary;
+              console.log('✅ Detected workout confirmation, will generate plan');
+            }
+          }
+        } catch (e) {
+          // Could not parse last response
+        }
+      }
+    }
+
+    // Modify message for confirmation flow
+    let effectiveMessage = message;
+    if (isConfirmingWorkout) {
+      // Build an explicit message that forces plan generation
+      const summary = workoutSummary || {};
+      effectiveMessage = `The user has confirmed. Now generate a complete workout plan with mode=WORKOUT_CREATE. Plan details: ${summary.daysPerWeek || 3} days per week, goal: ${summary.goal || 'general fitness'}, experience: ${summary.experience || 'intermediate'}, equipment: ${(summary.equipment || ['bodyweight']).join(', ')}. Include full exercises with sets, reps, and RPE.`;
+    }
+
     // Call Gemini API to get structured response
     const structuredResponse = await callGeminiAPI(
-      message,
+      effectiveMessage,
       conversationHistory
     );
 
