@@ -2704,9 +2704,19 @@ router.get("/checkphone", async (req, res) => {
 // ============================================
 router.patch(
   "/update-profile/:userId",
+  authenticateToken,
   upload.single("profileImage"),
   async (req, res) => {
     const userId = req.params.userId;
+
+    // Authorization check - user can only update their own profile
+    if (req.user.userId !== parseInt(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only update your own profile",
+      });
+    }
+
     const {
       lastname,
       firstname,
