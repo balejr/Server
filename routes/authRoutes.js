@@ -305,6 +305,14 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
 router.post("/signin", checkAuthRateLimit, async (req, res) => {
   const { email, password } = req.body;
 
+  // Validate required fields
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Email and password are required",
+    });
+  }
+
   // Normalize email to lowercase for case-insensitive matching
   const normalizedEmail = email.toLowerCase().trim();
 

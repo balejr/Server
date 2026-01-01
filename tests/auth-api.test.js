@@ -9,12 +9,25 @@
 
 const axios = require("axios");
 const readline = require("readline");
+const sql = require("mssql");
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
 const API_BASE_URL = "https://apogeehnp.azurewebsites.net/api";
+
+// Database configuration for direct cleanup
+const DB_CONFIG = {
+  user: "ApogeeDev_Haashim",
+  password: "SecurePassword123",
+  server: "apogeehnp.database.windows.net",
+  database: "ApogeeFit",
+  options: {
+    encrypt: true,
+    trustServerCertificate: false,
+  },
+};
 const TEST_PHONE = "+14255020361";
 const TEST_PASSWORD = "TestPassword123!";
 
@@ -47,6 +60,7 @@ let refreshToken = null;
 let userId = null;
 let mfaSessionToken = null;
 let biometricToken = `test-biometric-${timestamp}`;
+let currentPassword = TEST_PASSWORD; // Track current password (may change during password reset test)
 
 // ============================================================================
 // UTILITIES
@@ -1607,10 +1621,9 @@ async function testPasswordResetComplete() {
         accessToken = response.data.accessToken;
         refreshToken = response.data.refreshToken;
       }
+      // Update currentPassword to track the new password
+      currentPassword = NEW_PASSWORD;
       recordPass("Signin with new password successful", duration);
-
-      // Reset password back to original for other tests
-      // Note: In real scenario, you'd need another reset flow
       return true;
     } else {
       recordFail(
@@ -1657,6 +1670,94 @@ async function testDeleteAccount() {
   } catch (e) {
     recordFail("Account deletion", e.message);
     return false;
+  }
+}
+
+// ============================================================================
+// DATABASE CLEANUP (Direct SQL - handles foreign keys properly)
+// ============================================================================
+
+async function cleanupTestUserFromDatabase(targetUserId) {
+  section("Database Cleanup (Direct SQL)");
+
+  if (!targetUserId) {
+    recordSkip("Database cleanup", "No userId available");
+    return false;
+  }
+
+  const start = Date.now();
+
+  try {
+    log(`         Connecting to database...`);
+    await sql.connect(DB_CONFIG);
+
+    // Get all tables with UserID columns
+    const tablesResult = await sql.query`
+      SELECT TABLE_NAME, COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE COLUMN_NAME LIKE '%UserID%' 
+         OR COLUMN_NAME LIKE '%UserId%' 
+         OR COLUMN_NAME LIKE '%user_id%'
+    `;
+
+    const tables = tablesResult.recordset;
+    log(`         Found ${tables.length} tables with UserID columns`);
+
+    let remainingTables = [...tables];
+    let pass = 1;
+    let totalDeleted = 0;
+
+    // Multi-pass deletion to handle foreign key constraints
+    while (remainingTables.length > 0 && pass <= 5) {
+      const stillRemaining = [];
+
+      for (const { TABLE_NAME, COLUMN_NAME } of remainingTables) {
+        try {
+          const request = new sql.Request();
+          const result = await request.query(
+            `DELETE FROM dbo.[${TABLE_NAME}] WHERE [${COLUMN_NAME}] = ${targetUserId}`
+          );
+          if (result.rowsAffected[0] > 0) {
+            log(
+              `         ${colors.green}✓${colors.reset} Deleted ${result.rowsAffected[0]} rows from ${TABLE_NAME}`
+            );
+            totalDeleted += result.rowsAffected[0];
+          }
+        } catch (err) {
+          if (
+            err.message.includes("REFERENCE constraint") ||
+            err.message.includes("FOREIGN KEY")
+          ) {
+            stillRemaining.push({ TABLE_NAME, COLUMN_NAME });
+          }
+          // Ignore other errors (table might not have matching rows)
+        }
+      }
+
+      remainingTables = stillRemaining;
+      pass++;
+    }
+
+    const duration = Date.now() - start;
+
+    if (totalDeleted > 0) {
+      recordPass(
+        `User ${targetUserId} cleaned up (${totalDeleted} total rows deleted)`,
+        duration
+      );
+    } else {
+      recordPass(
+        `User ${targetUserId} cleanup complete (no rows found)`,
+        duration
+      );
+    }
+
+    return true;
+  } catch (err) {
+    recordFail("Database cleanup", err.message);
+    return false;
+  } finally {
+    await sql.close();
   }
 }
 
@@ -1811,29 +1912,48 @@ async function runTests() {
   // ==========================================================================
   // PHASE 12: Delete Account (FINAL - Destroys test account)
   // ==========================================================================
-  // Re-signin for delete (token was invalidated)
-  const signinForDelete = await request("POST", "/auth/signin", {
-    email: TEST_EMAIL,
-    password: TEST_PASSWORD,
-  });
-  if (
-    signinForDelete.response.status === 200 &&
-    signinForDelete.response.data.accessToken
-  ) {
-    accessToken = signinForDelete.response.data.accessToken;
-    refreshToken = signinForDelete.response.data.refreshToken;
-  }
-
   const runDelete = await prompt("Delete test account? (y/n)");
   if (runDelete.toLowerCase() === "y") {
-    await testDeleteAccount();
+    // Try API delete first
+    // Re-signin for delete (token was invalidated)
+    // Use currentPassword which may have changed during password reset test
+    const signinForDelete = await request("POST", "/auth/signin", {
+      email: TEST_EMAIL,
+      password: currentPassword,
+    });
+    if (
+      signinForDelete.response.status === 200 &&
+      signinForDelete.response.data.accessToken
+    ) {
+      accessToken = signinForDelete.response.data.accessToken;
+      refreshToken = signinForDelete.response.data.refreshToken;
+    }
+
+    const apiDeleteResult = await testDeleteAccount();
+
+    // If API delete failed or was skipped, use direct database cleanup
+    if (!apiDeleteResult) {
+      log(
+        `\n${colors.yellow}[INFO]${colors.reset} API delete failed/skipped, using direct database cleanup...`
+      );
+      await cleanupTestUserFromDatabase(userId);
+    }
   } else {
-    log(
-      `\n${colors.yellow}[SKIP]${colors.reset} Account deletion skipped by user`
+    // Ask if they want database cleanup only (no API)
+    const runDbCleanup = await prompt(
+      "Run direct database cleanup instead? (y/n)"
     );
-    log(`         Test account: ${TEST_EMAIL}`);
-    log(`         (You may want to delete this manually)`);
-    results.skipped += 1;
+    if (runDbCleanup.toLowerCase() === "y") {
+      await cleanupTestUserFromDatabase(userId);
+    } else {
+      log(
+        `\n${colors.yellow}[SKIP]${colors.reset} Account deletion skipped by user`
+      );
+      log(`         Test account: ${TEST_EMAIL}`);
+      log(`         User ID: ${userId}`);
+      log(`         (You may want to delete this manually)`);
+      results.skipped += 1;
+    }
   }
 
   // Summary
