@@ -28,7 +28,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
           DOB,
           HeightUnit,
           WeightUnit,
-          Goals
+          Goals,
+          OnboardingData
         FROM dbo.UserProfile
         WHERE UserID = @userId
       `);
@@ -37,7 +38,17 @@ router.get('/profile', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.status(200).json(result.recordset[0]);
+    // Parse OnboardingData if it exists
+    const profile = result.recordset[0];
+    if (profile.OnboardingData) {
+      try {
+        profile.OnboardingData = JSON.parse(profile.OnboardingData);
+      } catch (e) {
+        // Keep as string if parsing fails
+      }
+    }
+
+    res.status(200).json(profile);
   } catch (error) {
     console.error('Get Profile Error:', error);
     res.status(500).json({ message: 'Failed to get user profile' });
@@ -48,12 +59,28 @@ router.get('/profile', authenticateToken, async (req, res) => {
 router.post('/profile', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
+    // Basic fields
     dob,
     height,
     heightUnit,
     weight,
     weightUnit,
-    goals
+    goals,
+    gender,
+    // Enhanced onboarding fields
+    experienceLevel,
+    activityLevel,
+    motivation,
+    injuries,
+    injuryNotes,
+    daysPerWeek,
+    sessionDuration,
+    preferredTime,
+    equipment,
+    workoutLocation,
+    trainingStyle,
+    sleepQuality,
+    stressLevel
   } = req.body;
 
   try {
@@ -183,6 +210,36 @@ router.post('/profile', authenticateToken, async (req, res) => {
       // Also update the legacy FitnessGoal field for backward compatibility
       updateFields.push('FitnessGoal = @fitnessGoal');
       request.input('fitnessGoal', goalsString);
+    }
+
+    if (gender !== undefined) {
+      updateFields.push('Gender = @gender');
+      request.input('gender', gender);
+    }
+
+    if (experienceLevel !== undefined) {
+      updateFields.push('FitnessLevel = @fitnessLevel');
+      request.input('fitnessLevel', experienceLevel);
+    }
+
+    // Store enhanced onboarding data as JSON in OnboardingData column
+    const enhancedData = {};
+    if (activityLevel !== undefined) enhancedData.activityLevel = activityLevel;
+    if (motivation !== undefined) enhancedData.motivation = motivation;
+    if (injuries !== undefined) enhancedData.injuries = injuries;
+    if (injuryNotes !== undefined) enhancedData.injuryNotes = injuryNotes;
+    if (daysPerWeek !== undefined) enhancedData.daysPerWeek = daysPerWeek;
+    if (sessionDuration !== undefined) enhancedData.sessionDuration = sessionDuration;
+    if (preferredTime !== undefined) enhancedData.preferredTime = preferredTime;
+    if (equipment !== undefined) enhancedData.equipment = equipment;
+    if (workoutLocation !== undefined) enhancedData.workoutLocation = workoutLocation;
+    if (trainingStyle !== undefined) enhancedData.trainingStyle = trainingStyle;
+    if (sleepQuality !== undefined) enhancedData.sleepQuality = sleepQuality;
+    if (stressLevel !== undefined) enhancedData.stressLevel = stressLevel;
+
+    if (Object.keys(enhancedData).length > 0) {
+      updateFields.push('OnboardingData = @onboardingData');
+      request.input('onboardingData', JSON.stringify(enhancedData));
     }
 
     if (updateFields.length === 0) {

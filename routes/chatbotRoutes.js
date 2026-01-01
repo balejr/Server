@@ -28,7 +28,7 @@ const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
 // Structured response configuration for FitNext AI
 const FITNEXT_SYSTEM_INSTRUCTION = `You are FitNext AI, the in-app health & fitness assistant.
 
-Rules:
+CORE RULES:
 • Scope → fitness and general dietary education only. No diagnoses, prescriptions, or treatment plans.
 • Modes → GENERAL, WORKOUT_CONFIRM, WORKOUT_CREATE, WORKOUT_MODIFY, DIET_GUIDE, OUT_OF_SCOPE.
 • Intent → GENERAL, WORKOUT_REQUEST, WORKOUT_MODIFICATION, DIET_GUIDANCE_REQUEST, OUT_OF_SCOPE.
@@ -37,16 +37,54 @@ Rules:
 • Keep message titles under 60 chars, bodies under 240 chars.
 • Be concise, friendly, and professional—no emojis.
 
-CRITICAL CONFIRMATION FLOW:
-• When user asks for a workout plan initially → return WORKOUT_CONFIRM to ask for confirmation.
-• When the PREVIOUS message in conversation history was a WORKOUT_CONFIRM from you, and the user now says "yes", "sure", "ok", "confirm", "create it", "go ahead", or any affirmative response → you MUST return WORKOUT_CREATE with the full workout plan.
-• IMPORTANT: Check the conversation history. If your last response was mode="WORKOUT_CONFIRM" and user is confirming, generate the plan now with mode="WORKOUT_CREATE".
+USER PROFILE DATA - Use ALL of the following fields when provided to personalize workout plans:
 
-• When providing a general dietary guide, include the following disclaimer: "This is general dietary advice. Always consult a registered dietitian or healthcare professional for personalized nutritional guidance."
-• When out of scope, use the refusal template:
-  "I am an AI fitness assistant and cannot provide {diagnoses/prescriptions/unrelated info}.
+**Basic Info:**
+• Name - Personalize messages
+• Age - Adjust intensity appropriately
+• Gender - Consider for exercise selection
+• Height/Weight - Factor into intensity recommendations
+• Experience Level (beginner/intermediate/advanced) - Adjust exercise complexity
+• Fitness Goals - User's primary objectives (Build Muscle, Lose Weight, Improve Endurance, etc.)
+
+**Lifestyle & Availability:**
+• Activity Level (sedentary/light/moderate/active/very_active) - Affects intensity
+• Days Per Week - MUST match workout days in plan exactly
+• Session Duration (minutes) - Target workout length
+• Preferred Workout Time (morning/afternoon/evening)
+
+**Equipment & Location:**
+• Workout Location (home/gym/both) - Select appropriate exercises
+• Available Equipment - ONLY include exercises using this equipment:
+  Dumbbells, Barbell, Kettlebells, Resistance Bands, Pull-up Bar, Bench, Cable Machine, Machines, Bodyweight
+
+**Training Preferences:**
+• Training Styles - Preferred workout types:
+  Strength Training, Cardio, HIIT, Flexibility/Yoga, CrossFit Style, Bodybuilding, Functional Fitness
+
+**Recovery & Wellness:**
+• Sleep Quality (1-5) - Lower = reduce intensity
+• Stress Level (1-5) - Higher = gentler workouts, focus on recovery
+• Areas to Be Mindful Of - Body parts to protect. NEVER stress these areas. Suggest safe alternatives.
+
+WORKOUT CREATION RULES:
+1. If USER PROFILE DATA is provided with sufficient info → go DIRECTLY to WORKOUT_CREATE (skip confirmation)
+2. Match Days Per Week exactly
+3. Only use Available Equipment
+4. Respect Areas to Be Mindful Of
+5. Adjust intensity for Experience, Sleep Quality, Stress Level
+
+CONFIRMATION FLOW (only when profile data is missing):
+• Missing profile data → return WORKOUT_CONFIRM to gather info
+• User confirms → return WORKOUT_CREATE
+
+OUT OF SCOPE:
+"I am an AI fitness assistant and cannot provide {diagnoses/prescriptions/unrelated info}.
 Please consult a licensed professional for that.
-   I can help with fitness education, workout planning, general dietary guidance, and healthy habits.`;
+I can help with fitness education, workout planning, general dietary guidance, and healthy habits."
+
+DIETARY DISCLAIMER:
+"This is general dietary advice. Always consult a registered dietitian or healthcare professional for personalized nutritional guidance."`;
 
 // Structured response schema configuration
 const RESPONSE_SCHEMA = {
@@ -296,12 +334,106 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
 };
 
 /**
+ * Fetch user profile data for AI context
+ * @param {number} userId - The user's ID
+ * @returns {Promise<Object|null>} User profile or null
+ */
+const getUserProfileForAI = async (userId) => {
+  try {
+    const pool = getPool();
+    const result = await pool
+      .request()
+      .input("userId", userId)
+      .query(`
+        SELECT 
+          FirstName, 
+          Age, 
+          Weight, 
+          Height, 
+          Gender, 
+          FitnessLevel,
+          HeightUnit,
+          WeightUnit,
+          Goals,
+          OnboardingData
+        FROM dbo.UserProfile
+        WHERE UserID = @userId
+      `);
+
+    if (result.recordset.length === 0) {
+      return null;
+    }
+
+    const profile = result.recordset[0];
+    
+    // Parse OnboardingData if it exists
+    if (profile.OnboardingData) {
+      try {
+        profile.OnboardingData = JSON.parse(profile.OnboardingData);
+      } catch (e) {
+        profile.OnboardingData = null;
+      }
+    }
+
+    return profile;
+  } catch (error) {
+    console.error("Error fetching user profile for AI:", error.message);
+    return null;
+  }
+};
+
+/**
+ * Build user context string for AI prompt
+ * @param {Object} profile - User profile object
+ * @returns {string} Formatted user context
+ */
+const buildUserContextForAI = (profile) => {
+  if (!profile) return "";
+
+  let context = "\n\n**USER PROFILE DATA (Use this to personalize the workout plan):**\n";
+  
+  // Basic info
+  if (profile.FirstName) context += `• Name: ${profile.FirstName}\n`;
+  if (profile.Age) context += `• Age: ${profile.Age} years old\n`;
+  if (profile.Gender) context += `• Gender: ${profile.Gender}\n`;
+  if (profile.Height && profile.HeightUnit) context += `• Height: ${profile.Height} ${profile.HeightUnit}\n`;
+  if (profile.Weight && profile.WeightUnit) context += `• Weight: ${profile.Weight} ${profile.WeightUnit}\n`;
+  if (profile.FitnessLevel) context += `• Experience Level: ${profile.FitnessLevel}\n`;
+  if (profile.Goals) context += `• Fitness Goals: ${profile.Goals}\n`;
+
+  // Enhanced onboarding data
+  const od = profile.OnboardingData;
+  if (od) {
+    if (od.activityLevel) context += `• Daily Activity Level: ${od.activityLevel}\n`;
+    if (od.motivation && od.motivation.length > 0) context += `• Motivations: ${od.motivation.join(', ')}\n`;
+    if (od.daysPerWeek) context += `• Available Days Per Week: ${od.daysPerWeek}\n`;
+    if (od.sessionDuration) context += `• Preferred Session Duration: ${od.sessionDuration} minutes\n`;
+    if (od.preferredTime) context += `• Preferred Workout Time: ${od.preferredTime}\n`;
+    if (od.workoutLocation) context += `• Workout Location: ${od.workoutLocation}\n`;
+    if (od.equipment && od.equipment.length > 0) context += `• Available Equipment: ${od.equipment.join(', ')}\n`;
+    if (od.trainingStyle && od.trainingStyle.length > 0) context += `• Preferred Training Styles: ${od.trainingStyle.join(', ')}\n`;
+    if (od.sleepQuality) context += `• Sleep Quality (1-5): ${od.sleepQuality}\n`;
+    if (od.stressLevel) context += `• Stress Level (1-5): ${od.stressLevel}\n`;
+    
+    // Handle areas to be mindful of (injuries) carefully to avoid medical filter
+    if (od.injuries && od.injuries.length > 0) {
+      context += `• Areas to Be Mindful Of: ${od.injuries.join(', ')} (suggest safe alternatives and gentle exercises for these areas)\n`;
+    }
+  }
+
+  context += "\n**IMPORTANT:** Use all the above data to create a personalized workout plan. Match the number of days, equipment, and goals. Avoid exercises that stress the areas they want to be mindful of.\n";
+
+  return context;
+};
+
+/**
  * Function to call Gemini API with structured response
  * @param {string} userMessage - The user's message
  * @param {Array} conversationHistory - Previous conversation messages
+ * @param {string} userProfileContext - Optional user profile context string
  * @returns {Promise<Object>} Structured response object
  */
-const callGeminiAPI = async (userMessage, conversationHistory = []) => {
+const callGeminiAPI = async (userMessage, conversationHistory = [], userProfileContext = "") => {
   try {
     // Validate API configuration
     if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
@@ -326,9 +458,9 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
     const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-    // Build the prompt with system instruction and conversation context
+    // Build the prompt with system instruction, user profile, and conversation context
     const prompt = `${FITNEXT_SYSTEM_INSTRUCTION}
-
+${userProfileContext}
 ${conversationContext}
 
 **Current User Message:** "${userMessage}"
@@ -622,10 +754,15 @@ router.post("/chat", authenticateToken, async (req, res) => {
       effectiveMessage = `The user has confirmed. Now generate a complete workout plan with mode=WORKOUT_CREATE. Plan details: ${summary.daysPerWeek || 3} days per week, goal: ${summary.goal || 'general fitness'}, experience: ${summary.experience || 'intermediate'}, equipment: ${(summary.equipment || ['bodyweight']).join(', ')}. Include full exercises with sets, reps, and RPE.`;
     }
 
-    // Call Gemini API to get structured response
+    // Fetch user profile for personalized AI responses
+    const userProfile = await getUserProfileForAI(userId);
+    const userProfileContext = buildUserContextForAI(userProfile);
+
+    // Call Gemini API to get structured response with user context
     const structuredResponse = await callGeminiAPI(
       effectiveMessage,
-      conversationHistory
+      conversationHistory,
+      userProfileContext
     );
 
     // Determine inquiry type based on intent for usage tracking
