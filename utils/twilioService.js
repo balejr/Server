@@ -325,7 +325,7 @@ const checkRateLimit = async (pool, userId, phoneOrEmail, purpose) => {
       `);
 
     const attemptCount = result.recordset[0].attemptCount;
-    const maxAttempts = 100; // TODO: Change back to 3 for production
+    const maxAttempts = 15;
 
     if (attemptCount >= maxAttempts) {
       return {
