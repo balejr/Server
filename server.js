@@ -50,9 +50,9 @@ app.get("/", (req, res) => {
 // Version endpoint for deployment verification
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "2025-12-31-v2",
-    deployedAt: "2025-12-31T17:10:00Z",
-    features: ["duplicate-email-check", "accessToken-response-format"]
+    version: "2025-12-31-v3",
+    deployedAt: new Date().toISOString(),
+    features: ["duplicate-email-check", "accessToken-response-format", "token-pair-signin"]
   });
 });
 
