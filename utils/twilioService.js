@@ -388,13 +388,19 @@ const recordOTPAttempt = async (
  * @param {string} phoneOrEmail - Phone or email
  * @param {string} purpose - Purpose of OTP
  * @param {string} status - New status ('approved', 'failed', 'expired')
+ * @param {object} transaction - Optional mssql transaction for atomic operations
  * @returns {Promise<void>}
  */
-const updateOTPStatus = async (pool, phoneOrEmail, purpose, status) => {
+const updateOTPStatus = async (pool, phoneOrEmail, purpose, status, transaction = null) => {
   try {
+    // Use transaction request if provided, otherwise use pool
+    const mssql = require("mssql");
+    const request = transaction
+      ? new mssql.Request(transaction)
+      : pool.request();
+
     // First try to update with exact purpose match
-    const result = await pool
-      .request()
+    const result = await request
       .input("phoneOrEmail", phoneOrEmail)
       .input("purpose", purpose)
       .input("status", status).query(`
@@ -414,8 +420,12 @@ const updateOTPStatus = async (pool, phoneOrEmail, purpose, status) => {
         purpose === "verification" ||
         purpose === "phone_verify"
       ) {
-        const fallbackResult = await pool
-          .request()
+        // Create new request for fallback (can't reuse request with same input names)
+        const fallbackRequest = transaction
+          ? new mssql.Request(transaction)
+          : pool.request();
+
+        const fallbackResult = await fallbackRequest
           .input("phoneOrEmail", phoneOrEmail)
           .input("status", status).query(`
             UPDATE dbo.OTPVerifications

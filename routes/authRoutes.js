@@ -2462,7 +2462,8 @@ router.post("/reset-password", async (req, res) => {
         pool,
         normalizedEmail,
         "password_reset",
-        "approved"
+        "approved",
+        transaction
       );
     }
     // Method 3: Legacy verification with PasswordResets table
