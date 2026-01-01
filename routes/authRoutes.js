@@ -1039,7 +1039,7 @@ router.post("/verify-phone-number", authenticateToken, async (req, res) => {
 // ============================================
 // SEND MFA CODE - Send MFA code during login
 // ============================================
-router.post("/send-mfa-code", async (req, res) => {
+router.post("/send-mfa-code", checkAuthRateLimit, async (req, res) => {
   const { userId, method } = req.body;
 
   try {
