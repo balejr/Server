@@ -433,10 +433,11 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
 
       // Helper function to mask phone number for display
       const maskPhone = (phone) => {
-        if (!phone || phone.length < 7) return null;
+        if (!phone || phone.length < 10) return null;
         // Show country code and last 4 digits: +1 ***-***-7890
         const lastFour = phone.slice(-4);
-        return phone.slice(0, phone.length - 10) + " ***-***-" + lastFour;
+        const countryCode = phone.slice(0, phone.length - 10);
+        return countryCode + " ***-***-" + lastFour;
       };
 
       // Helper function to mask email for display
