@@ -6,7 +6,8 @@
     "node": "20.x"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node tests/auth-api.test.js",
+    "test:auth": "node tests/auth-api.test.js",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
