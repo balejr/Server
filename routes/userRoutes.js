@@ -1,38 +1,38 @@
 // routes/userRoutes.js
-const express = require('express');
-const { getPool } = require('../config/db');
-const { authenticateToken } = require('../middleware/authMiddleware');
-const bcrypt = require('bcrypt');
+const express = require("express");
+const mssql = require("mssql");
+const { getPool } = require("../config/db");
+const { authenticateToken } = require("../middleware/authMiddleware");
+const { requireMFA } = require("../middleware/mfaMiddleware");
+const bcrypt = require("bcrypt");
 
 const router = express.Router();
 
 // GET user profile
-router.get('/profile', authenticateToken, async (req, res) => {
+router.get("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
   try {
     const pool = getPool();
-    const result = await pool.request()
-      .input('userId', userId)
-      .query(`
+    const result = await pool.request().input("userId", userId).query(`
         SELECT FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, ProfileImageUrl
         FROM dbo.UserProfile
         WHERE UserID = @userId
       `);
 
     if (result.recordset.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     res.status(200).json(result.recordset[0]);
   } catch (error) {
-    console.error('Get Profile Error:', error);
-    res.status(500).json({ message: 'Failed to get user profile' });
+    console.error("Get Profile Error:", error);
+    res.status(500).json({ message: "Failed to get user profile" });
   }
 });
 
 // PATCH update user profile
-router.patch('/profile', authenticateToken, async (req, res) => {
+router.patch("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
     firstName,
@@ -42,22 +42,22 @@ router.patch('/profile', authenticateToken, async (req, res) => {
     weight,
     height,
     gender,
-    fitnessLevel
+    fitnessLevel,
   } = req.body;
 
   try {
     const pool = getPool();
-    await pool.request()
-      .input('userId', userId)
-      .input('firstName', firstName)
-      .input('lastName', lastName)
-      .input('fitnessGoal', fitnessGoal)
-      .input('age', age)
-      .input('weight', weight)
-      .input('height', height)
-      .input('gender', gender)
-      .input('fitnessLevel', fitnessLevel)
-      .query(`
+    await pool
+      .request()
+      .input("userId", userId)
+      .input("firstName", firstName)
+      .input("lastName", lastName)
+      .input("fitnessGoal", fitnessGoal)
+      .input("age", age)
+      .input("weight", weight)
+      .input("height", height)
+      .input("gender", gender)
+      .input("fitnessLevel", fitnessLevel).query(`
         UPDATE dbo.UserProfile
         SET FirstName = @firstName,
             LastName = @lastName,
@@ -70,33 +70,79 @@ router.patch('/profile', authenticateToken, async (req, res) => {
         WHERE UserID = @userId
       `);
 
-    res.status(200).json({ message: 'Profile updated successfully' });
+    res.status(200).json({ message: "Profile updated successfully" });
   } catch (error) {
-    console.error('Profile Update Error:', error);
-    res.status(500).json({ message: 'Failed to update profile' });
+    console.error("Profile Update Error:", error);
+    res.status(500).json({ message: "Failed to update profile" });
   }
 });
 
-// DELETE user profile
-router.delete('/profile', authenticateToken, async (req, res) => {
-  const userId = req.user.userId;
-
-  try {
+// DELETE user profile - requires MFA if enabled, cleans up all user data
+router.delete(
+  "/profile",
+  authenticateToken,
+  requireMFA("delete_account"),
+  async (req, res) => {
+    const userId = req.user.userId;
     const pool = getPool();
+    const transaction = new mssql.Transaction(pool);
 
-    await pool.request()
-      .input('userId', userId)
-      .query(`DELETE FROM dbo.UserLogin WHERE UserID = @userId`);
+    try {
+      await transaction.begin();
 
-    await pool.request()
-      .input('userId', userId)
-      .query(`DELETE FROM dbo.UserProfile WHERE UserID = @userId`);
+      // Delete from all related tables (order matters due to foreign keys)
+      // Child tables first, parent tables last
+      const tablesToClean = [
+        "OTPVerifications",
+        "PasswordResets",
+        "ChatMessages",
+        "ChatbotSession",
+        "DailyLogs",
+        "DailySummary",
+        "ExerciseExistence",
+        "WorkoutRoutine",
+        "WorkoutHistory",
+        "UserUsage",
+        "UserAchievements",
+        "subscription_transactions",
+        "user_subscriptions",
+        "payments",
+        "AIWorkoutPlans",
+        "microcycles",
+        "mesocycles",
+        "OnboardingProfile",
+        "PreWorkoutAssessment",
+        "DeviceData",
+        "OuraTokens",
+        "UserLogin",
+        "UserProfile", // Delete last (other tables may reference this)
+      ];
 
-    res.status(200).json({ message: 'User profile deleted successfully' });
-  } catch (error) {
-    console.error('Profile Delete Error:', error);
-    res.status(500).json({ message: 'Failed to delete user profile' });
+      for (const table of tablesToClean) {
+        const deleteRequest = new mssql.Request(transaction);
+        await deleteRequest
+          .input("userId", userId)
+          .query(`DELETE FROM dbo.${table} WHERE UserID = @userId`);
+      }
+
+      await transaction.commit();
+      res.status(200).json({
+        success: true,
+        message: "Account and all data deleted successfully",
+      });
+    } catch (error) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Transaction rollback error:", rollbackError);
+      }
+      console.error("Profile Delete Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete account",
+      });
+    }
   }
-});
+);
 
 module.exports = router;
