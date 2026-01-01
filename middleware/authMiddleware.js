@@ -1,6 +1,7 @@
 // middleware/authMiddleware.js
 const jwt = require("jsonwebtoken");
 const { verifyToken, isTokenExpiring } = require("../utils/token");
+const { getPool } = require("../config/db");
 
 /**
  * Error codes for authentication failures
@@ -11,14 +12,16 @@ const AUTH_ERROR_CODES = {
   TOKEN_INVALID: "TOKEN_INVALID",
   REFRESH_REQUIRED: "REFRESH_REQUIRED",
   TOKEN_TYPE_MISMATCH: "TOKEN_TYPE_MISMATCH",
+  SESSION_INVALIDATED: "SESSION_INVALIDATED",
   AUTH_ERROR: "AUTH_ERROR",
 };
 
 /**
  * Authenticate access token middleware
  * Verifies the JWT access token from the Authorization header
+ * Also checks if the token was issued before user logged out
  */
-const authenticateToken = (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
 
@@ -69,6 +72,51 @@ const authenticateToken = (req, res, next) => {
       errorCode: AUTH_ERROR_CODES.TOKEN_INVALID,
       requireLogin: true,
     });
+  }
+
+  // Check if token was issued before user logged out (TokenInvalidatedAt check)
+  try {
+    const pool = getPool();
+    const invalidationCheck = await pool
+      .request()
+      .input("userId", result.decoded.userId)
+      .query(
+        `SELECT TokenInvalidatedAt FROM dbo.UserLogin WHERE UserID = @userId`
+      );
+
+    if (invalidationCheck.recordset.length > 0) {
+      const invalidatedAt = invalidationCheck.recordset[0].TokenInvalidatedAt;
+
+      // If TokenInvalidatedAt is set and token was issued before that time, reject it
+      // JWT 'iat' is in seconds, so multiply by 1000 to compare with JS Date
+      if (invalidatedAt && result.decoded.iat) {
+        const tokenIssuedAt = result.decoded.iat * 1000; // Convert to milliseconds
+        const invalidatedAtTime = new Date(invalidatedAt).getTime();
+
+        if (tokenIssuedAt < invalidatedAtTime) {
+          console.log("🔒 Auth failed: Token was invalidated by logout", {
+            path: req.path,
+            userId: result.decoded.userId,
+            tokenIssuedAt: new Date(tokenIssuedAt).toISOString(),
+            invalidatedAt: new Date(invalidatedAtTime).toISOString(),
+          });
+
+          return res.status(401).json({
+            success: false,
+            message: "Session has been invalidated. Please sign in again.",
+            errorCode: AUTH_ERROR_CODES.SESSION_INVALIDATED,
+            requireLogin: true,
+          });
+        }
+      }
+    }
+  } catch (dbError) {
+    // Log error but don't block auth if database check fails
+    // This prevents auth from breaking if column doesn't exist yet
+    console.warn(
+      "⚠️ TokenInvalidatedAt check failed (non-blocking):",
+      dbError.message
+    );
   }
 
   // Check if token is about to expire (within 2 minutes)

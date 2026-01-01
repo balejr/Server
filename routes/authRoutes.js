@@ -250,6 +250,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       const tokens = generateTokenPair({ userId });
 
       // Store refresh token in database (inside transaction for atomicity)
+      // Also clear TokenInvalidatedAt so new tokens work after any previous logout
       const refreshTokenExpiry = getRefreshTokenExpiry();
       const refreshTokenRequest = new (require("mssql").Request)(transaction);
       await refreshTokenRequest
@@ -257,7 +258,9 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
         .input("refreshToken", tokens.refreshToken)
         .input("refreshTokenExpires", refreshTokenExpiry).query(`
           UPDATE dbo.UserLogin 
-          SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+          SET RefreshToken = @refreshToken, 
+              RefreshTokenExpires = @refreshTokenExpires,
+              TokenInvalidatedAt = NULL
           WHERE UserID = @userId
         `);
 
@@ -448,13 +451,16 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
 
     // Store refresh token
     const refreshTokenExpiry = getRefreshTokenExpiry();
+    // Clear TokenInvalidatedAt so new tokens work after any previous logout
     await pool
       .request()
       .input("userId", user.UserID)
       .input("refreshToken", tokens.refreshToken)
       .input("refreshTokenExpires", refreshTokenExpiry).query(`
         UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+        SET RefreshToken = @refreshToken, 
+            RefreshTokenExpires = @refreshTokenExpires,
+            TokenInvalidatedAt = NULL
         WHERE UserID = @userId
       `);
 
@@ -850,14 +856,16 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
       const tokens = generateTokenPair({ userId: user.UserID });
       const refreshTokenExpiry = getRefreshTokenExpiry();
 
-      // Store refresh token
+      // Store refresh token and clear TokenInvalidatedAt for new session
       await pool
         .request()
         .input("userId", user.UserID)
         .input("refreshToken", tokens.refreshToken)
         .input("refreshTokenExpires", refreshTokenExpiry).query(`
           UPDATE dbo.UserLogin 
-          SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+          SET RefreshToken = @refreshToken, 
+              RefreshTokenExpires = @refreshTokenExpires,
+              TokenInvalidatedAt = NULL
           WHERE UserID = @userId
         `);
 
@@ -1228,14 +1236,16 @@ router.post("/verify-mfa-login", async (req, res) => {
     const tokens = generateTokenPair({ userId: user.UserID });
     const refreshTokenExpiry = getRefreshTokenExpiry();
 
-    // Store refresh token
+    // Store refresh token and clear TokenInvalidatedAt for new session
     await pool
       .request()
       .input("userId", user.UserID)
       .input("refreshToken", tokens.refreshToken)
       .input("refreshTokenExpires", refreshTokenExpiry).query(`
         UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+        SET RefreshToken = @refreshToken, 
+            RefreshTokenExpires = @refreshTokenExpires,
+            TokenInvalidatedAt = NULL
         WHERE UserID = @userId
       `);
 
@@ -1329,14 +1339,16 @@ router.post("/verify-mfa-code", async (req, res) => {
     const tokens = generateTokenPair({ userId: user.UserID });
     const refreshTokenExpiry = getRefreshTokenExpiry();
 
-    // Store refresh token
+    // Store refresh token and clear TokenInvalidatedAt for new session
     await pool
       .request()
       .input("userId", user.UserID)
       .input("refreshToken", tokens.refreshToken)
       .input("refreshTokenExpires", refreshTokenExpiry).query(`
         UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+        SET RefreshToken = @refreshToken, 
+            RefreshTokenExpires = @refreshTokenExpires,
+            TokenInvalidatedAt = NULL
         WHERE UserID = @userId
       `);
 
@@ -1828,14 +1840,16 @@ router.post("/biometric-login", checkAuthRateLimit, async (req, res) => {
     const tokens = generateTokenPair({ userId: user.UserID });
     const refreshTokenExpiry = getRefreshTokenExpiry();
 
-    // Store refresh token
+    // Store refresh token and clear TokenInvalidatedAt for new session
     await pool
       .request()
       .input("userId", user.UserID)
       .input("refreshToken", tokens.refreshToken)
       .input("refreshTokenExpires", refreshTokenExpiry).query(`
         UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+        SET RefreshToken = @refreshToken, 
+            RefreshTokenExpires = @refreshTokenExpires,
+            TokenInvalidatedAt = NULL
         WHERE UserID = @userId
       `);
 
@@ -2146,14 +2160,16 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
       const tokens = generateTokenPair({ userId: user.UserID });
       const refreshTokenExpiry = getRefreshTokenExpiry();
 
-      // Store refresh token
+      // Store refresh token and clear TokenInvalidatedAt for new session
       await pool
         .request()
         .input("userId", user.UserID)
         .input("refreshToken", tokens.refreshToken)
         .input("refreshTokenExpires", refreshTokenExpiry)
         .query(`UPDATE dbo.UserLogin 
-                SET RefreshToken = @refreshToken, RefreshTokenExpires = @refreshTokenExpires
+                SET RefreshToken = @refreshToken, 
+                    RefreshTokenExpires = @refreshTokenExpires,
+                    TokenInvalidatedAt = NULL
                 WHERE UserID = @userId`);
 
       return res.status(200).json({
@@ -2554,7 +2570,7 @@ router.post("/reset-password", async (req, res) => {
 });
 
 // ============================================
-// LOGOUT - Revoke refresh token
+// LOGOUT - Revoke refresh token and invalidate access tokens
 // ============================================
 router.post("/logout", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -2562,10 +2578,13 @@ router.post("/logout", authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
 
-    // Clear refresh token
+    // Clear refresh token AND set TokenInvalidatedAt to invalidate all access tokens
+    // Any access token issued before this timestamp will be rejected
     await pool.request().input("userId", userId).query(`
         UPDATE dbo.UserLogin
-        SET RefreshToken = NULL, RefreshTokenExpires = NULL
+        SET RefreshToken = NULL, 
+            RefreshTokenExpires = NULL,
+            TokenInvalidatedAt = GETDATE()
         WHERE UserID = @userId
       `);
 
