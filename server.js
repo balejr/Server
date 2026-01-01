@@ -6,6 +6,10 @@ const cors = require("cors");
 const multer = require("multer");
 const { connectToDatabase } = require("./config/db");
 
+// Capture startup time for version endpoint (helps identify stale instances)
+const SERVER_START_TIME = new Date().toISOString();
+const BUILD_VERSION = "2025-12-31-v3";
+
 // Import routes
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
@@ -28,7 +32,7 @@ app.use((req, res, next) => {
 });
 
 // Webhook endpoint needs raw body for Stripe signature verification
-app.use('/api/data/webhooks/stripe', express.raw({ type: 'application/json' }));
+app.use("/api/data/webhooks/stripe", express.raw({ type: "application/json" }));
 app.use(express.json());
 
 // Connect to the database
@@ -48,11 +52,18 @@ app.get("/", (req, res) => {
 });
 
 // Version endpoint for deployment verification
+// Use this to verify all Azure instances are running the same code
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "2025-12-31-v3",
-    deployedAt: new Date().toISOString(),
-    features: ["duplicate-email-check", "accessToken-response-format", "token-pair-signin"]
+    version: BUILD_VERSION,
+    serverStartedAt: SERVER_START_TIME,
+    currentTime: new Date().toISOString(),
+    nodeVersion: process.version,
+    features: [
+      "duplicate-email-check",
+      "accessToken-response-format",
+      "token-pair-signin",
+    ],
   });
 });
 
