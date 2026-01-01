@@ -179,7 +179,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       const existingUser = await emailCheckRequest
         .input("email", normalizedEmail)
         .query(
-          "SELECT COUNT(*) as count FROM dbo.UserLogin WHERE Email = @email"
+          "SELECT COUNT(*) as count FROM dbo.UserLogin WHERE LOWER(Email) = @email"
         );
 
       if (existingUser.recordset[0].count > 0) {
@@ -2263,11 +2263,11 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
 
     const userId = userResult.recordset[0].UserID;
 
-    // Check rate limit
+    // Check rate limit (use normalized email for consistent tracking)
     const rateLimitResult = await checkRateLimit(
       pool,
-      userId,
       email,
+      normalizedEmail,
       "password_reset"
     );
     if (!rateLimitResult.allowed) {
