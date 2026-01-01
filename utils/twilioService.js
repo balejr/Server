@@ -391,7 +391,13 @@ const recordOTPAttempt = async (
  * @param {object} transaction - Optional mssql transaction for atomic operations
  * @returns {Promise<void>}
  */
-const updateOTPStatus = async (pool, phoneOrEmail, purpose, status, transaction = null) => {
+const updateOTPStatus = async (
+  pool,
+  phoneOrEmail,
+  purpose,
+  status,
+  transaction = null
+) => {
   try {
     // Use transaction request if provided, otherwise use pool
     const mssql = require("mssql");
