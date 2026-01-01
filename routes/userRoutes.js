@@ -475,3 +475,20 @@ router.get('/preworkout/latest', authenticateToken, async (req, res) => {
 
 module.exports = router;
 // Deployment trigger: Wed Dec 31 18:04:55 PST 2025
+
+// Debug endpoint - can be removed after testing
+router.get('/debug-onboarding', authenticateToken, async (req, res) => {
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', req.user.userId)
+      .query('SELECT OnboardingData FROM dbo.UserProfile WHERE UserID = @userId');
+    res.json({ 
+      raw: result.recordset[0], 
+      hasData: !!result.recordset[0]?.OnboardingData,
+      serverVersion: 'v3-debug'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
