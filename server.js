@@ -1,4 +1,4 @@
-// server.js
+// server.js - v3 deployment fix
 
 require("dotenv").config(); // Load environment variables first
 const express = require("express");
