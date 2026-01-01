@@ -47,6 +47,15 @@ app.get("/", (req, res) => {
   res.send("ApogeeHnP backend is running!");
 });
 
+// Version endpoint for deployment verification
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: "2025-12-31-v2",
+    deployedAt: "2025-12-31T17:10:00Z",
+    features: ["duplicate-email-check", "accessToken-response-format"]
+  });
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
