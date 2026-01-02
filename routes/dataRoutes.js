@@ -5,7 +5,6 @@ const mssql = require('mssql');
 const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { paginate, paginatedResponse } = require('../utils/pagination');
-const { exerciseCache } = require('../utils/cache');
 const { buildUpdateQuery } = require('../utils/queryBuilder');
 const {
   dailyLogUpdateValidation,
@@ -24,7 +23,7 @@ const router = express.Router();
  * /data/exercises:
  *   get:
  *     summary: Get exercise database
- *     description: Fetch exercises from ExerciseDB API with server-side caching (24h TTL)
+ *     description: Fetch exercises from ExerciseDB API
  *     tags: [Exercises]
  *     responses:
  *       200:
@@ -39,18 +38,7 @@ const router = express.Router();
  *         description: Failed to fetch exercises
  */
 router.get('/exercises', authenticateToken, async (req, res) => {
-  const CACHE_KEY = 'exercisedb_all_exercises';
-  
   try {
-    // Check cache first
-    const cachedData = exerciseCache.get(CACHE_KEY);
-    if (cachedData) {
-      logger.debug('Returning cached exercise list');
-      return res.status(200).json(cachedData);
-    }
-
-    // Cache miss - fetch from ExerciseDB API
-    logger.info('Cache miss - fetching exercises from ExerciseDB API');
     const response = await axios.get('https://exercisedb.p.rapidapi.com/exercises?limit=1000&offset=0', {
       headers: {
         'X-RapidAPI-Key': process.env.RAPID_API_KEY,
@@ -69,10 +57,6 @@ router.get('/exercises', authenticateToken, async (req, res) => {
       secondaryMuscles: item.secondaryMuscles,
       instructions: item.instructions
     }));
-
-    // Store in cache (24h TTL)
-    exerciseCache.set(CACHE_KEY, exerciseList);
-    logger.info(`Cached ${exerciseList.length} exercises`);
 
     res.status(200).json(exerciseList);
   } catch (error) {
