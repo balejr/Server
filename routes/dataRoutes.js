@@ -6,6 +6,16 @@ const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { paginate, paginatedResponse } = require('../utils/pagination');
 const { exerciseCache } = require('../utils/cache');
+const { buildUpdateQuery } = require('../utils/queryBuilder');
+const {
+  dailyLogUpdateValidation,
+  exerciseExistenceUpdateValidation,
+  workoutRoutineUpdateValidation,
+  mesocycleUpdateValidation,
+  microcycleUpdateValidation,
+  idParamValidation,
+  logIdParamValidation
+} = require('../middleware/validators');
 const logger = require('../utils/logger');
 const router = express.Router();
 
@@ -141,39 +151,71 @@ router.get('/dailylogs', authenticateToken, async (req, res) => {
     }
 });
 
-// EDIT an existing daily log
-router.patch('/dailylog/:logId', authenticateToken, async (req, res) => {
+// EDIT an existing daily log (with field whitelisting and authorization)
+router.patch('/dailylog/:logId', authenticateToken, dailyLogUpdateValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { logId } = req.params;
     const fields = req.body;
 
-    const pool = getPool();
-    const request = pool.request().input('logId', logId);
-    const updates = Object.keys(fields).map((key) => {
-        request.input(key, fields[key]);
-        return `${key} = @${key}`;
-    }).join(', ');
-
     try {
-        await request.query(`UPDATE dbo.DailyLogs SET ${updates} WHERE LogID = @logId`);
-        res.status(200).json({ message: 'Daily log updated' });
+        const pool = getPool();
+        const request = pool.request()
+            .input('logId', logId)
+            .input('userId', userId);
+
+        // Use whitelist-based query builder to prevent SQL injection
+        const { success, updateClause, error, rejectedFields } = buildUpdateQuery('DailyLogs', fields, request);
+        
+        if (!success) {
+            return res.status(400).json({ 
+                success: false, 
+                message: error,
+                rejectedFields 
+            });
+        }
+
+        // Include UserID in WHERE clause for authorization
+        const result = await request.query(
+            `UPDATE dbo.DailyLogs SET ${updateClause} WHERE LogID = @logId AND UserID = @userId`
+        );
+
+        if (result.rowsAffected[0] === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Daily log not found or you do not have permission to edit it' 
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Daily log updated' });
     } catch (err) {
-        res.status(500).json({ message: 'Failed to update daily log' });
+        logger.error('DailyLog PATCH Error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to update daily log' });
     }
 });
 
-// DELETE daily log by ID
-router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
+// DELETE daily log by ID (with authorization)
+router.delete('/dailylog/:logId', authenticateToken, logIdParamValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { logId } = req.params;
   
     try {
       const pool = getPool();
-      await pool.request()
+      const result = await pool.request()
         .input('logId', logId)
-        .query('DELETE FROM dbo.DailyLogs WHERE LogID = @logId');
+        .input('userId', userId)
+        .query('DELETE FROM dbo.DailyLogs WHERE LogID = @logId AND UserID = @userId');
   
-      res.status(200).json({ message: 'Daily log deleted successfully' });
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Daily log not found or you do not have permission to delete it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Daily log deleted successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to delete daily log' });
+      logger.error('DailyLog DELETE Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to delete daily log' });
     }
 });
 
@@ -481,61 +523,103 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
     }
 });
 
-// PATCH edit an exercise instance
-router.patch('/exerciseexistence/:id', authenticateToken, async (req, res) => {
+// PATCH edit an exercise instance (with field whitelisting and authorization)
+router.patch('/exerciseexistence/:id', authenticateToken, exerciseExistenceUpdateValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
     const fields = req.body;
 
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
-
     try {
-      await request.query(`UPDATE dbo.ExerciseExistence SET ${updates} WHERE ExerciseExistenceID = @id`);
-      res.status(200).json({ message: 'Exercise existence updated' });
+      const pool = getPool();
+      const request = pool.request()
+        .input('id', id)
+        .input('userId', userId);
+
+      // Use whitelist-based query builder to prevent SQL injection
+      const { success, updateClause, error, rejectedFields } = buildUpdateQuery('ExerciseExistence', fields, request);
+      
+      if (!success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: error,
+          rejectedFields 
+        });
+      }
+
+      // Include UserID in WHERE clause for authorization
+      const result = await request.query(
+        `UPDATE dbo.ExerciseExistence SET ${updateClause} WHERE ExerciseExistenceID = @id AND UserID = @userId`
+      );
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Exercise not found or you do not have permission to edit it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Exercise existence updated' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to update exercise existence' });
+      logger.error('ExerciseExistence PATCH Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to update exercise existence' });
     }
 });
 
-// DELETE an exercise instance
+// DELETE an exercise instance (with authorization)
 // DELETE EXERCISE EXISTENCE AND REMOVE FROM ROUTINE
-router.delete('/exerciseexistence/:id', authenticateToken, async (req, res) => {
+router.delete('/exerciseexistence/:id', authenticateToken, idParamValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
 
     try {
       const pool = getPool();
 
-      // Remove the existence ID from any linked WorkoutRoutine
-      const routineQuery = await pool.request()
+      // First verify the exercise belongs to this user
+      const ownershipCheck = await pool.request()
         .input('id', id)
+        .input('userId', userId)
+        .query('SELECT ExerciseExistenceID FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id AND UserID = @userId');
+
+      if (ownershipCheck.recordset.length === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Exercise not found or you do not have permission to delete it' 
+        });
+      }
+
+      // Remove the existence ID from any linked WorkoutRoutine (using parameterized query)
+      // Use LIKE with parameterized pattern to avoid SQL injection
+      const searchPattern = `%${id}%`;
+      const routineQuery = await pool.request()
+        .input('userId', userId)
+        .input('searchPattern', searchPattern)
         .query(`
           SELECT WorkoutRoutineID, ExerciseInstances FROM dbo.WorkoutRoutine
-          WHERE ExerciseInstances LIKE '%${id}%'
+          WHERE UserID = @userId AND ExerciseInstances LIKE @searchPattern
         `);
 
       for (const routine of routineQuery.recordset) {
-        const ids = routine.ExerciseInstances.split(',').map(i => i.trim()).filter(i => i !== id);
+        const ids = routine.ExerciseInstances.split(',').map(i => i.trim()).filter(i => i !== String(id));
         await pool.request()
           .input('instances', ids.join(','))
           .input('routineId', routine.WorkoutRoutineID)
+          .input('userId', userId)
           .query(`
-            UPDATE dbo.WorkoutRoutine SET ExerciseInstances = @instances WHERE WorkoutRoutineID = @routineId
+            UPDATE dbo.WorkoutRoutine SET ExerciseInstances = @instances 
+            WHERE WorkoutRoutineID = @routineId AND UserID = @userId
           `);
       }
 
-      await pool.request()
+      // Delete with UserID verification
+      const result = await pool.request()
         .input('id', id)
-        .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id');
+        .input('userId', userId)
+        .query('DELETE FROM dbo.ExerciseExistence WHERE ExerciseExistenceID = @id AND UserID = @userId');
 
-      res.status(200).json({ message: 'Exercise existence deleted and routine updated' });
+      res.status(200).json({ success: true, message: 'Exercise existence deleted and routine updated' });
     } catch (err) {
-      console.error('ExerciseExistence DELETE Error:', err);
-      res.status(500).json({ message: 'Failed to delete exercise existence' });
+      logger.error('ExerciseExistence DELETE Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to delete exercise existence' });
     }
 });
 
@@ -663,36 +747,71 @@ router.get('/workoutroutine/exerciseinstances/:id', authenticateToken, async (re
     }
 });
 
-// PATCH edit a workout routine
-router.patch('/workoutroutine/:id', authenticateToken, async (req, res) => {
+// PATCH edit a workout routine (with field whitelisting and authorization)
+router.patch('/workoutroutine/:id', authenticateToken, workoutRoutineUpdateValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
     const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
 
     try {
-      await request.query(`UPDATE dbo.WorkoutRoutine SET ${updates} WHERE WorkoutRoutineID = @id`);
-      res.status(200).json({ message: 'Workout routine updated successfully' });
+      const pool = getPool();
+      const request = pool.request()
+        .input('id', id)
+        .input('userId', userId);
+
+      // Use whitelist-based query builder to prevent SQL injection
+      const { success, updateClause, error, rejectedFields } = buildUpdateQuery('WorkoutRoutine', fields, request);
+      
+      if (!success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: error,
+          rejectedFields 
+        });
+      }
+
+      // Include UserID in WHERE clause for authorization
+      const result = await request.query(
+        `UPDATE dbo.WorkoutRoutine SET ${updateClause} WHERE WorkoutRoutineID = @id AND UserID = @userId`
+      );
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Workout routine not found or you do not have permission to edit it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Workout routine updated successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to update workout routine' });
+      logger.error('WorkoutRoutine PATCH Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to update workout routine' });
     }
 });
 
-// DELETE a workout routine
-router.delete('/workoutroutine/:id', authenticateToken, async (req, res) => {
+// DELETE a workout routine (with authorization)
+router.delete('/workoutroutine/:id', authenticateToken, idParamValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
+    
     try {
       const pool = getPool();
-      await pool.request()
+      const result = await pool.request()
         .input('id', id)
-        .query('DELETE FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id');
-      res.status(200).json({ message: 'Workout routine deleted successfully' });
+        .input('userId', userId)
+        .query('DELETE FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id AND UserID = @userId');
+      
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Workout routine not found or you do not have permission to delete it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Workout routine deleted successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to delete workout routine' });
+      logger.error('WorkoutRoutine DELETE Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to delete workout routine' });
     }
 });
 
@@ -761,36 +880,71 @@ router.get('/mesocycles', authenticateToken, async (req, res) => {
     }
 });
 
-// EDIT specific mesocycle
-router.patch('/mesocycle/:id', authenticateToken, async (req, res) => {
+// EDIT specific mesocycle (with field whitelisting and authorization)
+router.patch('/mesocycle/:id', authenticateToken, mesocycleUpdateValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
     const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
 
     try {
-      await request.query(`UPDATE dbo.Mesocycles SET ${updates} WHERE mesocycle_id = @id`);
-      res.status(200).json({ message: 'Mesocycle updated successfully' });
+      const pool = getPool();
+      const request = pool.request()
+        .input('id', id)
+        .input('userId', userId);
+
+      // Use whitelist-based query builder to prevent SQL injection
+      const { success, updateClause, error, rejectedFields } = buildUpdateQuery('Mesocycles', fields, request);
+      
+      if (!success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: error,
+          rejectedFields 
+        });
+      }
+
+      // Include UserId in WHERE clause for authorization
+      const result = await request.query(
+        `UPDATE dbo.Mesocycles SET ${updateClause} WHERE mesocycle_id = @id AND UserId = @userId`
+      );
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Mesocycle not found or you do not have permission to edit it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Mesocycle updated successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to update mesocycle' });
+      logger.error('Mesocycle PATCH Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to update mesocycle' });
     }
 });
 
-// DELETE a mesocycle
-router.delete('/mesocycle/:id', authenticateToken, async (req, res) => {
+// DELETE a mesocycle (with authorization)
+router.delete('/mesocycle/:id', authenticateToken, idParamValidation, async (req, res) => {
+  const userId = req.user.userId;
   const { id } = req.params;
+  
   try {
     const pool = getPool();
-    await pool.request()
+    const result = await pool.request()
       .input('id', id)
-      .query('DELETE FROM dbo.Mesocycles WHERE mesocycle_id = @id');
-    res.status(200).json({ message: 'Mesocycle deleted successfully' });
+      .input('userId', userId)
+      .query('DELETE FROM dbo.Mesocycles WHERE mesocycle_id = @id AND UserId = @userId');
+    
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Mesocycle not found or you do not have permission to delete it' 
+      });
+    }
+
+    res.status(200).json({ success: true, message: 'Mesocycle deleted successfully' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete mesocycle' });
+    logger.error('Mesocycle DELETE Error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to delete mesocycle' });
   }
 });
 
@@ -917,36 +1071,81 @@ router.get('/microcycles/:mesocycle_id', authenticateToken, async (req, res) => 
     }
 });
 
-// PATCH edit a specific microcycle
-router.patch('/microcycle/:id', authenticateToken, async (req, res) => {
+// PATCH edit a specific microcycle (with field whitelisting and authorization via mesocycle)
+router.patch('/microcycle/:id', authenticateToken, microcycleUpdateValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
     const fields = req.body;
-    const pool = getPool();
-    const request = pool.request().input('id', id);
-    const updates = Object.keys(fields).map((key) => {
-      request.input(key, fields[key]);
-      return `${key} = @${key}`;
-    }).join(', ');
 
     try {
-      await request.query(`UPDATE dbo.Microcycles SET ${updates} WHERE microcycle_id = @id`);
-      res.status(200).json({ message: 'Microcycle updated successfully' });
+      const pool = getPool();
+      const request = pool.request()
+        .input('id', id)
+        .input('userId', userId);
+
+      // Use whitelist-based query builder to prevent SQL injection
+      const { success, updateClause, error, rejectedFields } = buildUpdateQuery('Microcycles', fields, request);
+      
+      if (!success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: error,
+          rejectedFields 
+        });
+      }
+
+      // Verify ownership through mesocycle JOIN and update
+      const result = await request.query(`
+        UPDATE m SET ${updateClause}
+        FROM dbo.Microcycles m
+        INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
+        WHERE m.microcycle_id = @id AND ms.UserId = @userId
+      `);
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Microcycle not found or you do not have permission to edit it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Microcycle updated successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to update microcycle' });
+      logger.error('Microcycle PATCH Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to update microcycle' });
     }
 });
 
-// DELETE a specific microcyle
-router.delete('/microcycle/:id', authenticateToken, async (req, res) => {
+// DELETE a specific microcycle (with authorization via mesocycle)
+router.delete('/microcycle/:id', authenticateToken, idParamValidation, async (req, res) => {
+    const userId = req.user.userId;
     const { id } = req.params;
+    
     try {
       const pool = getPool();
-      await pool.request()
+      
+      // Delete with ownership verification through mesocycle JOIN
+      const result = await pool.request()
         .input('id', id)
-        .query('DELETE FROM dbo.Microcycles WHERE microcycle_id = @id');
-      res.status(200).json({ message: 'Microcycle deleted successfully' });
+        .input('userId', userId)
+        .query(`
+          DELETE m
+          FROM dbo.Microcycles m
+          INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
+          WHERE m.microcycle_id = @id AND ms.UserId = @userId
+        `);
+      
+      if (result.rowsAffected[0] === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Microcycle not found or you do not have permission to delete it' 
+        });
+      }
+
+      res.status(200).json({ success: true, message: 'Microcycle deleted successfully' });
     } catch (err) {
-      res.status(500).json({ message: 'Failed to delete microcycle' });
+      logger.error('Microcycle DELETE Error:', err.message);
+      res.status(500).json({ success: false, message: 'Failed to delete microcycle' });
     }
 });
 //--------UNFINISED EXERCISES (Jump Back In) -------------------
