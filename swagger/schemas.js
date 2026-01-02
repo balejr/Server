@@ -51,7 +51,7 @@ module.exports = {
       height: { type: 'number', example: 70 },
       gender: { type: 'string', enum: ['male', 'female', 'other'] },
       fitnessLevel: { type: 'string', enum: ['beginner', 'intermediate', 'advanced'] },
-      preferredLoginMethod: { type: 'string', enum: ['email', 'phone', 'biometric'], default: 'email' }
+      preferredLoginMethod: { type: 'string', enum: ['email', 'phone'], default: 'email' }
     }
   },
   SigninRequest: {
@@ -165,26 +165,6 @@ module.exports = {
       mfaSessionToken: { type: 'string', example: 'mfa_session_token_here' },
       code: { type: 'string', minLength: 6, maxLength: 6, example: '123456' },
       method: { type: 'string', enum: ['sms', 'email'], example: 'sms' }
-    }
-  },
-
-  // ============================================
-  // Biometric Schemas
-  // ============================================
-  BiometricLoginRequest: {
-    type: 'object',
-    required: ['userId', 'biometricToken'],
-    properties: {
-      userId: { type: 'integer', example: 123 },
-      biometricToken: { type: 'string', example: 'biometric_token_here' }
-    }
-  },
-  BiometricEnableResponse: {
-    type: 'object',
-    properties: {
-      success: { type: 'boolean', example: true },
-      biometricToken: { type: 'string', example: 'generated_biometric_token' },
-      message: { type: 'string', example: 'Biometric login enabled' }
     }
   },
 

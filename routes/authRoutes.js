@@ -1998,7 +1998,7 @@ router.post(
  * /auth/update-login-preference:
  *   patch:
  *     summary: Update preferred login method
- *     description: Set the user's preferred login method (email, phone, or biometric)
+ *     description: Set the user's preferred login method (email or phone)
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -2010,7 +2010,7 @@ router.post(
  *             properties:
  *               preferredLoginMethod:
  *                 type: string
- *                 enum: [email, phone, biometric]
+ *                 enum: [email, phone]
  *     responses:
  *       200:
  *         description: Preference updated
@@ -2025,11 +2025,11 @@ router.patch(
     const userId = req.user.userId;
 
     try {
-      const validMethods = ["email", "phone", "biometric"];
+      const validMethods = ["email", "phone"];
       if (!validMethods.includes(preferredLoginMethod)) {
         return res.status(400).json({
           success: false,
-          message: "Invalid login method. Must be email, phone, or biometric",
+          message: "Invalid login method. Must be email or phone",
         });
       }
 
@@ -2046,22 +2046,6 @@ router.patch(
             success: false,
             message:
               "Phone number must be verified before setting as preferred login method",
-          });
-        }
-      }
-
-      // If biometric, verify biometric is enabled
-      if (preferredLoginMethod === "biometric") {
-        const biometricCheck = await pool.request().input("userId", userId)
-          .query(`
-          SELECT BiometricEnabled FROM dbo.UserLogin WHERE UserID = @userId
-        `);
-
-        if (!biometricCheck.recordset[0]?.BiometricEnabled) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Biometric authentication must be enabled before setting as preferred login method",
           });
         }
       }
@@ -2090,243 +2074,8 @@ router.patch(
   }
 );
 
-/**
- * @swagger
- * /auth/enable-biometric:
- *   post:
- *     summary: Enable biometric login
- *     description: Generate and store a biometric token for Face ID/Touch ID login
- *     tags: [Biometric]
- *     responses:
- *       200:
- *         description: Biometric enabled
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/BiometricEnableResponse'
- *       500:
- *         description: Error generating token
- */
-router.post("/enable-biometric", authenticateToken, async (req, res) => {
-  const userId = req.user.userId;
-
-  try {
-    const pool = getPool();
-
-    // Generate a secure random biometric token (64 hex chars = 32 bytes)
-    const biometricToken = crypto.randomBytes(32).toString("hex");
-
-    // Validate generated token format (defense-in-depth)
-    if (biometricToken.length < 32 || biometricToken.length > 256) {
-      return res.status(500).json({
-        success: false,
-        message: "Error generating biometric token",
-      });
-    }
-
-    // Hash the biometric token before storing
-    const hashedToken = await bcrypt.hash(biometricToken, 12);
-
-    await pool
-      .request()
-      .input("userId", userId)
-      .input("biometricToken", hashedToken).query(`
-        UPDATE dbo.UserLogin
-        SET BiometricEnabled = 1, BiometricToken = @biometricToken
-        WHERE UserID = @userId
-      `);
-
-    // Return the plain token to client (they store it, we store the hash)
-    res.status(200).json({
-      success: true,
-      message: "Biometric authentication enabled",
-      biometricToken,
-    });
-  } catch (error) {
-    logger.error("Enable Biometric Error", { error: error.message });
-    res.status(500).json({
-      success: false,
-      message: "Error enabling biometric authentication",
-    });
-  }
-});
-
-/**
- * @swagger
- * /auth/biometric-login:
- *   post:
- *     summary: Login with biometric token
- *     description: Authenticate using a stored biometric token (after Face ID/Touch ID verification)
- *     tags: [Biometric]
- *     security: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/BiometricLoginRequest'
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/TokenPair'
- *       400:
- *         description: Biometric not enabled
- *       401:
- *         description: Biometric verification failed
- *       404:
- *         description: User not found
- */
-router.post("/biometric-login", checkAuthRateLimit, async (req, res) => {
-  const { userId, biometricToken } = req.body;
-
-  try {
-    if (!userId || !biometricToken) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID and biometric token are required",
-      });
-    }
-
-    const pool = getPool();
-
-    // Get user and biometric token
-    const result = await pool.request().input("userId", userId).query(`
-        SELECT L.UserID, L.Email, L.BiometricEnabled, L.BiometricToken,
-               L.PreferredLoginMethod, L.MFAEnabled,
-               P.PhoneNumber, P.PhoneVerified
-        FROM dbo.UserLogin L
-        INNER JOIN dbo.UserProfile P ON L.UserID = P.UserID
-        WHERE L.UserID = @userId
-      `);
-
-    if (result.recordset.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const user = result.recordset[0];
-
-    if (!user.BiometricEnabled || !user.BiometricToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Biometric authentication not enabled for this account",
-      });
-    }
-
-    // Verify biometric token
-    const isTokenValid = await bcrypt.compare(
-      biometricToken,
-      user.BiometricToken
-    );
-
-    if (!isTokenValid) {
-      return res.status(401).json({
-        success: false,
-        message: "Biometric verification failed",
-      });
-    }
-
-    // Reset rate limit on success
-    resetAuthRateLimit(req);
-
-    // Generate tokens
-    const tokens = generateTokenPair({ userId: user.UserID });
-    const refreshTokenExpiry = getRefreshTokenExpiry();
-
-    // Store refresh token and clear TokenInvalidatedAt for new session
-    await pool
-      .request()
-      .input("userId", user.UserID)
-      .input("refreshToken", tokens.refreshToken)
-      .input("refreshTokenExpires", refreshTokenExpiry).query(`
-        UPDATE dbo.UserLogin 
-        SET RefreshToken = @refreshToken, 
-            RefreshTokenExpires = @refreshTokenExpires,
-            TokenInvalidatedAt = NULL
-        WHERE UserID = @userId
-      `);
-
-    res.status(200).json({
-      success: true,
-      message: "Biometric login successful",
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn,
-      user: {
-        id: user.UserID,
-        email: user.Email,
-        phoneNumber: user.PhoneNumber,
-        phoneVerified: user.PhoneVerified,
-        preferredLoginMethod: user.PreferredLoginMethod,
-        mfaEnabled: user.MFAEnabled,
-        biometricEnabled: user.BiometricEnabled,
-      },
-    });
-  } catch (error) {
-    logger.error("Biometric Login Error", { error: error.message });
-    res.status(500).json({
-      success: false,
-      message: "Error during biometric login",
-    });
-  }
-});
-
-/**
- * @swagger
- * /auth/disable-biometric:
- *   post:
- *     summary: Disable biometric login
- *     description: Remove biometric authentication from account
- *     tags: [Biometric]
- *     responses:
- *       200:
- *         description: Biometric disabled
- *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
- */
-router.post("/disable-biometric", authenticateToken, async (req, res) => {
-  const userId = req.user.userId;
-
-  try {
-    const pool = getPool();
-
-    // Check if biometric is the preferred login method
-    const userResult = await pool.request().input("userId", userId).query(`
-        SELECT PreferredLoginMethod FROM dbo.UserLogin WHERE UserID = @userId
-      `);
-
-    if (userResult.recordset[0]?.PreferredLoginMethod === "biometric") {
-      // Reset to email as default
-      await pool.request().input("userId", userId).query(`
-          UPDATE dbo.UserLogin
-          SET BiometricEnabled = 0, BiometricToken = NULL, PreferredLoginMethod = 'email'
-          WHERE UserID = @userId
-        `);
-    } else {
-      await pool.request().input("userId", userId).query(`
-          UPDATE dbo.UserLogin
-          SET BiometricEnabled = 0, BiometricToken = NULL
-          WHERE UserID = @userId
-        `);
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Biometric authentication disabled",
-    });
-  } catch (error) {
-    logger.error("Disable Biometric Error", { error: error.message });
-    res.status(500).json({
-      success: false,
-      message: "Error disabling biometric authentication",
-    });
-  }
-});
+// NOTE: Biometric endpoints removed - Face ID/Touch ID is now handled locally on the device
+// See: Face ID Session Gate implementation (local-only, no backend interaction)
 
 /**
  * @swagger
