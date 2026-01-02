@@ -367,10 +367,25 @@ router.delete('/dailylog/:logId', authenticateToken, logIdParamValidation, async
 router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   
+  // Validate userId exists
+  if (!userId) {
+    logger.error('Weekly summary failed: Missing userId from token');
+    return res.status(400).json({ success: false, message: 'User ID is required' });
+  }
+  
   try {
     const pool = getPool();
+    
+    // Verify pool is connected
+    if (!pool) {
+      logger.error('Weekly summary failed: Database pool not initialized');
+      return res.status(500).json({ success: false, message: 'Database connection unavailable' });
+    }
+    
+    // Simplified query that tracks routine-level completion
+    // (ExerciseExistence doesn't have WorkoutRoutineID - exercises are linked via comma-separated IDs)
     const result = await pool.request()
-      .input('userId', userId)
+      .input('userId', mssql.Int, userId)
       .query(`
         WITH DateRange AS (
           SELECT CAST(DATEADD(DAY, -n, GETDATE()) AS DATE) as Date, n as DayOffset
@@ -379,11 +394,9 @@ router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
         DailyWorkouts AS (
           SELECT 
             CAST(wr.WorkoutRoutineDate AS DATE) as WorkoutDate,
-            COUNT(DISTINCT wr.WorkoutRoutineID) as RoutineCount,
-            COUNT(ee.ExerciseExistenceID) as TotalExercises,
-            SUM(CASE WHEN ee.Completed = 1 THEN 1 ELSE 0 END) as CompletedExercises
+            COUNT(*) as TotalRoutines,
+            SUM(CASE WHEN wr.Completed = 1 THEN 1 ELSE 0 END) as CompletedRoutines
           FROM dbo.WorkoutRoutine wr
-          LEFT JOIN dbo.ExerciseExistence ee ON ee.WorkoutRoutineID = wr.WorkoutRoutineID
           WHERE wr.UserID = @userId 
             AND CAST(wr.WorkoutRoutineDate AS DATE) >= CAST(DATEADD(DAY, -6, GETDATE()) AS DATE)
           GROUP BY CAST(wr.WorkoutRoutineDate AS DATE)
@@ -391,11 +404,11 @@ router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
         SELECT 
           dr.Date,
           DATENAME(WEEKDAY, dr.Date) as DayName,
-          COALESCE(dw.RoutineCount, 0) as PlannedWorkouts,
-          COALESCE(dw.TotalExercises, 0) as TotalExercises,
-          COALESCE(dw.CompletedExercises, 0) as CompletedExercises,
-          CASE WHEN dw.TotalExercises > 0 
-            THEN CAST(dw.CompletedExercises * 100.0 / dw.TotalExercises AS DECIMAL(5,2))
+          COALESCE(dw.TotalRoutines, 0) as PlannedWorkouts,
+          COALESCE(dw.TotalRoutines, 0) as TotalExercises,
+          COALESCE(dw.CompletedRoutines, 0) as CompletedExercises,
+          CASE WHEN dw.TotalRoutines > 0 
+            THEN CAST(dw.CompletedRoutines * 100.0 / dw.TotalRoutines AS DECIMAL(5,2))
             ELSE 0 
           END as CompletionPercent
         FROM DateRange dr
@@ -405,7 +418,14 @@ router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
     
     res.status(200).json({ success: true, data: result.recordset });
   } catch (err) {
-    logger.error('Failed to fetch weekly summary:', err.message);
+    // Enhanced error logging with full stack trace
+    logger.error('Failed to fetch weekly summary:', {
+      userId,
+      error: err.message,
+      stack: err.stack,
+      code: err.code,
+      state: err.state
+    });
     res.status(500).json({ success: false, message: 'Failed to fetch weekly summary' });
   }
 });
