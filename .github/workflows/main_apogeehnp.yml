@@ -31,9 +31,11 @@ jobs:
             config/
             middleware/
             routes/
+            swagger/
             types/
             utils/
             server.js
+            swagger.js
             package.json
             package-lock.json
             !**/*.md
