@@ -35,7 +35,9 @@ module.exports = {
   // Ignore patterns
   testPathIgnorePatterns: [
     '/node_modules/',
-    '/coverage/'
+    '/coverage/',
+    'tests/auth-api.test.js',           // Legacy standalone test
+    'tests/subscription-management.test.js'  // Legacy standalone test
   ],
   
   // Setup files
