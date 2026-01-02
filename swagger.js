@@ -28,6 +28,10 @@ const options = {
         description: 'API Base Path'
       },
       {
+        url: 'http://localhost:3000/api',
+        description: 'Local Development Server'
+      },
+      {
         url: 'https://apogeehnp.azurewebsites.net/api',
         description: 'Production Server'
       }
@@ -132,6 +136,10 @@ const options = {
       {
         name: 'User',
         description: 'User profile management'
+      },
+      {
+        name: 'Dashboard',
+        description: 'Dashboard analytics and weekly summaries'
       },
       {
         name: 'Daily Logs',

@@ -145,7 +145,7 @@ const incrementUsage = async (userId, inquiryType = "general") => {
 
 /**
  * @swagger
- * /usage/usage:
+ * /usage:
  *   get:
  *     summary: Get current usage stats
  *     description: Retrieve current week's API usage statistics for the authenticated user
@@ -157,6 +157,10 @@ const incrementUsage = async (userId, inquiryType = "general") => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/UsageStats'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/usage", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -245,7 +249,7 @@ router.get("/usage", authenticateToken, async (req, res) => {
 
 /**
  * @swagger
- * /usage/usage/reset:
+ * /usage/reset:
  *   post:
  *     summary: Reset usage (admin)
  *     description: Reset current week's usage counters for testing
@@ -253,6 +257,14 @@ router.get("/usage", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Usage reset successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/usage/reset", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -284,7 +296,7 @@ router.post("/usage/reset", authenticateToken, async (req, res) => {
 
 /**
  * @swagger
- * /usage/usage/history:
+ * /usage/history:
  *   get:
  *     summary: Get usage history
  *     description: Retrieve historical API usage data for the authenticated user
@@ -292,6 +304,32 @@ router.post("/usage/reset", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Usage history data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 usage_history:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       WeekStart:
+ *                         type: string
+ *                         format: date
+ *                       GeneralInquiryCount:
+ *                         type: integer
+ *                       WorkoutInquiryCount:
+ *                         type: integer
+ *                       CreateDate:
+ *                         type: string
+ *                         format: date-time
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/usage/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;

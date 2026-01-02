@@ -563,9 +563,13 @@ const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
  *             schema:
  *               $ref: '#/components/schemas/ChatResponse'
  *       400:
- *         description: Message is required
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       429:
  *         description: Weekly inquiry limit reached
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/chat", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -724,6 +728,10 @@ router.post("/chat", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Chat history
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/chat/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -813,6 +821,10 @@ router.get("/chat/history", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Chat history cleared
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.delete("/chat/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;

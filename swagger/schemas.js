@@ -22,6 +22,16 @@ module.exports = {
       message: { type: 'string', example: 'Operation completed successfully' }
     }
   },
+  PaginatedResponse: {
+    type: 'object',
+    properties: {
+      data: { type: 'array', items: { type: 'object' } },
+      page: { type: 'integer', example: 1 },
+      limit: { type: 'integer', example: 20 },
+      total: { type: 'integer', example: 100 },
+      totalPages: { type: 'integer', example: 5 }
+    }
+  },
 
   // ============================================
   // Authentication Schemas
@@ -245,6 +255,9 @@ module.exports = {
       WaterIntake: { type: 'number', example: 2.5 },
       SleepQuality: { type: 'string', example: 'good' },
       CaloriesBurned: { type: 'integer', example: 2500 },
+      RestingHeartrate: { type: 'integer', example: 60 },
+      HeartrateVariability: { type: 'integer', example: 45 },
+      Weight: { type: 'number', example: 175 },
       CreatedAt: { type: 'string', format: 'date-time' },
       UpdatedAt: { type: 'string', format: 'date-time' }
     }
@@ -258,7 +271,10 @@ module.exports = {
       heartrate: { type: 'integer', example: 72 },
       waterIntake: { type: 'number', example: 2.5 },
       sleepQuality: { type: 'string', example: 'good' },
-      caloriesBurned: { type: 'integer', example: 2500 }
+      caloriesBurned: { type: 'integer', example: 2500 },
+      restingHeartRate: { type: 'integer', example: 60 },
+      heartrateVariability: { type: 'integer', example: 45 },
+      weight: { type: 'number', example: 175 }
     }
   },
 
@@ -316,19 +332,33 @@ module.exports = {
     properties: {
       WorkoutRoutineID: { type: 'integer', example: 1 },
       UserID: { type: 'integer', example: 123 },
-      RoutineName: { type: 'string', example: 'Push Day' },
-      Date: { type: 'string', format: 'date', example: '2025-01-01' },
-      Description: { type: 'string', example: 'Chest, shoulders, triceps' },
+      WorkoutName: { type: 'string', example: 'Push Day' },
+      WorkoutRoutineDate: { type: 'string', format: 'date', example: '2025-01-01' },
+      ExerciseInstances: { type: 'string', example: '1,2,3' },
+      Equipment: { type: 'string', example: 'barbell,dumbbell' },
+      Duration: { type: 'integer', example: 60 },
+      CaloriesBurned: { type: 'integer', example: 500 },
+      Intensity: { type: 'integer', example: 7 },
+      Load: { type: 'number', example: 15000 },
+      DurationLeft: { type: 'integer', example: 0 },
+      Completed: { type: 'boolean', example: false },
       CreatedAt: { type: 'string', format: 'date-time' }
     }
   },
   CreateWorkoutRoutineRequest: {
     type: 'object',
-    required: ['routineName', 'date'],
+    required: ['workoutName', 'workoutRoutineDate'],
     properties: {
-      routineName: { type: 'string', example: 'Push Day' },
-      date: { type: 'string', format: 'date', example: '2025-01-01' },
-      description: { type: 'string', example: 'Chest, shoulders, triceps' }
+      workoutName: { type: 'string', example: 'Push Day' },
+      workoutRoutineDate: { type: 'string', format: 'date', example: '2025-01-01' },
+      exerciseInstances: { type: 'string', description: 'Comma-separated exercise instance IDs', example: '1,2,3' },
+      equipment: { type: 'string', example: 'barbell,dumbbell' },
+      duration: { type: 'integer', description: 'Duration in minutes', example: 60 },
+      caloriesBurned: { type: 'integer', example: 500 },
+      intensity: { type: 'integer', description: 'Intensity level 1-10', example: 7 },
+      load: { type: 'number', description: 'Total load volume', example: 15000 },
+      durationLeft: { type: 'integer', example: 0 },
+      completed: { type: 'boolean', example: false }
     }
   },
 

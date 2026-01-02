@@ -344,8 +344,12 @@ const deleteWorkoutPlan = async (planId, userId) => {
  *                   type: boolean
  *                 plan:
  *                   $ref: '#/components/schemas/AIWorkoutPlan'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: No workout plans found
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/plans/recent", authenticateToken, async (req, res) => {
   try {
@@ -382,6 +386,10 @@ router.get("/plans/recent", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: List of workout plans
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/plans", authenticateToken, async (req, res) => {
   try {
@@ -416,8 +424,12 @@ router.get("/plans", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Workout plan data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Plan not found
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/plans/:planId", authenticateToken, async (req, res) => {
   try {
@@ -468,9 +480,13 @@ router.get("/plans/:planId", authenticateToken, async (req, res) => {
  *       200:
  *         description: Status updated
  *       400:
- *         description: Status required
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Plan not found
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.put("/plans/:planId/status", authenticateToken, async (req, res) => {
   try {
@@ -522,8 +538,12 @@ router.put("/plans/:planId/status", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Plan deleted
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Plan not found
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.delete("/plans/:planId", authenticateToken, async (req, res) => {
   try {

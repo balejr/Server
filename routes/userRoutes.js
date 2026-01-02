@@ -27,7 +27,9 @@ const router = express.Router();
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: User not found
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -69,7 +71,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  *       500:
- *         description: Failed to update profile
+ *         $ref: '#/components/responses/ServerError'
  */
 router.patch("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -136,7 +138,7 @@ router.patch("/profile", authenticateToken, async (req, res) => {
  *       403:
  *         description: MFA verification required
  *       500:
- *         description: Failed to delete account
+ *         $ref: '#/components/responses/ServerError'
  */
 router.delete(
   "/profile",

@@ -34,8 +34,10 @@ const router = express.Router();
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/Exercise'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       500:
- *         description: Failed to fetch exercises
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/exercises", authenticateToken, async (req, res) => {
   try {
@@ -85,8 +87,10 @@ router.get("/exercises", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Daily log added successfully
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       500:
- *         description: Failed to insert daily log
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/dailylog", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -150,8 +154,12 @@ router.post("/dailylog", authenticateToken, async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/DailyLog'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         $ref: '#/components/responses/NotFoundError'
  *       500:
- *         description: Failed to fetch daily log
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/dailylog/:logId", authenticateToken, async (req, res) => {
   const { logId } = req.params;
@@ -190,8 +198,10 @@ router.get("/dailylog/:logId", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Paginated list of daily logs
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       500:
- *         description: Failed to fetch daily logs
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/dailylogs", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -256,9 +266,13 @@ router.get("/dailylogs", authenticateToken, async (req, res) => {
  *       200:
  *         description: Daily log updated
  *       400:
- *         description: Invalid fields
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Log not found or unauthorized
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.patch(
   "/dailylog/:logId",
@@ -330,8 +344,12 @@ router.patch(
  *     responses:
  *       200:
  *         description: Daily log deleted
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Log not found or unauthorized
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.delete(
   "/dailylog/:logId",
@@ -378,7 +396,7 @@ router.delete(
  *   get:
  *     summary: Get weekly workout summary
  *     description: Get aggregated workout completion data for the past 7 days
- *     tags: [Workouts]
+ *     tags: [Dashboard]
  *     responses:
  *       200:
  *         description: Weekly summary data
@@ -407,6 +425,10 @@ router.delete(
  *                         type: integer
  *                       CompletionPercent:
  *                         type: number
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/dashboard/weekly-summary", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -507,7 +529,11 @@ router.get("/dashboard/weekly-summary", authenticateToken, async (req, res) => {
  *       200:
  *         description: Exercises added successfully
  *       400:
- *         description: No exercises provided
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/exerciseexistence", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -1028,6 +1054,10 @@ router.delete(
  *     responses:
  *       200:
  *         description: Workout routine created
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/workoutroutine", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -1091,6 +1121,12 @@ router.post("/workoutroutine", authenticateToken, async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/WorkoutRoutine'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/workoutroutine/:id", authenticateToken, async (req, res) => {
   const { id } = req.params;
@@ -1124,6 +1160,10 @@ router.get("/workoutroutine/:id", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Paginated list of workout routines
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/workoutroutines", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -1177,6 +1217,10 @@ router.get("/workoutroutines", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: Workout routines for the specified date
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get(
   "/workoutroutines/date/:date",
@@ -1219,6 +1263,10 @@ router.get(
  *     responses:
  *       200:
  *         description: List of exercise instances
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get(
   "/workoutroutine/exerciseinstances/:id",
@@ -1268,11 +1316,22 @@ router.get(
  *         required: true
  *         schema:
  *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateWorkoutRoutineRequest'
  *     responses:
  *       200:
  *         description: Workout routine updated
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Not found or unauthorized
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.patch(
   "/workoutroutine/:id",
@@ -1344,8 +1403,12 @@ router.patch(
  *     responses:
  *       200:
  *         description: Workout routine deleted
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
  *       404:
- *         description: Not found or unauthorized
+ *         $ref: '#/components/responses/NotFoundError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.delete(
   "/workoutroutine/:id",
@@ -1414,6 +1477,10 @@ router.delete(
  *     responses:
  *       200:
  *         description: Mesocycle created
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.post("/mesocycle", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
@@ -1463,6 +1530,10 @@ router.post("/mesocycle", authenticateToken, async (req, res) => {
  *     responses:
  *       200:
  *         description: List of mesocycles
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
  */
 router.get("/mesocycles", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
