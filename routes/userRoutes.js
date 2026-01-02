@@ -6,9 +6,29 @@ const { authenticateToken } = require("../middleware/authMiddleware");
 const { requireMFA } = require("../middleware/mfaMiddleware");
 const bcrypt = require("bcrypt");
 
+const logger = require("../utils/logger");
+
 const router = express.Router();
 
-// GET user profile
+/**
+ * @swagger
+ * /user/profile:
+ *   get:
+ *     summary: Get user profile
+ *     description: Retrieve the current user's profile information
+ *     tags: [User]
+ *     responses:
+ *       200:
+ *         description: Profile data retrieved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/UserProfile'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: User not found
+ */
 router.get("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -26,12 +46,31 @@ router.get("/profile", authenticateToken, async (req, res) => {
 
     res.status(200).json(result.recordset[0]);
   } catch (error) {
-    console.error("Get Profile Error:", error);
+    logger.error("Get Profile Error", { error: error.message });
     res.status(500).json({ message: "Failed to get user profile" });
   }
 });
 
-// PATCH update user profile
+/**
+ * @swagger
+ * /user/profile:
+ *   patch:
+ *     summary: Update user profile
+ *     description: Update the current user's profile information
+ *     tags: [User]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UpdateProfileRequest'
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         description: Failed to update profile
+ */
 router.patch("/profile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
@@ -73,12 +112,32 @@ router.patch("/profile", authenticateToken, async (req, res) => {
 
     res.status(200).json({ message: "Profile updated successfully" });
   } catch (error) {
-    console.error("Profile Update Error:", error);
+    logger.error("Profile Update Error", { error: error.message });
     res.status(500).json({ message: "Failed to update profile" });
   }
 });
 
-// DELETE user profile - requires MFA if enabled, cleans up all user data
+/**
+ * @swagger
+ * /user/profile:
+ *   delete:
+ *     summary: Delete user account
+ *     description: Permanently delete user account and all associated data. Requires MFA verification if enabled.
+ *     tags: [User]
+ *     responses:
+ *       200:
+ *         description: Account deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         description: MFA verification required
+ *       500:
+ *         description: Failed to delete account
+ */
 router.delete(
   "/profile",
   authenticateToken,
@@ -135,9 +194,9 @@ router.delete(
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        console.error("Transaction rollback error:", rollbackError);
+        logger.error("Transaction rollback error", { error: rollbackError.message });
       }
-      console.error("Profile Delete Error:", error);
+      logger.error("Profile Delete Error", { error: error.message });
       res.status(500).json({
         success: false,
         message: "Failed to delete account",

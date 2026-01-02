@@ -4,6 +4,8 @@ require("dotenv").config(); // Load environment variables first
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./swagger");
 const { connectToDatabase } = require("./config/db");
 
 // Capture startup time for version endpoint (helps identify stale instances)
@@ -21,13 +23,13 @@ const { router: workoutRoutes } = require("./routes/workoutRoutes");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const logger = require("./utils/logger");
+
 // Middleware
 app.use(cors());
 // Request logging middleware - log all requests to Azure
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  process.stdout.write(`\n[${timestamp}] 📥 ${req.method} ${req.path}\n`);
-  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  logger.request(req.method, req.path);
   next();
 });
 
@@ -37,6 +39,27 @@ app.use(express.json());
 
 // Connect to the database
 connectToDatabase();
+
+// Swagger API Documentation
+app.use(
+  "/api/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customCss: ".swagger-ui .topbar { display: none }",
+    customSiteTitle: "ApogeeHnP API Docs",
+    swaggerOptions: {
+      persistAuthorization: true,
+      tagsSorter: "alpha",
+      operationsSorter: "alpha",
+    },
+  })
+);
+
+// JSON spec endpoint for external tools (Postman, etc.)
+app.get("/api/docs.json", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.send(swaggerSpec);
+});
 
 // Routes
 app.use("/api/auth", authRoutes);
@@ -69,5 +92,5 @@ app.get("/api/version", (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`Server running on port ${PORT}`);
 });

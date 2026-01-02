@@ -6,15 +6,12 @@
     "node": "20.x"
   },
   "scripts": {
-    "test": "jest --runInBand --config tests/jest.config.js",
-    "test:auth": "jest --runInBand --config tests/jest.config.js --testPathPatterns=auth-basic",
-    "test:otp": "jest --runInBand --config tests/jest.config.js --testPathPatterns=auth-otp",
-    "test:mfa": "jest --runInBand --config tests/jest.config.js --testPathPatterns=auth-mfa",
-    "test:security": "jest --runInBand --config tests/jest.config.js --testPathPatterns=auth-security",
-    "test:biometric": "jest --runInBand --config tests/jest.config.js --testPathPatterns=biometric",
-    "test:password": "jest --runInBand --config tests/jest.config.js --testPathPatterns=password",
-    "test:full": "jest --runInBand --config tests/jest.config.js --testPathPatterns=full-flow",
-    "test:legacy": "node tests/auth-api.test.js",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integration",
+    "test:e2e": "node tests/auth-api.test.js",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
@@ -37,10 +34,13 @@
     "multer": "^1.4.5-lts.2",
     "nodemailer": "^7.0.6",
     "stripe": "^19.3.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0",
     "twilio": "^5.10.7"
   },
   "devDependencies": {
-    "jest": "^30.2.0",
-    "nodemon": "^3.1.9"
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.9",
+    "supertest": "^7.0.0"
   }
 }

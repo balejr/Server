@@ -3,6 +3,7 @@ const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const logger = require("../utils/logger");
 
 // Define Type constants for schema compatibility
 const Type = {
@@ -24,7 +25,7 @@ const API_BASE_URL =
 const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
 
 // Debug: Log API configuration at startup
-console.log("🔧 Chatbot Routes - API Configuration:", {
+logger.debug("Chatbot Routes - API Configuration", {
   hasApiKey: !!GOOGLE_API_KEY && GOOGLE_API_KEY !== "undefined",
   apiKeyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
   modelName: MODEL_NAME,
@@ -218,9 +219,8 @@ const saveMessageToDatabase = async (chatSessionId, userId, role, content) => {
 
     return true;
   } catch (error) {
-    console.error("Error saving message to database:", error);
-    console.error("Error details:", {
-      message: error.message,
+    logger.error("Error saving message to database", {
+      error: error.message,
       code: error.code,
       state: error.state,
     });
@@ -243,7 +243,7 @@ const getConversationHistory = async (chatSessionId, limit = 10) => {
 
     return result.recordset.reverse(); // Return in chronological order
   } catch (error) {
-    console.error("Error getting conversation history:", error);
+    logger.error("Error getting conversation history", { error: error.message });
     return [];
   }
 };
@@ -296,9 +296,8 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
       return sessionId;
     }
   } catch (error) {
-    console.error("Error creating/getting chat session:", error);
-    console.error("Error details:", {
-      message: error.message,
+    logger.error("Error creating/getting chat session", {
+      error: error.message,
       code: error.code,
       state: error.state,
     });
@@ -314,7 +313,7 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
  */
 const callGeminiAPI = async (userMessage, conversationHistory = []) => {
   try {
-    console.log("🔍 Debug - API Key check:", {
+    logger.debug("API Key check", {
       hasKey: !!GOOGLE_API_KEY,
       keyValue: GOOGLE_API_KEY
         ? `${GOOGLE_API_KEY.substring(0, 10)}...`
@@ -322,18 +321,18 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
       keyLength: GOOGLE_API_KEY ? GOOGLE_API_KEY.length : 0,
     });
 
-    console.log("🔍 Debug - Model check:", {
+    logger.debug("Model check", {
       modelName: MODEL_NAME,
       isValidModel: MODEL_NAME && MODEL_NAME.includes("gemini"),
     });
 
     if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
-      console.log("❌ API key not configured, returning mock response");
+      logger.warn("API key not configured, returning mock response");
       return getMockStructuredResponse(userMessage, conversationHistory);
     }
 
     if (!MODEL_NAME || !MODEL_NAME.includes("gemini")) {
-      console.log("❌ Invalid model name, returning mock response");
+      logger.warn("Invalid model name, returning mock response");
       return getMockStructuredResponse(userMessage, conversationHistory);
     }
 
@@ -377,7 +376,7 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     ];
 
     // Generate structured content
-    console.log("🚀 Making API call to Gemini with:", {
+    logger.debug("Making API call to Gemini", {
       model: MODEL_NAME,
       userMessage: userMessage.substring(0, 50) + "...",
       hasConfig: !!config,
@@ -392,9 +391,10 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     });
 
     // Parse the structured response
-    console.log("📝 Response object:", response);
-    console.log("📝 Response type:", typeof response);
-    console.log("📝 Response methods:", Object.getOwnPropertyNames(response));
+    logger.debug("Gemini response received", {
+      responseType: typeof response,
+      responseMethods: Object.getOwnPropertyNames(response),
+    });
 
     // Try different ways to get the text content
     let responseText;
@@ -412,14 +412,14 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     ) {
       responseText = response.candidates[0].content.parts[0].text;
     } else {
-      console.log("❌ Could not extract text from response");
+      logger.warn("Could not extract text from response");
       throw new Error("Unable to extract text from Gemini response");
     }
 
-    console.log("📝 Raw API Response:", responseText.substring(0, 200) + "...");
+    logger.debug("Raw API Response", { preview: responseText.substring(0, 200) + "..." });
 
     const structuredResponse = JSON.parse(responseText);
-    console.log("✅ Parsed structured response:", {
+    logger.info("Parsed structured response", {
       mode: structuredResponse.mode,
       intent: structuredResponse.intent,
       hasMessage: !!structuredResponse.message,
@@ -427,20 +427,23 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
 
     return structuredResponse;
   } catch (error) {
-    console.error("❌ Error calling Gemini API:", error);
-    console.error("❌ Error details:", error.message);
-    console.error("❌ Error stack:", error.stack);
-    console.error("❌ Error name:", error.name);
-    console.error("❌ Error cause:", error.cause);
+    logger.error("Error calling Gemini API", {
+      error: error.message,
+      name: error.name,
+      cause: error.cause,
+    });
 
     // Check if it's a network error
     if (error.message.includes("fetch failed")) {
-      console.error("🔍 Network/fetch error detected. Possible causes:");
-      console.error("   - Internet connection issues");
-      console.error("   - API key invalid or expired");
-      console.error("   - Model name incorrect");
-      console.error("   - API endpoint issues");
-      console.error("   - Rate limiting");
+      logger.error("Network/fetch error detected", {
+        possibleCauses: [
+          "Internet connection issues",
+          "API key invalid or expired",
+          "Model name incorrect",
+          "API endpoint issues",
+          "Rate limiting",
+        ],
+      });
     }
 
     // Return fallback structured response
@@ -539,7 +542,31 @@ const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
   }
 };
 
-// Main chat endpoint
+/**
+ * @swagger
+ * /chatbot/chat:
+ *   post:
+ *     summary: Send message to AI assistant
+ *     description: Send a message to the AI fitness assistant and receive a structured response
+ *     tags: [Chatbot]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ChatRequest'
+ *     responses:
+ *       200:
+ *         description: AI response with remaining query counts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ChatResponse'
+ *       400:
+ *         description: Message is required
+ *       429:
+ *         description: Weekly inquiry limit reached
+ */
 router.post("/chat", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { message, sessionType = "inquiry" } = req.body;
@@ -632,11 +659,11 @@ router.post("/chat", authenticateToken, async (req, res) => {
           structuredResponse
         );
 
-        console.log(`✅ Workout plan saved successfully: ${savedPlanId}`);
+        logger.info("Workout plan saved successfully", { planId: savedPlanId });
         // Add plan ID to the response for frontend reference
         structuredResponse.payload.savedPlanId = savedPlanId;
       } catch (error) {
-        console.error("❌ Critical error: Failed to save workout plan", {
+        logger.error("Critical error: Failed to save workout plan", {
           error: error.message,
           userId: userId,
           sessionId: chatSessionId,
@@ -668,7 +695,7 @@ router.post("/chat", authenticateToken, async (req, res) => {
       inquiry_type: isWorkoutInquiry ? "workout" : "general",
     });
   } catch (error) {
-    console.error("Chat endpoint error:", error);
+    logger.error("Chat endpoint error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -676,7 +703,28 @@ router.post("/chat", authenticateToken, async (req, res) => {
   }
 });
 
-// Get conversation history endpoint
+/**
+ * @swagger
+ * /chatbot/chat/history:
+ *   get:
+ *     summary: Get chat history
+ *     description: Retrieve conversation history for the authenticated user
+ *     tags: [Chatbot]
+ *     parameters:
+ *       - in: query
+ *         name: sessionId
+ *         schema:
+ *           type: string
+ *         description: Specific session ID (optional)
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *     responses:
+ *       200:
+ *         description: Chat history
+ */
 router.get("/chat/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { sessionId, limit = 50 } = req.query;
@@ -741,7 +789,7 @@ router.get("/chat/history", authenticateToken, async (req, res) => {
       messages: messages, // Return in chronological order with structured responses parsed
     });
   } catch (error) {
-    console.error("Get history error:", error);
+    logger.error("Get history error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve conversation history",
@@ -749,7 +797,23 @@ router.get("/chat/history", authenticateToken, async (req, res) => {
   }
 });
 
-// Clear chat history endpoint
+/**
+ * @swagger
+ * /chatbot/chat/history:
+ *   delete:
+ *     summary: Clear chat history
+ *     description: Delete chat history for the authenticated user
+ *     tags: [Chatbot]
+ *     parameters:
+ *       - in: query
+ *         name: sessionId
+ *         schema:
+ *           type: string
+ *         description: Specific session to delete (optional, clears all if omitted)
+ *     responses:
+ *       200:
+ *         description: Chat history cleared
+ */
 router.delete("/chat/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { sessionId } = req.query;
@@ -777,7 +841,7 @@ router.delete("/chat/history", authenticateToken, async (req, res) => {
       message: "Chat history cleared successfully",
     });
   } catch (error) {
-    console.error("Clear history error:", error);
+    logger.error("Clear history error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to clear chat history",

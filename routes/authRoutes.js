@@ -39,9 +39,43 @@ const router = express.Router();
 const upload = require("../middleware/multerUpload");
 const { containerClient } = require("../middleware/blobClient");
 
-// ============================================
-// SIGN UP - Enhanced with phone number support
-// ============================================
+/**
+ * @swagger
+ * /auth/signup:
+ *   post:
+ *     summary: Create a new user account
+ *     description: Register a new user with email, password, phone number, and profile information. Supports optional profile image upload.
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             $ref: '#/components/schemas/SignupRequest'
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SignupRequest'
+ *     responses:
+ *       200:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TokenPair'
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       409:
+ *         description: Email or phone number already registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 router.post("/signup", upload.single("profileImage"), async (req, res) => {
   const {
     firstName,
@@ -128,9 +162,7 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       });
       profileImageUrl = blockBlobClient.url;
     } else if (file && !containerClient) {
-      console.warn(
-        "Profile image upload skipped - Azure Blob Storage not configured"
-      );
+      logger.warn("Profile image upload skipped - Azure Blob Storage not configured");
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -307,12 +339,12 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        console.error("Rollback error:", rollbackError);
+        logger.error("Rollback error", { error: rollbackError.message });
       }
       throw txError; // Re-throw to be caught by outer catch
     }
   } catch (error) {
-    console.error("Signup Error:", error);
+    logger.error("Signup Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error signing up user",
@@ -320,9 +352,36 @@ router.post("/signup", upload.single("profileImage"), async (req, res) => {
   }
 });
 
-// ============================================
-// SIGN IN - Enhanced with MFA support
-// ============================================
+/**
+ * @swagger
+ * /auth/signin:
+ *   post:
+ *     summary: Sign in with email and password
+ *     description: Authenticate user with email and password. Returns tokens directly or MFA challenge if MFA is enabled.
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SigninRequest'
+ *     responses:
+ *       200:
+ *         description: Login successful or MFA required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - $ref: '#/components/schemas/TokenPair'
+ *                 - $ref: '#/components/schemas/MFAChallenge'
+ *       400:
+ *         description: Missing required fields
+ *       401:
+ *         description: Invalid credentials
+ *       429:
+ *         description: Too many login attempts
+ */
 router.post("/signin", checkAuthRateLimit, async (req, res) => {
   const { email, password } = req.body;
 
@@ -509,7 +568,7 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Signin Error:", error);
+    logger.error("Signin Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Server error during login",
@@ -517,9 +576,30 @@ router.post("/signin", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// REFRESH TOKEN - Exchange refresh token for new tokens
-// ============================================
+/**
+ * @swagger
+ * /auth/refresh-token:
+ *   post:
+ *     summary: Refresh access token
+ *     description: Exchange a valid refresh token for a new access/refresh token pair
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RefreshTokenRequest'
+ *     responses:
+ *       200:
+ *         description: New token pair issued
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TokenPair'
+ *       401:
+ *         description: Invalid or expired refresh token
+ */
 router.post("/refresh-token", authenticateRefreshToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -613,7 +693,7 @@ router.post("/refresh-token", authenticateRefreshToken, async (req, res) => {
       expiresIn: tokens.expiresIn,
     });
   } catch (error) {
-    console.error("Refresh Token Error:", error);
+    logger.error("Refresh Token Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error refreshing token",
@@ -621,9 +701,32 @@ router.post("/refresh-token", authenticateRefreshToken, async (req, res) => {
   }
 });
 
-// ============================================
-// SEND PHONE OTP - Initiate phone verification
-// ============================================
+/**
+ * @swagger
+ * /auth/send-phone-otp:
+ *   post:
+ *     summary: Send OTP to phone number
+ *     description: Send a 6-digit verification code to the specified phone number
+ *     tags: [OTP]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SendOTPRequest'
+ *     responses:
+ *       200:
+ *         description: OTP sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/OTPResponse'
+ *       400:
+ *         description: Invalid phone number format
+ *       429:
+ *         description: Rate limit exceeded
+ */
 router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
   const { phoneNumber, purpose = "signin" } = req.body;
 
@@ -777,7 +880,7 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
       remainingAttempts: rateLimitResult.remainingAttempts - 1,
     });
   } catch (error) {
-    console.error("Send Phone OTP Error:", error);
+    logger.error("Send Phone OTP Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error sending verification code",
@@ -785,9 +888,32 @@ router.post("/send-phone-otp", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// VERIFY PHONE OTP - Verify code and sign in
-// ============================================
+/**
+ * @swagger
+ * /auth/verify-phone-otp:
+ *   post:
+ *     summary: Verify phone OTP code
+ *     description: Verify the 6-digit code sent to the phone number
+ *     tags: [OTP]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/VerifyOTPRequest'
+ *     responses:
+ *       200:
+ *         description: Phone verified successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Invalid or expired code
+ *       429:
+ *         description: Too many verification attempts
+ */
 router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
   const { phoneNumber, code, purpose = "signin" } = req.body;
 
@@ -921,7 +1047,7 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
       message: "Phone number verified successfully",
     });
   } catch (error) {
-    console.error("Verify Phone OTP Error:", error);
+    logger.error("Verify Phone OTP Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error verifying code",
@@ -929,9 +1055,35 @@ router.post("/verify-phone-otp", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// VERIFY PHONE NUMBER - For existing authenticated users
-// ============================================
+/**
+ * @swagger
+ * /auth/verify-phone-number:
+ *   post:
+ *     summary: Verify phone number for authenticated user
+ *     description: Verify phone ownership for an existing logged-in user
+ *     tags: [OTP]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [phoneNumber, code]
+ *             properties:
+ *               phoneNumber:
+ *                 type: string
+ *                 example: '+14155551234'
+ *               code:
+ *                 type: string
+ *                 example: '123456'
+ *     responses:
+ *       200:
+ *         description: Phone verified and linked to account
+ *       400:
+ *         description: Invalid code
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
 router.post("/verify-phone-number", authenticateToken, async (req, res) => {
   const { phoneNumber, code } = req.body;
   const userId = req.user.userId;
@@ -1029,7 +1181,7 @@ router.post("/verify-phone-number", authenticateToken, async (req, res) => {
       message: "Verification code sent",
     });
   } catch (error) {
-    console.error("Verify Phone Number Error:", error);
+    logger.error("Verify Phone Number Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error verifying phone number",
@@ -1037,9 +1189,41 @@ router.post("/verify-phone-number", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// SEND MFA CODE - Send MFA code during login
-// ============================================
+/**
+ * @swagger
+ * /auth/send-mfa-code:
+ *   post:
+ *     summary: Send MFA verification code
+ *     description: Send MFA code via SMS or email during the login flow
+ *     tags: [MFA]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [userId, method]
+ *             properties:
+ *               userId:
+ *                 type: integer
+ *                 example: 123
+ *               method:
+ *                 type: string
+ *                 enum: [sms, email]
+ *                 example: sms
+ *     responses:
+ *       200:
+ *         description: MFA code sent
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Invalid request
+ *       429:
+ *         description: Rate limit exceeded
+ */
 router.post("/send-mfa-code", checkAuthRateLimit, async (req, res) => {
   const { userId, method } = req.body;
 
@@ -1116,7 +1300,7 @@ router.post("/send-mfa-code", checkAuthRateLimit, async (req, res) => {
       method: mfaMethod,
     });
   } catch (error) {
-    console.error("Send MFA Code Error:", error);
+    logger.error("Send MFA Code Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error sending MFA code",
@@ -1124,11 +1308,32 @@ router.post("/send-mfa-code", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// VERIFY MFA LOGIN - Complete MFA verification during login flow
-// Validates the mfaSessionToken from signin response
-// Accepts optional `method` parameter to verify against correct OTP storage
-// ============================================
+/**
+ * @swagger
+ * /auth/verify-mfa-login:
+ *   post:
+ *     summary: Complete MFA login verification
+ *     description: Verify MFA code and complete the login process, returning tokens
+ *     tags: [MFA]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/VerifyMFALoginRequest'
+ *     responses:
+ *       200:
+ *         description: MFA verified, login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TokenPair'
+ *       400:
+ *         description: Invalid or expired code
+ *       401:
+ *         description: Invalid MFA session
+ */
 router.post("/verify-mfa-login", checkAuthRateLimit, async (req, res) => {
   const { mfaSessionToken, code, userId, method } = req.body;
 
@@ -1299,7 +1504,7 @@ router.post("/verify-mfa-login", checkAuthRateLimit, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Verify MFA Login Error:", error);
+    logger.error("Verify MFA Login Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error verifying MFA code",
@@ -1307,9 +1512,35 @@ router.post("/verify-mfa-login", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// VERIFY MFA CODE - Complete MFA verification (legacy endpoint)
-// ============================================
+/**
+ * @swagger
+ * /auth/verify-mfa-code:
+ *   post:
+ *     summary: Verify MFA code (legacy)
+ *     description: Legacy endpoint for MFA code verification
+ *     tags: [MFA]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [userId, code]
+ *             properties:
+ *               userId:
+ *                 type: integer
+ *               code:
+ *                 type: string
+ *               method:
+ *                 type: string
+ *                 enum: [sms, email]
+ *     responses:
+ *       200:
+ *         description: Code verified
+ *       400:
+ *         description: Invalid code
+ */
 router.post("/verify-mfa-code", checkAuthRateLimit, async (req, res) => {
   const { userId, code, method } = req.body;
 
@@ -1397,7 +1628,7 @@ router.post("/verify-mfa-code", checkAuthRateLimit, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Verify MFA Code Error:", error);
+    logger.error("Verify MFA Code Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error verifying MFA code",
@@ -1405,9 +1636,36 @@ router.post("/verify-mfa-code", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// SETUP MFA - Enable MFA for user account
-// ============================================
+/**
+ * @swagger
+ * /auth/setup-mfa:
+ *   post:
+ *     summary: Setup MFA for account
+ *     description: Enable MFA using SMS or email. First call sends verification code, second call with code enables MFA.
+ *     tags: [MFA]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SetupMFARequest'
+ *     responses:
+ *       200:
+ *         description: MFA setup initiated or completed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 mfaEnabled:
+ *                   type: boolean
+ *       400:
+ *         description: Invalid method or code
+ */
 router.post(
   "/setup-mfa",
   authenticateToken,
@@ -1530,7 +1788,7 @@ router.post(
         method,
       });
     } catch (error) {
-      console.error("Setup MFA Error:", error);
+      logger.error("Setup MFA Error", { error: error.message });
       res.status(500).json({
         success: false,
         message: "Error setting up MFA",
@@ -1539,10 +1797,33 @@ router.post(
   }
 );
 
-// ============================================
-// ENABLE MFA DIRECT - Enable MFA without additional verification
-// Use when phone/email was already verified (e.g., during signup)
-// ============================================
+/**
+ * @swagger
+ * /auth/enable-mfa-direct:
+ *   post:
+ *     summary: Enable MFA directly (skip verification)
+ *     description: Enable MFA when phone/email was already verified during signup
+ *     tags: [MFA]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [method]
+ *             properties:
+ *               method:
+ *                 type: string
+ *                 enum: [sms, email]
+ *               alreadyVerified:
+ *                 type: boolean
+ *                 default: true
+ *     responses:
+ *       200:
+ *         description: MFA enabled
+ *       400:
+ *         description: Invalid method or phone not verified
+ */
 router.post(
   "/enable-mfa-direct",
   authenticateToken,
@@ -1658,7 +1939,7 @@ router.post(
         mfaMethod: method,
       });
     } catch (error) {
-      console.error("Enable MFA Direct Error:", error);
+      logger.error("Enable MFA Direct Error", { error: error.message });
       res.status(500).json({
         success: false,
         message: "Error enabling MFA",
@@ -1667,9 +1948,21 @@ router.post(
   }
 );
 
-// ============================================
-// DISABLE MFA - Remove MFA from account
-// ============================================
+/**
+ * @swagger
+ * /auth/disable-mfa:
+ *   post:
+ *     summary: Disable MFA
+ *     description: Remove MFA from account. Requires MFA verification to confirm.
+ *     tags: [MFA]
+ *     responses:
+ *       200:
+ *         description: MFA disabled successfully
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         description: MFA verification required
+ */
 router.post(
   "/disable-mfa",
   authenticateToken,
@@ -1691,7 +1984,7 @@ router.post(
         message: "MFA disabled successfully",
       });
     } catch (error) {
-      console.error("Disable MFA Error:", error);
+      logger.error("Disable MFA Error", { error: error.message });
       res.status(500).json({
         success: false,
         message: "Error disabling MFA",
@@ -1700,9 +1993,30 @@ router.post(
   }
 );
 
-// ============================================
-// UPDATE LOGIN PREFERENCE
-// ============================================
+/**
+ * @swagger
+ * /auth/update-login-preference:
+ *   patch:
+ *     summary: Update preferred login method
+ *     description: Set the user's preferred login method (email, phone, or biometric)
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [preferredLoginMethod]
+ *             properties:
+ *               preferredLoginMethod:
+ *                 type: string
+ *                 enum: [email, phone, biometric]
+ *     responses:
+ *       200:
+ *         description: Preference updated
+ *       400:
+ *         description: Invalid method or required verification not complete
+ */
 router.patch(
   "/update-login-preference",
   authenticateToken,
@@ -1767,7 +2081,7 @@ router.patch(
         preferredLoginMethod,
       });
     } catch (error) {
-      console.error("Update Login Preference Error:", error);
+      logger.error("Update Login Preference Error", { error: error.message });
       res.status(500).json({
         success: false,
         message: "Error updating login preference",
@@ -1776,9 +2090,23 @@ router.patch(
   }
 );
 
-// ============================================
-// ENABLE BIOMETRIC - Generate and store biometric token
-// ============================================
+/**
+ * @swagger
+ * /auth/enable-biometric:
+ *   post:
+ *     summary: Enable biometric login
+ *     description: Generate and store a biometric token for Face ID/Touch ID login
+ *     tags: [Biometric]
+ *     responses:
+ *       200:
+ *         description: Biometric enabled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BiometricEnableResponse'
+ *       500:
+ *         description: Error generating token
+ */
 router.post("/enable-biometric", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -1815,7 +2143,7 @@ router.post("/enable-biometric", authenticateToken, async (req, res) => {
       biometricToken,
     });
   } catch (error) {
-    console.error("Enable Biometric Error:", error);
+    logger.error("Enable Biometric Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error enabling biometric authentication",
@@ -1823,9 +2151,34 @@ router.post("/enable-biometric", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// BIOMETRIC LOGIN - Verify biometric and sign in
-// ============================================
+/**
+ * @swagger
+ * /auth/biometric-login:
+ *   post:
+ *     summary: Login with biometric token
+ *     description: Authenticate using a stored biometric token (after Face ID/Touch ID verification)
+ *     tags: [Biometric]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/BiometricLoginRequest'
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TokenPair'
+ *       400:
+ *         description: Biometric not enabled
+ *       401:
+ *         description: Biometric verification failed
+ *       404:
+ *         description: User not found
+ */
 router.post("/biometric-login", checkAuthRateLimit, async (req, res) => {
   const { userId, biometricToken } = req.body;
 
@@ -1915,7 +2268,7 @@ router.post("/biometric-login", checkAuthRateLimit, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Biometric Login Error:", error);
+    logger.error("Biometric Login Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error during biometric login",
@@ -1923,9 +2276,19 @@ router.post("/biometric-login", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// DISABLE BIOMETRIC
-// ============================================
+/**
+ * @swagger
+ * /auth/disable-biometric:
+ *   post:
+ *     summary: Disable biometric login
+ *     description: Remove biometric authentication from account
+ *     tags: [Biometric]
+ *     responses:
+ *       200:
+ *         description: Biometric disabled
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
 router.post("/disable-biometric", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -1957,7 +2320,7 @@ router.post("/disable-biometric", authenticateToken, async (req, res) => {
       message: "Biometric authentication disabled",
     });
   } catch (error) {
-    console.error("Disable Biometric Error:", error);
+    logger.error("Disable Biometric Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error disabling biometric authentication",
@@ -1965,10 +2328,34 @@ router.post("/disable-biometric", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// SEND EMAIL OTP - Send verification code via email (Twilio Verify)
-// Supports: signup, verification, signin, mfa, password_reset
-// ============================================
+/**
+ * @swagger
+ * /auth/send-email-otp:
+ *   post:
+ *     summary: Send OTP to email
+ *     description: Send a 6-digit verification code to the specified email address
+ *     tags: [OTP]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SendEmailOTPRequest'
+ *     responses:
+ *       200:
+ *         description: OTP sent (or silent success for password_reset)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/OTPResponse'
+ *       400:
+ *         description: Invalid email format
+ *       409:
+ *         description: Email already registered (for signup purpose)
+ *       429:
+ *         description: Rate limit exceeded
+ */
 router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
   const { email, purpose = "password_reset" } = req.body;
 
@@ -2077,7 +2464,7 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
     const otpResult = await sendEmailOTP(normalizedEmail);
 
     if (!otpResult.success) {
-      console.error("Failed to send email OTP:", otpResult.error);
+      logger.error("Failed to send email OTP", { error: otpResult.error });
       return res.status(500).json({
         success: false,
         message: otpResult.error || "Failed to send verification code",
@@ -2105,7 +2492,7 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
       remainingAttempts: rateLimitResult.remainingAttempts - 1,
     });
   } catch (error) {
-    console.error("Send Email OTP Error:", error);
+    logger.error("Send Email OTP Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error sending verification code",
@@ -2113,10 +2500,32 @@ router.post("/send-email-otp", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// VERIFY EMAIL OTP - Verify email verification code (Twilio Verify)
-// Supports: signup, verification, signin, mfa, password_reset
-// ============================================
+/**
+ * @swagger
+ * /auth/verify-email-otp:
+ *   post:
+ *     summary: Verify email OTP code
+ *     description: Verify the 6-digit code sent to the email address
+ *     tags: [OTP]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/VerifyOTPRequest'
+ *     responses:
+ *       200:
+ *         description: Email verified successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Success'
+ *       400:
+ *         description: Invalid or expired code
+ *       404:
+ *         description: User not found (for signin/mfa purposes)
+ */
 router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
   const { email, code, purpose = "password_reset" } = req.body;
 
@@ -2286,7 +2695,7 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
       verified: true,
     });
   } catch (error) {
-    console.error("Verify Email OTP Error:", error);
+    logger.error("Verify Email OTP Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error verifying code",
@@ -2294,9 +2703,37 @@ router.post("/verify-email-otp", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// FORGOT PASSWORD - Updated to use Twilio
-// ============================================
+/**
+ * @swagger
+ * /auth/forgot-password:
+ *   post:
+ *     summary: Request password reset
+ *     description: Send a password reset code to the user's email. Always returns success to prevent email enumeration.
+ *     tags: [Password]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ForgotPasswordRequest'
+ *     responses:
+ *       200:
+ *         description: Reset code sent (if account exists)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 useTwilio:
+ *                   type: boolean
+ *       429:
+ *         description: Rate limit exceeded
+ */
 router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
   const { email } = req.body;
 
@@ -2384,7 +2821,7 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
       useTwilio: otpResult.success,
     });
   } catch (error) {
-    console.error("Forgot Password Error:", error);
+    logger.error("Forgot Password Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Something went wrong while sending reset code.",
@@ -2392,10 +2829,30 @@ router.post("/forgot-password", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// RESET PASSWORD - Updated to support Twilio OTP and reset token
-// Uses transaction to prevent race conditions
-// ============================================
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   post:
+ *     summary: Reset password with code
+ *     description: Reset user's password using the verification code from forgot-password
+ *     tags: [Password]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ResetPasswordRequest'
+ *     responses:
+ *       200:
+ *         description: Password reset successfully
+ *       400:
+ *         description: Invalid code or weak password
+ *       404:
+ *         description: User not found
+ *       429:
+ *         description: Rate limit exceeded
+ */
 router.post("/reset-password", checkAuthRateLimit, async (req, res) => {
   const { email, code, newPassword, useTwilio = false, resetToken } = req.body;
   const pool = getPool();
@@ -2434,7 +2891,7 @@ router.post("/reset-password", checkAuthRateLimit, async (req, res) => {
         ORDER BY UserID DESC
       `);
   } catch (error) {
-    console.error("Reset Password - User lookup error:", error);
+    logger.error("Reset Password - User lookup error", { error: error.message });
     return res.status(500).json({
       success: false,
       message: "Something went wrong while resetting password.",
@@ -2616,9 +3073,9 @@ router.post("/reset-password", checkAuthRateLimit, async (req, res) => {
     try {
       await transaction.rollback();
     } catch (rollbackError) {
-      console.error("Rollback error:", rollbackError);
+      logger.error("Rollback error", { error: rollbackError.message });
     }
-    console.error("Reset Password Error:", error);
+    logger.error("Reset Password Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Something went wrong while resetting password.",
@@ -2626,9 +3083,19 @@ router.post("/reset-password", checkAuthRateLimit, async (req, res) => {
   }
 });
 
-// ============================================
-// LOGOUT - Revoke refresh token and invalidate access tokens
-// ============================================
+/**
+ * @swagger
+ * /auth/logout:
+ *   post:
+ *     summary: Logout user
+ *     description: Revoke refresh token and invalidate all access tokens
+ *     tags: [Authentication]
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
 router.post("/logout", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -2650,7 +3117,7 @@ router.post("/logout", authenticateToken, async (req, res) => {
       message: "Logged out successfully",
     });
   } catch (error) {
-    console.error("Logout Error:", error);
+    logger.error("Logout Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error during logout",
@@ -2658,9 +3125,25 @@ router.post("/logout", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// GET AUTH STATUS - Get current user auth settings
-// ============================================
+/**
+ * @swagger
+ * /auth/status:
+ *   get:
+ *     summary: Get authentication status
+ *     description: Get current user's authentication settings and verification status
+ *     tags: [Authentication]
+ *     responses:
+ *       200:
+ *         description: Auth status retrieved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthStatus'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: User not found
+ */
 router.get("/status", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -2697,7 +3180,7 @@ router.get("/status", authenticateToken, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get Auth Status Error:", error);
+    logger.error("Get Auth Status Error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Error fetching auth status",
@@ -2705,9 +3188,35 @@ router.get("/status", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// CHECK EMAIL (existing endpoint)
-// ============================================
+/**
+ * @swagger
+ * /auth/checkemail:
+ *   get:
+ *     summary: Check if email exists
+ *     description: Check if an email address is already registered
+ *     tags: [Authentication]
+ *     security: []
+ *     parameters:
+ *       - in: query
+ *         name: email
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: email
+ *         description: Email address to check
+ *     responses:
+ *       200:
+ *         description: Email check result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 exists:
+ *                   type: boolean
+ *       400:
+ *         description: Email parameter required
+ */
 router.get("/checkemail", async (req, res) => {
   const { email } = req.query;
 
@@ -2733,14 +3242,41 @@ router.get("/checkemail", async (req, res) => {
     const exists = result.recordset[0].count > 0;
     return res.json({ exists });
   } catch (error) {
-    console.error("Error checking email:", error);
+    logger.error("Error checking email", { error: error.message });
     res.status(500).json({ message: "Server error while checking email" });
   }
 });
 
-// ============================================
-// CHECK PHONE - Check if phone number is registered
-// ============================================
+/**
+ * @swagger
+ * /auth/checkphone:
+ *   get:
+ *     summary: Check if phone number exists
+ *     description: Check if a phone number is already registered and verified
+ *     tags: [Authentication]
+ *     security: []
+ *     parameters:
+ *       - in: query
+ *         name: phoneNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Phone number to check (E.164 format)
+ *     responses:
+ *       200:
+ *         description: Phone check result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 exists:
+ *                   type: boolean
+ *       400:
+ *         description: Phone number parameter required
+ */
 router.get("/checkphone", async (req, res) => {
   const { phoneNumber } = req.query;
 
@@ -2767,7 +3303,7 @@ router.get("/checkphone", async (req, res) => {
       exists,
     });
   } catch (error) {
-    console.error("Error checking phone:", error);
+    logger.error("Error checking phone", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Server error while checking phone number",
@@ -2775,9 +3311,53 @@ router.get("/checkphone", async (req, res) => {
   }
 });
 
-// ============================================
-// UPDATE PROFILE (existing endpoint with minor updates)
-// ============================================
+/**
+ * @swagger
+ * /auth/update-profile/{userId}:
+ *   patch:
+ *     summary: Update user profile
+ *     description: Update user profile information. User can only update their own profile.
+ *     tags: [Authentication]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: User ID to update
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstname:
+ *                 type: string
+ *               lastname:
+ *                 type: string
+ *               gender:
+ *                 type: string
+ *               fitnessGoal:
+ *                 type: string
+ *               weight:
+ *                 type: number
+ *               height:
+ *                 type: number
+ *               fitnessLevel:
+ *                 type: string
+ *               age:
+ *                 type: integer
+ *               profileImage:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *       403:
+ *         description: Can only update own profile
+ *       404:
+ *         description: User not found
+ */
 router.patch(
   "/update-profile/:userId",
   authenticateToken,
@@ -2820,9 +3400,7 @@ router.patch(
 
         profileImageUrl = blockBlobClient.url;
       } else if (file && !containerClient) {
-        console.warn(
-          "Profile image upload skipped - Azure Blob Storage not configured"
-        );
+        logger.warn("Profile image upload skipped - Azure Blob Storage not configured");
       }
 
       const pool = await getPool();
@@ -2863,9 +3441,8 @@ router.patch(
         message: "User profile updated successfully.",
       });
     } catch (error) {
-      console.error("Update Profile Error:", {
-        message: error.message,
-        stack: error.stack,
+      logger.error("Update Profile Error", {
+        error: error.message,
         requestBody: req.body,
         fileInfo: req.file,
       });

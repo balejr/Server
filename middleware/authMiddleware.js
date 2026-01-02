@@ -2,6 +2,7 @@
 const jwt = require("jsonwebtoken");
 const { verifyToken, isTokenExpiring } = require("../utils/token");
 const { getPool } = require("../config/db");
+const logger = require("../utils/logger");
 
 /**
  * Error codes for authentication failures
@@ -26,7 +27,7 @@ const authenticateToken = async (req, res, next) => {
   const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
-    console.log("🔒 Auth failed: No token provided", {
+    logger.debug("Auth failed: No token provided", {
       path: req.path,
       authHeader: authHeader ? "present but malformed" : "missing",
     });
@@ -41,7 +42,7 @@ const authenticateToken = async (req, res, next) => {
   const result = verifyToken(token, "access");
 
   if (!result.valid) {
-    console.log("🔒 Auth failed:", {
+    logger.debug("Auth failed", {
       path: req.path,
       errorCode: result.errorCode,
       error: result.error,
@@ -94,7 +95,7 @@ const authenticateToken = async (req, res, next) => {
         const invalidatedAtTime = new Date(invalidatedAt).getTime();
 
         if (tokenIssuedAt < invalidatedAtTime) {
-          console.log("🔒 Auth failed: Token was invalidated by logout", {
+          logger.debug("Auth failed: Token was invalidated by logout", {
             path: req.path,
             userId: result.decoded.userId,
             tokenIssuedAt: new Date(tokenIssuedAt).toISOString(),
@@ -113,10 +114,9 @@ const authenticateToken = async (req, res, next) => {
   } catch (dbError) {
     // Log error but don't block auth if database check fails
     // This prevents auth from breaking if column doesn't exist yet
-    console.warn(
-      "⚠️ TokenInvalidatedAt check failed (non-blocking):",
-      dbError.message
-    );
+    logger.warn("TokenInvalidatedAt check failed (non-blocking)", {
+      error: dbError.message,
+    });
   }
 
   // Check if token is about to expire (within 2 minutes)

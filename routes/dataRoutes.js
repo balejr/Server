@@ -19,8 +19,25 @@ const {
 const logger = require('../utils/logger');
 const router = express.Router();
 
-// GET EXERCISES
-// GET exercises from external API (proxy) with server-side caching
+/**
+ * @swagger
+ * /data/exercises:
+ *   get:
+ *     summary: Get exercise database
+ *     description: Fetch exercises from ExerciseDB API with server-side caching (24h TTL)
+ *     tags: [Exercises]
+ *     responses:
+ *       200:
+ *         description: List of exercises
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Exercise'
+ *       500:
+ *         description: Failed to fetch exercises
+ */
 router.get('/exercises', authenticateToken, async (req, res) => {
   const CACHE_KEY = 'exercisedb_all_exercises';
   
@@ -65,7 +82,25 @@ router.get('/exercises', authenticateToken, async (req, res) => {
 });
 
 // -------------------- DAILY LOGS --------------------
-// POST daily Log
+/**
+ * @swagger
+ * /data/dailylog:
+ *   post:
+ *     summary: Create daily log
+ *     description: Create a new daily health log entry
+ *     tags: [Daily Logs]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateDailyLogRequest'
+ *     responses:
+ *       200:
+ *         description: Daily log added successfully
+ *       500:
+ *         description: Failed to insert daily log
+ */
 router.post('/dailylog', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const {
@@ -95,12 +130,34 @@ router.post('/dailylog', authenticateToken, async (req, res) => {
         `);
       res.status(200).json({ message: 'Daily log added successfully' });
     } catch (err) {
-      console.error('DailyLog POST Error:', err);
+      logger.error('DailyLog POST Error', { error: err.message });
       res.status(500).json({ message: 'Failed to insert daily log' });
     }
 });
 
-// GET daily log by ID
+/**
+ * @swagger
+ * /data/dailylog/{logId}:
+ *   get:
+ *     summary: Get daily log by ID
+ *     description: Retrieve a specific daily log entry
+ *     tags: [Daily Logs]
+ *     parameters:
+ *       - in: path
+ *         name: logId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Daily log data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/DailyLog'
+ *       500:
+ *         description: Failed to fetch daily log
+ */
 router.get('/dailylog/:logId', authenticateToken, async (req, res) => {
     const { logId } = req.params;
 
@@ -115,7 +172,31 @@ router.get('/dailylog/:logId', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all daily logs for specific user (with pagination)
+/**
+ * @swagger
+ * /data/dailylogs:
+ *   get:
+ *     summary: Get all daily logs
+ *     description: Retrieve all daily logs for the authenticated user with pagination
+ *     tags: [Daily Logs]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Paginated list of daily logs
+ *       500:
+ *         description: Failed to fetch daily logs
+ */
 router.get('/dailylogs', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { page, limit, offset } = paginate(req);
@@ -151,7 +232,32 @@ router.get('/dailylogs', authenticateToken, async (req, res) => {
     }
 });
 
-// EDIT an existing daily log (with field whitelisting and authorization)
+/**
+ * @swagger
+ * /data/dailylog/{logId}:
+ *   patch:
+ *     summary: Update daily log
+ *     description: Update an existing daily log (user can only update their own logs)
+ *     tags: [Daily Logs]
+ *     parameters:
+ *       - in: path
+ *         name: logId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateDailyLogRequest'
+ *     responses:
+ *       200:
+ *         description: Daily log updated
+ *       400:
+ *         description: Invalid fields
+ *       404:
+ *         description: Log not found or unauthorized
+ */
 router.patch('/dailylog/:logId', authenticateToken, dailyLogUpdateValidation, async (req, res) => {
     const userId = req.user.userId;
     const { logId } = req.params;
@@ -193,7 +299,25 @@ router.patch('/dailylog/:logId', authenticateToken, dailyLogUpdateValidation, as
     }
 });
 
-// DELETE daily log by ID (with authorization)
+/**
+ * @swagger
+ * /data/dailylog/{logId}:
+ *   delete:
+ *     summary: Delete daily log
+ *     description: Delete a daily log entry (user can only delete their own logs)
+ *     tags: [Daily Logs]
+ *     parameters:
+ *       - in: path
+ *         name: logId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Daily log deleted
+ *       404:
+ *         description: Log not found or unauthorized
+ */
 router.delete('/dailylog/:logId', authenticateToken, logIdParamValidation, async (req, res) => {
     const userId = req.user.userId;
     const { logId } = req.params;
@@ -220,8 +344,42 @@ router.delete('/dailylog/:logId', authenticateToken, logIdParamValidation, async
 });
 
 // -------------------- DASHBOARD --------------------
-// GET weekly summary - aggregated workout completion data for past 7 days
-// This replaces N+1 queries from frontend (7x getWorkoutRoutinesByDate + N x getRoutineExerciseInstances)
+/**
+ * @swagger
+ * /data/dashboard/weekly-summary:
+ *   get:
+ *     summary: Get weekly workout summary
+ *     description: Get aggregated workout completion data for the past 7 days
+ *     tags: [Workouts]
+ *     responses:
+ *       200:
+ *         description: Weekly summary data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       Date:
+ *                         type: string
+ *                         format: date
+ *                       DayName:
+ *                         type: string
+ *                       PlannedWorkouts:
+ *                         type: integer
+ *                       TotalExercises:
+ *                         type: integer
+ *                       CompletedExercises:
+ *                         type: integer
+ *                       CompletionPercent:
+ *                         type: number
+ */
 router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   
@@ -269,7 +427,31 @@ router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
 });
 
 // -------------------- EXERCISE EXISTENCE --------------------
-// POST exercise instance
+/**
+ * @swagger
+ * /data/exerciseexistence:
+ *   post:
+ *     summary: Create exercise instances
+ *     description: Create exercise instances for a workout routine
+ *     tags: [Exercises]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [exerciseList]
+ *             properties:
+ *               exerciseList:
+ *                 type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/CreateExerciseExistenceRequest'
+ *     responses:
+ *       200:
+ *         description: Exercises added successfully
+ *       400:
+ *         description: No exercises provided
+ */
 router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { exerciseList } = req.body;
@@ -325,7 +507,7 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
       .query(`SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`);
     
 
-        console.log('gifURL being inserted:', gifURL);
+        logger.debug('gifURL being inserted', { gifURL });
 
       let MasterExerciseId;
 
@@ -433,12 +615,31 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
 
     res.status(200).json({ message: 'Exercise existence(s) added successfully', ids: insertedIds });
   } catch (err) {
-    console.error('ExerciseExistence POST Error:', err);
+    logger.error('ExerciseExistence POST Error', { error: err.message });
     res.status(500).json({ message: 'Failed to insert exercise existence', error: err.message });
   }
 });
 
-// GET all exercise instances for specific user (with pagination)
+/**
+ * @swagger
+ * /data/exerciseexistences:
+ *   get:
+ *     summary: Get all exercise instances
+ *     description: Get all exercise instances for the authenticated user with pagination
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of exercise instances
+ */
 router.get('/exerciseexistences', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { page, limit, offset } = paginate(req);
@@ -469,7 +670,22 @@ router.get('/exerciseexistences', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all exercise instances for specific user and specific exercise
+/**
+ * @swagger
+ * /data/exerciseexistence/user/{exerciseId}:
+ *   get:
+ *     summary: Get exercise instances by exercise ID
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: exerciseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Exercise instances for the specified exercise
+ */
 router.get('/exerciseexistence/user/:exerciseId', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { exerciseId } = req.params;
@@ -485,7 +701,23 @@ router.get('/exerciseexistence/user/:exerciseId', authenticateToken, async (req,
     }
 });
 
-// GET all exercise instances for specific user on a specific date
+/**
+ * @swagger
+ * /data/exerciseexistence/date/{date}:
+ *   get:
+ *     summary: Get exercise instances by date
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Exercise instances for the specified date
+ */
 router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { date } = req.params;
@@ -523,7 +755,24 @@ router.get('/exerciseexistence/date/:date', authenticateToken, async (req, res) 
     }
 });
 
-// PATCH edit an exercise instance (with field whitelisting and authorization)
+/**
+ * @swagger
+ * /data/exerciseexistence/{id}:
+ *   patch:
+ *     summary: Update exercise instance
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Exercise instance updated
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.patch('/exerciseexistence/:id', authenticateToken, exerciseExistenceUpdateValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -566,7 +815,24 @@ router.patch('/exerciseexistence/:id', authenticateToken, exerciseExistenceUpdat
 });
 
 // DELETE an exercise instance (with authorization)
-// DELETE EXERCISE EXISTENCE AND REMOVE FROM ROUTINE
+/**
+ * @swagger
+ * /data/exerciseexistence/{id}:
+ *   delete:
+ *     summary: Delete exercise instance
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Exercise instance deleted
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.delete('/exerciseexistence/:id', authenticateToken, idParamValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -624,7 +890,22 @@ router.delete('/exerciseexistence/:id', authenticateToken, idParamValidation, as
 });
 
 // -------------------- WORKOUT ROUTINE --------------------
-// POST a new workout routine
+/**
+ * @swagger
+ * /data/workoutroutine:
+ *   post:
+ *     summary: Create workout routine
+ *     tags: [Workouts]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateWorkoutRoutineRequest'
+ *     responses:
+ *       200:
+ *         description: Workout routine created
+ */
 router.post('/workoutroutine', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const {
@@ -655,12 +936,31 @@ router.post('/workoutroutine', authenticateToken, async (req, res) => {
 
       res.status(200).json({ message: 'Workout routine added successfully' });
     } catch (err) {
-      console.error('WorkoutRoutine POST Error:', err);
+      logger.error('WorkoutRoutine POST Error', { error: err.message });
       res.status(500).json({ message: 'Failed to insert workout routine' });
     }
 });
 
-// GET a workout routine by ID
+/**
+ * @swagger
+ * /data/workoutroutine/{id}:
+ *   get:
+ *     summary: Get workout routine by ID
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Workout routine data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/WorkoutRoutine'
+ */
 router.get('/workoutroutine/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -674,7 +974,25 @@ router.get('/workoutroutine/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all workout routines for a specific user (with pagination)
+/**
+ * @swagger
+ * /data/workoutroutines:
+ *   get:
+ *     summary: Get all workout routines
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Paginated list of workout routines
+ */
 router.get('/workoutroutines', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { page, limit, offset } = paginate(req);
@@ -705,7 +1023,23 @@ router.get('/workoutroutines', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all workout routines for specific user on a specific date
+/**
+ * @swagger
+ * /data/workoutroutines/date/{date}:
+ *   get:
+ *     summary: Get workout routines by date
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: path
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Workout routines for the specified date
+ */
 router.get('/workoutroutines/date/:date', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { date } = req.params;
@@ -721,7 +1055,24 @@ router.get('/workoutroutines/date/:date', authenticateToken, async (req, res) =>
     }
 });
 
-// GET all exercise instances for a specific workout routine
+/**
+ * @swagger
+ * /data/workoutroutine/exerciseinstances/{id}:
+ *   get:
+ *     summary: Get exercises in workout routine
+ *     description: Retrieve all exercise instances for a specific workout routine
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Workout routine ID
+ *     responses:
+ *       200:
+ *         description: List of exercise instances
+ */
 router.get('/workoutroutine/exerciseinstances/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -747,7 +1098,25 @@ router.get('/workoutroutine/exerciseinstances/:id', authenticateToken, async (re
     }
 });
 
-// PATCH edit a workout routine (with field whitelisting and authorization)
+/**
+ * @swagger
+ * /data/workoutroutine/{id}:
+ *   patch:
+ *     summary: Update workout routine
+ *     description: Update an existing workout routine (user can only update their own)
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Workout routine updated
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.patch('/workoutroutine/:id', authenticateToken, workoutRoutineUpdateValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -789,7 +1158,25 @@ router.patch('/workoutroutine/:id', authenticateToken, workoutRoutineUpdateValid
     }
 });
 
-// DELETE a workout routine (with authorization)
+/**
+ * @swagger
+ * /data/workoutroutine/{id}:
+ *   delete:
+ *     summary: Delete workout routine
+ *     description: Delete a workout routine and associated exercises
+ *     tags: [Workouts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Workout routine deleted
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.delete('/workoutroutine/:id', authenticateToken, idParamValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -816,7 +1203,34 @@ router.delete('/workoutroutine/:id', authenticateToken, idParamValidation, async
 });
 
 // -------------------- MESOCYCLES --------------------
-// POST a mesocycle
+/**
+ * @swagger
+ * /data/mesocycle:
+ *   post:
+ *     summary: Create mesocycle
+ *     description: Create a new mesocycle (training block)
+ *     tags: [Training Cycles]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *               goal:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Mesocycle created
+ */
 router.post('/mesocycle', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { start_date, end_date, is_current, created_date } = req.body;
@@ -844,12 +1258,31 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
       res.status(200).json({ message: 'Mesocycle added successfully' });
 
     } catch (err) {
-      console.error('Server error inserting mesocycle:', err.message);
+      logger.error('Server error inserting mesocycle', { error: err.message });
       res.status(500).json({ message: 'Failed to insert mesocycle' });
     }
 });
 
-// GET all users mesocycles (with pagination)
+/**
+ * @swagger
+ * /data/mesocycles:
+ *   get:
+ *     summary: Get all mesocycles
+ *     description: Retrieve all mesocycles for the authenticated user
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of mesocycles
+ */
 router.get('/mesocycles', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { page, limit, offset } = paginate(req);
@@ -880,7 +1313,25 @@ router.get('/mesocycles', authenticateToken, async (req, res) => {
     }
 });
 
-// EDIT specific mesocycle (with field whitelisting and authorization)
+/**
+ * @swagger
+ * /data/mesocycle/{id}:
+ *   patch:
+ *     summary: Update mesocycle
+ *     description: Update an existing mesocycle
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Mesocycle updated
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.patch('/mesocycle/:id', authenticateToken, mesocycleUpdateValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -922,7 +1373,25 @@ router.patch('/mesocycle/:id', authenticateToken, mesocycleUpdateValidation, asy
     }
 });
 
-// DELETE a mesocycle (with authorization)
+/**
+ * @swagger
+ * /data/mesocycle/{id}:
+ *   delete:
+ *     summary: Delete mesocycle
+ *     description: Delete a mesocycle and its associated microcycles
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Mesocycle deleted
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.delete('/mesocycle/:id', authenticateToken, idParamValidation, async (req, res) => {
   const userId = req.user.userId;
   const { id } = req.params;
@@ -948,7 +1417,30 @@ router.delete('/mesocycle/:id', authenticateToken, idParamValidation, async (req
   }
 });
 
-// GET /mesocycles/by-dates?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+/**
+ * @swagger
+ * /data/mesocycles/date:
+ *   get:
+ *     summary: Get mesocycles by date range
+ *     description: Retrieve mesocycles within a specified date range
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: query
+ *         name: start_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: end_date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Mesocycles in date range
+ */
 router.get('/mesocycles/date', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { start_date, end_date } = req.query; // ✅ Use query, not params
@@ -972,15 +1464,44 @@ router.get('/mesocycles/date', authenticateToken, async (req, res) => {
 
     res.json(result.recordset);
   } catch (error) {
-    console.error('Error fetching mesocycles by dates:', error);
+    logger.error('Error fetching mesocycles by dates', { error: error.message });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 
 // -------------------- MICROCYCLES --------------------
-// POST a microcycle
-
+/**
+ * @swagger
+ * /data/microcycle:
+ *   post:
+ *     summary: Create microcycle
+ *     description: Create a new microcycle (training week) within a mesocycle
+ *     tags: [Training Cycles]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [mesocycleId]
+ *             properties:
+ *               mesocycleId:
+ *                 type: integer
+ *               weekNumber:
+ *                 type: integer
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *               focus:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Microcycle created
+ */
 router.post('/microcycle', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { mesocycle_id, start_date, end_date, is_current, created_date } = req.body;
@@ -1012,7 +1533,26 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all microcyles by user (with pagination)
+/**
+ * @swagger
+ * /data/microcycles:
+ *   get:
+ *     summary: Get all microcycles
+ *     description: Retrieve all microcycles for the authenticated user
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of microcycles
+ */
 router.get('/microcycles', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { page, limit, offset } = paginate(req);
@@ -1051,7 +1591,23 @@ router.get('/microcycles', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all microcycles within a mesocycle
+/**
+ * @swagger
+ * /data/microcycles/{mesocycle_id}:
+ *   get:
+ *     summary: Get microcycles by mesocycle
+ *     description: Retrieve all microcycles within a specific mesocycle
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: path
+ *         name: mesocycle_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of microcycles in mesocycle
+ */
 router.get('/microcycles/:mesocycle_id', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { mesocycle_id } = req.params;
@@ -1071,7 +1627,25 @@ router.get('/microcycles/:mesocycle_id', authenticateToken, async (req, res) => 
     }
 });
 
-// PATCH edit a specific microcycle (with field whitelisting and authorization via mesocycle)
+/**
+ * @swagger
+ * /data/microcycle/{id}:
+ *   patch:
+ *     summary: Update microcycle
+ *     description: Update an existing microcycle
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Microcycle updated
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.patch('/microcycle/:id', authenticateToken, microcycleUpdateValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -1116,7 +1690,25 @@ router.patch('/microcycle/:id', authenticateToken, microcycleUpdateValidation, a
     }
 });
 
-// DELETE a specific microcycle (with authorization via mesocycle)
+/**
+ * @swagger
+ * /data/microcycle/{id}:
+ *   delete:
+ *     summary: Delete microcycle
+ *     description: Delete a specific microcycle
+ *     tags: [Training Cycles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Microcycle deleted
+ *       404:
+ *         description: Not found or unauthorized
+ */
 router.delete('/microcycle/:id', authenticateToken, idParamValidation, async (req, res) => {
     const userId = req.user.userId;
     const { id } = req.params;
@@ -1149,8 +1741,23 @@ router.delete('/microcycle/:id', authenticateToken, idParamValidation, async (re
     }
 });
 //--------UNFINISED EXERCISES (Jump Back In) -------------------
-
-// GET /api/exercises/unfinished/:userId
+/**
+ * @swagger
+ * /data/exercises/unfinished/{userId}:
+ *   get:
+ *     summary: Get unfinished exercises
+ *     description: Retrieve unfinished exercise instances for Jump Back In feature
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of unfinished exercises
+ */
 router.get('/exercises/unfinished/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1179,12 +1786,42 @@ router.get('/exercises/unfinished/:userId', async (req, res) => {
       `);
     res.json(result.recordset);
   } catch (err) {
-    console.error('Error fetching unfinished exercises:', err);
+    logger.error('Error fetching unfinished exercises', { error: err.message });
     res.status(500).json({ message: 'Failed to fetch unfinished exercises' });
   }
 });
 
 //-------------Combined Meso and Micro ----------------------------
+/**
+ * @swagger
+ * /data/mesocycle-with-microcycle:
+ *   post:
+ *     summary: Create mesocycle with microcycles
+ *     description: Create a mesocycle and automatically generate its microcycles
+ *     tags: [Training Cycles]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *               goal:
+ *                 type: string
+ *               weekCount:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Mesocycle and microcycles created
+ */
 router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const {
@@ -1251,13 +1888,29 @@ router.post('/mesocycle-with-microcycle', authenticateToken, async (req, res) =>
     res.status(200).json({ message: 'Mesocycle and Microcycle added successfully', mesocycle_id });
 
   } catch (err) {
-    console.error('Error in mesocycle-with-microcycle:', err.message);
+    logger.error('Error in mesocycle-with-microcycle', { error: err.message });
     res.status(500).json({ message: 'Failed to insert mesocycle and microcycle', error: err.message });
   }
 });
 
 //-----------------------------Pevious Workout ------------------------------
-// GET /api/exercises/previous/:userId
+/**
+ * @swagger
+ * /data/exercises/previous-all/{userId}:
+ *   get:
+ *     summary: Get previous workout data
+ *     description: Retrieve all previous workout data for comparison
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Previous workout data
+ */
 router.get('/exercises/previous-all/:userId', async (req, res) => {
   const { userId } = req.params;
 
@@ -1309,14 +1962,29 @@ router.get('/exercises/previous-all/:userId', async (req, res) => {
 
     res.json(grouped);
   } catch (err) {
-    console.error('Error fetching all previous exercises:', err);
+    logger.error('Error fetching all previous exercises', { error: err.message });
     res.status(500).json({ message: 'Failed to fetch previous exercises' });
   }
 });
 
 //-------- EXERCISE History  -------------------
-
-// GET /api/exercises/unfinished/:userId
+/**
+ * @swagger
+ * /data/exercises/history/{userId}:
+ *   get:
+ *     summary: Get exercise history
+ *     description: Retrieve detailed exercise history for a user
+ *     tags: [Exercises]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Exercise history data
+ */
 router.get('/exercises/history/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -1334,7 +2002,7 @@ router.get('/exercises/history/:userId', async (req, res) => {
       `);
     res.json(result.recordset);
   } catch (err) {
-    console.error('Error fetching completed exercises:', err);
+    logger.error('Error fetching completed exercises', { error: err.message });
     res.status(500).json({ message: 'Failed to fetch completed exercises' });
   }
 });
@@ -1416,20 +2084,30 @@ let stripe = null;
 try {
   if (process.env.STRIPE_SECRET_KEY) {
     stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-    console.log('Stripe initialized');
+    logger.info('Stripe initialized');
   } else {
-    console.warn('STRIPE_SECRET_KEY not set - Stripe features disabled');
+    logger.warn('STRIPE_SECRET_KEY not set - Stripe features disabled');
   }
 } catch (err) {
-  console.error('Failed to initialize Stripe:', err);
+  logger.error('Failed to initialize Stripe', { error: err.message });
   // Don't crash - just log the error
 }
 
-// TEST endpoint - no auth required to verify requests reach Azure
+/**
+ * @swagger
+ * /data/payments/test:
+ *   get:
+ *     summary: Test payment gateway
+ *     description: Health check endpoint for payment gateway (no auth required)
+ *     tags: [Subscriptions]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Payment gateway is reachable
+ */
 router.get('/payments/test', (req, res) => {
   const timestamp = new Date().toISOString();
-  process.stdout.write(`\n[${timestamp}] ✅ TEST ENDPOINT HIT!\n`);
-  console.log(`[${timestamp}] ✅ TEST ENDPOINT HIT!`);
+  logger.info('Payment test endpoint hit', { timestamp, path: req.path, method: req.method });
   res.json({ 
     success: true, 
     message: 'Azure backend is reachable!',
@@ -1565,10 +2243,7 @@ function validateDateString(dateString, fieldName = 'date') {
 // Standardized error response helper
 function sendErrorResponse(res, statusCode, error, message, details = null) {
   const timestamp = new Date().toISOString();
-  console.error(`[${timestamp}] ❌ Error: ${error} - ${message}`);
-  if (details && process.env.NODE_ENV !== 'production') {
-    console.error(`   Details:`, details);
-  }
+  logger.error(`${error} - ${message}`, { timestamp, details: process.env.NODE_ENV !== 'production' ? details : undefined });
   
   const response = {
     error: error,
@@ -1584,11 +2259,28 @@ function sendErrorResponse(res, statusCode, error, message, details = null) {
 }
 
 // ========== PAYMENT ENDPOINTS ==========
-
-// POST /api/data/payments/initialize
+/**
+ * @swagger
+ * /data/payments/initialize:
+ *   post:
+ *     summary: Initialize payment
+ *     description: Initialize a subscription payment via Stripe
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/InitializePaymentRequest'
+ *     responses:
+ *       200:
+ *         description: Payment initialized with client secret
+ *       400:
+ *         description: Invalid plan type
+ */
 router.post('/payments/initialize', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] 📥 Payment initialization request received`);
+  logger.info('Payment initialization request received', { timestamp });
   
   try {
     // Validate environment variables
@@ -1804,7 +2496,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
           console.log(`👤 Adding name to customer: ${userName}`);
         }
         
-        console.log(`🔄 Creating Stripe customer with data:`, {
+        logger.debug('Creating Stripe customer with data', {
           email: customerData.email || 'not set',
           name: customerData.name || 'not set',
           metadata: customerData.metadata
@@ -1812,7 +2504,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
         
         customer = await stripe.customers.create(customerData);
         console.log('✅ Created Stripe Customer:', customer.id);
-        console.log('   Customer details:', {
+        logger.debug('Customer details', {
           id: customer.id,
           email: customer.email || 'not set',
           name: customer.name || 'not set',
@@ -2055,7 +2747,7 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
     // Final validation
     if (!paymentIntent || !paymentIntent.client_secret) {
       // Log comprehensive debug information
-      console.error('❌ PaymentIntent retrieval failed after all retries', {
+      logger.error('PaymentIntent retrieval failed after all retries', {
         subscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
         invoiceId: latestInvoice?.id,
@@ -2135,7 +2827,19 @@ router.post('/payments/initialize', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/data/customer-portal/create-session
+/**
+ * @swagger
+ * /data/customer-portal/create-session:
+ *   post:
+ *     summary: Create Stripe customer portal session
+ *     description: Create a session for Stripe customer portal to manage subscriptions
+ *     tags: [Subscriptions]
+ *     responses:
+ *       200:
+ *         description: Portal session URL
+ *       400:
+ *         description: No active subscription
+ */
 router.post('/customer-portal/create-session', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Customer portal session request received`);
@@ -2317,7 +3021,28 @@ router.post('/customer-portal/create-session', authenticateToken, async (req, re
   }
 });
 
-// POST /api/data/payments/confirm
+/**
+ * @swagger
+ * /data/payments/confirm:
+ *   post:
+ *     summary: Confirm payment
+ *     description: Confirm a payment and activate subscription
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               paymentIntentId:
+ *                 type: string
+ *               subscriptionId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Payment confirmed
+ */
 router.post('/payments/confirm', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Payment confirmation request received`);
@@ -3415,7 +4140,30 @@ async function updateSubscriptionInDatabase(userId, subscriptionStatus, plan, pa
   }
 }
 
-// POST /api/data/users/updateSubscription
+/**
+ * @swagger
+ * /data/users/updateSubscription:
+ *   post:
+ *     summary: Update subscription status
+ *     description: Update subscription status in database after Stripe webhook or manual update
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               subscriptionId:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *               planType:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Subscription updated
+ */
 router.post('/users/updateSubscription', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 🚀 updateSubscription endpoint called`);
@@ -3588,8 +4336,21 @@ router.post('/users/updateSubscription', authenticateToken, async (req, res) => 
   }
 });
 
-// GET /api/data/users/subscription/status
-// Get current subscription status for the authenticated user
+/**
+ * @swagger
+ * /data/users/subscription/status:
+ *   get:
+ *     summary: Get subscription status
+ *     description: Get current subscription status for the authenticated user
+ *     tags: [Subscriptions]
+ *     responses:
+ *       200:
+ *         description: Subscription status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SubscriptionStatus'
+ */
 router.get('/users/subscription/status', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] 📥 Subscription status request received`);
@@ -3990,9 +4751,20 @@ router.get('/users/subscription/status', authenticateToken, async (req, res) => 
 //   }
 // });
 
-// Stripe Webhook endpoint for subscription lifecycle events
-// This endpoint does NOT use authenticateToken - Stripe signs webhooks with a secret
-// Note: server.js must use express.raw() middleware for this route before express.json()
+/**
+ * @swagger
+ * /data/webhooks/stripe:
+ *   post:
+ *     summary: Stripe webhook handler
+ *     description: Handle Stripe webhook events for subscription lifecycle
+ *     tags: [Webhooks]
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Webhook processed
+ *       400:
+ *         description: Invalid webhook signature
+ */
 router.post('/webhooks/stripe', async (req, res) => {
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -4421,8 +5193,31 @@ const { getPaymentGateway, isGatewaySupported } = require('../utils/paymentGatew
 const { recordTransaction, getTransactionHistory } = require('../utils/transactionRecorder');
 
 /**
- * POST /api/data/subscriptions/change-plan
- * Change subscription plan (upgrade/downgrade)
+ * @swagger
+ * /data/subscriptions/change-plan:
+ *   post:
+ *     summary: Change subscription plan
+ *     description: Upgrade or downgrade subscription billing interval
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newBillingInterval]
+ *             properties:
+ *               newBillingInterval:
+ *                 type: string
+ *                 enum: [monthly, semi_annual, annual]
+ *               prorationBehavior:
+ *                 type: string
+ *                 default: always_invoice
+ *     responses:
+ *       200:
+ *         description: Plan changed successfully
+ *       400:
+ *         description: Invalid request or already on plan
  */
 router.post('/subscriptions/change-plan', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -4592,8 +5387,28 @@ router.post('/subscriptions/change-plan', authenticateToken, async (req, res) =>
 });
 
 /**
- * POST /api/data/subscriptions/pause
- * Pause subscription for 1-3 months
+ * @swagger
+ * /data/subscriptions/pause:
+ *   post:
+ *     summary: Pause subscription
+ *     description: Pause subscription for 1-3 months
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pauseDuration:
+ *                 type: integer
+ *                 enum: [1, 2, 3]
+ *                 description: Pause duration in months
+ *     responses:
+ *       200:
+ *         description: Subscription paused
+ *       400:
+ *         description: Subscription cannot be paused
  */
 router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -4694,8 +5509,29 @@ router.post('/subscriptions/pause', authenticateToken, async (req, res) => {
 });
 
 /**
- * POST /api/data/subscriptions/cancel
- * Cancel subscription at end of billing period
+ * @swagger
+ * /data/subscriptions/cancel:
+ *   post:
+ *     summary: Cancel subscription
+ *     description: Cancel subscription at end of current billing period
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 description: Cancellation reason
+ *               feedback:
+ *                 type: string
+ *                 description: Additional feedback
+ *     responses:
+ *       200:
+ *         description: Subscription scheduled for cancellation
+ *       400:
+ *         description: Subscription cannot be cancelled
  */
 router.post('/subscriptions/cancel', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -4805,8 +5641,17 @@ router.post('/subscriptions/cancel', authenticateToken, async (req, res) => {
 });
 
 /**
- * POST /api/data/subscriptions/resume
- * Resume a paused or canceling subscription
+ * @swagger
+ * /data/subscriptions/resume:
+ *   post:
+ *     summary: Resume subscription
+ *     description: Resume a paused or cancelled (pending) subscription
+ *     tags: [Subscriptions]
+ *     responses:
+ *       200:
+ *         description: Subscription resumed
+ *       400:
+ *         description: Subscription cannot be resumed
  */
 router.post('/subscriptions/resume', authenticateToken, async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -4900,8 +5745,15 @@ router.post('/subscriptions/resume', authenticateToken, async (req, res) => {
 });
 
 /**
- * GET /api/data/subscriptions/history
- * Get transaction history for user
+ * @swagger
+ * /data/subscriptions/history:
+ *   get:
+ *     summary: Get subscription history
+ *     description: Get transaction history for user's subscription
+ *     tags: [Subscriptions]
+ *     responses:
+ *       200:
+ *         description: Transaction history
  */
 router.get('/subscriptions/history', authenticateToken, async (req, res) => {
   try {
@@ -4928,8 +5780,26 @@ router.get('/subscriptions/history', authenticateToken, async (req, res) => {
 });
 
 /**
- * POST /api/data/subscriptions/preview-change
- * Preview proration for plan change
+ * @swagger
+ * /data/subscriptions/preview-change:
+ *   post:
+ *     summary: Preview plan change
+ *     description: Preview proration amount for a plan change before applying
+ *     tags: [Subscriptions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newBillingInterval]
+ *             properties:
+ *               newBillingInterval:
+ *                 type: string
+ *                 enum: [monthly, semi_annual, annual]
+ *     responses:
+ *       200:
+ *         description: Proration preview
  */
 router.post('/subscriptions/preview-change', authenticateToken, async (req, res) => {
   console.log('🎯 Preview-change endpoint hit!');
@@ -5040,17 +5910,15 @@ router.post('/subscriptions/preview-change', authenticateToken, async (req, res)
     }
     
   } catch (error) {
-    console.error('❌ Preview change error:', error);
-    console.error('❌ Error stack:', error.stack);
-    
-    // Log axios-specific error details
-    if (error.response) {
-      console.error('❌ Axios response error:', {
+    logger.error('Preview change error', { 
+      error: error.message, 
+      stack: error.stack,
+      axiosResponse: error.response ? {
         status: error.response.status,
         statusText: error.response.statusText,
         data: error.response.data
-      });
-    }
+      } : undefined
+    });
     
     return res.status(500).json({ 
       error: 'Preview failed',

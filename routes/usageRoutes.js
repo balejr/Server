@@ -2,6 +2,7 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
+const logger = require("../utils/logger");
 
 const router = express.Router();
 
@@ -80,7 +81,7 @@ const checkUsageLimit = async (userId, inquiryType = "general") => {
     const remaining = Math.max(0, weeklyLimit - usedCount);
     return { remaining, used: usedCount, weekStart: weekStart };
   } catch (error) {
-    console.error("Error checking usage limit:", error);
+    logger.error("Error checking usage limit", { error: error.message });
     return { remaining: 0, used: 0, weekStart: null };
   }
 };
@@ -137,12 +138,26 @@ const incrementUsage = async (userId, inquiryType = "general") => {
 
     return true;
   } catch (error) {
-    console.error("Error incrementing usage:", error);
+    logger.error("Error incrementing usage", { error: error.message });
     return false;
   }
 };
 
-// Get usage information endpoint
+/**
+ * @swagger
+ * /usage/usage:
+ *   get:
+ *     summary: Get current usage stats
+ *     description: Retrieve current week's API usage statistics for the authenticated user
+ *     tags: [Usage]
+ *     responses:
+ *       200:
+ *         description: Usage statistics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/UsageStats'
+ */
 router.get("/usage", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -220,7 +235,7 @@ router.get("/usage", authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("Get usage error:", error);
+    logger.error("Get usage error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve usage information",
@@ -228,7 +243,17 @@ router.get("/usage", authenticateToken, async (req, res) => {
   }
 });
 
-// Reset usage for testing (admin only)
+/**
+ * @swagger
+ * /usage/usage/reset:
+ *   post:
+ *     summary: Reset usage (admin)
+ *     description: Reset current week's usage counters for testing
+ *     tags: [Usage]
+ *     responses:
+ *       200:
+ *         description: Usage reset successfully
+ */
 router.post("/usage/reset", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -249,7 +274,7 @@ router.post("/usage/reset", authenticateToken, async (req, res) => {
       week_start: weekStart,
     });
   } catch (error) {
-    console.error("Reset usage error:", error);
+    logger.error("Reset usage error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to reset usage",
@@ -257,7 +282,17 @@ router.post("/usage/reset", authenticateToken, async (req, res) => {
   }
 });
 
-// Get all usage history for user
+/**
+ * @swagger
+ * /usage/usage/history:
+ *   get:
+ *     summary: Get usage history
+ *     description: Retrieve historical API usage data for the authenticated user
+ *     tags: [Usage]
+ *     responses:
+ *       200:
+ *         description: Usage history data
+ */
 router.get("/usage/history", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
@@ -275,7 +310,7 @@ router.get("/usage/history", authenticateToken, async (req, res) => {
       usage_history: result.recordset,
     });
   } catch (error) {
-    console.error("Get usage history error:", error);
+    logger.error("Get usage history error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve usage history",

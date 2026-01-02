@@ -2,6 +2,7 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
+const logger = require("../utils/logger");
 
 const router = express.Router();
 
@@ -75,8 +76,8 @@ const saveWorkoutPlan = async (
     return true;
   } catch (error) {
     // Log error and throw it so it can be handled in chatbotRoutes.js
-    console.error("❌ Error saving workout plan to database:", {
-      message: error.message,
+    logger.error("Error saving workout plan to database", {
+      error: error.message,
       code: error.code,
       state: error.state,
       planId: planId,
@@ -161,10 +162,9 @@ const getUserWorkoutPlans = async (userId) => {
           }, 0);
         }
       } catch (parseError) {
-        console.error(
-          "Error parsing plan data for total exercises:",
-          parseError
-        );
+        logger.error("Error parsing plan data for total exercises", {
+          error: parseError.message,
+        });
         totalExercises = 0;
       }
 
@@ -179,7 +179,7 @@ const getUserWorkoutPlans = async (userId) => {
 
     return plans;
   } catch (error) {
-    console.error("Error getting user workout plans:", error);
+    logger.error("Error getting user workout plans", { error: error.message });
     return [];
   }
 };
@@ -212,13 +212,13 @@ const getMostRecentWorkoutPlan = async (userId) => {
     try {
       plan.PlanData = JSON.parse(plan.PlanData);
     } catch (parseError) {
-      console.error("Error parsing plan data:", parseError);
+      logger.error("Error parsing plan data", { error: parseError.message });
       plan.PlanData = [];
     }
 
     return plan;
   } catch (error) {
-    console.error("Error getting most recent workout plan:", error);
+    logger.error("Error getting most recent workout plan", { error: error.message });
     return null;
   }
 };
@@ -253,13 +253,13 @@ const getWorkoutPlanById = async (planId, userId) => {
     try {
       plan.PlanData = JSON.parse(plan.PlanData);
     } catch (parseError) {
-      console.error("Error parsing plan data:", parseError);
+      logger.error("Error parsing plan data by ID", { error: parseError.message });
       plan.PlanData = {};
     }
 
     return plan;
   } catch (error) {
-    console.error("Error getting workout plan by ID:", error);
+    logger.error("Error getting workout plan by ID", { error: error.message });
     return null;
   }
 };
@@ -292,7 +292,7 @@ const updateWorkoutPlanStatus = async (planId, userId, status) => {
 
     return result.rowsAffected[0] > 0;
   } catch (error) {
-    console.error("Error updating workout plan status:", error);
+    logger.error("Error updating workout plan status", { error: error.message });
     return false;
   }
 };
@@ -318,7 +318,7 @@ const deleteWorkoutPlan = async (planId, userId) => {
 
     return result.rowsAffected[0] > 0;
   } catch (error) {
-    console.error("Error deleting workout plan:", error);
+    logger.error("Error deleting workout plan", { error: error.message });
     return false;
   }
 };
@@ -326,8 +326,26 @@ const deleteWorkoutPlan = async (planId, userId) => {
 // API Routes
 
 /**
- * GET /api/workout/plans/recent
- * Get the most recent workout plan for the authenticated user
+ * @swagger
+ * /workout/plans/recent:
+ *   get:
+ *     summary: Get most recent workout plan
+ *     description: Retrieve the most recent AI-generated workout plan
+ *     tags: [Workout Plans]
+ *     responses:
+ *       200:
+ *         description: Most recent workout plan
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 plan:
+ *                   $ref: '#/components/schemas/AIWorkoutPlan'
+ *       404:
+ *         description: No workout plans found
  */
 router.get("/plans/recent", authenticateToken, async (req, res) => {
   try {
@@ -346,7 +364,7 @@ router.get("/plans/recent", authenticateToken, async (req, res) => {
       plan: plan,
     });
   } catch (error) {
-    console.error("Get most recent workout plan error:", error);
+    logger.error("Get most recent workout plan error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve most recent workout plan",
@@ -355,8 +373,15 @@ router.get("/plans/recent", authenticateToken, async (req, res) => {
 });
 
 /**
- * GET /api/workout/plans
- * Get all workout plans for the authenticated user
+ * @swagger
+ * /workout/plans:
+ *   get:
+ *     summary: Get all workout plans
+ *     description: Retrieve all AI-generated workout plans for the authenticated user
+ *     tags: [Workout Plans]
+ *     responses:
+ *       200:
+ *         description: List of workout plans
  */
 router.get("/plans", authenticateToken, async (req, res) => {
   try {
@@ -368,7 +393,7 @@ router.get("/plans", authenticateToken, async (req, res) => {
       plans: plans,
     });
   } catch (error) {
-    console.error("Get workout plans error:", error);
+    logger.error("Get workout plans error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve workout plans",
@@ -377,8 +402,22 @@ router.get("/plans", authenticateToken, async (req, res) => {
 });
 
 /**
- * GET /api/workout/plans/:planId
- * Get specific workout plan by ID
+ * @swagger
+ * /workout/plans/{planId}:
+ *   get:
+ *     summary: Get workout plan by ID
+ *     tags: [Workout Plans]
+ *     parameters:
+ *       - in: path
+ *         name: planId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Workout plan data
+ *       404:
+ *         description: Plan not found
  */
 router.get("/plans/:planId", authenticateToken, async (req, res) => {
   try {
@@ -399,7 +438,7 @@ router.get("/plans/:planId", authenticateToken, async (req, res) => {
       plan: plan,
     });
   } catch (error) {
-    console.error("Get workout plan error:", error);
+    logger.error("Get workout plan error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to retrieve workout plan",
@@ -408,8 +447,30 @@ router.get("/plans/:planId", authenticateToken, async (req, res) => {
 });
 
 /**
- * PUT /api/workout/plans/:planId/status
- * Update workout plan status
+ * @swagger
+ * /workout/plans/{planId}/status:
+ *   put:
+ *     summary: Update workout plan status
+ *     tags: [Workout Plans]
+ *     parameters:
+ *       - in: path
+ *         name: planId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UpdatePlanStatusRequest'
+ *     responses:
+ *       200:
+ *         description: Status updated
+ *       400:
+ *         description: Status required
+ *       404:
+ *         description: Plan not found
  */
 router.put("/plans/:planId/status", authenticateToken, async (req, res) => {
   try {
@@ -438,7 +499,7 @@ router.put("/plans/:planId/status", authenticateToken, async (req, res) => {
       message: "Workout plan status updated successfully",
     });
   } catch (error) {
-    console.error("Update workout plan status error:", error);
+    logger.error("Update workout plan status error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to update workout plan status",
@@ -447,8 +508,22 @@ router.put("/plans/:planId/status", authenticateToken, async (req, res) => {
 });
 
 /**
- * DELETE /api/workout/plans/:planId
- * Delete workout plan (soft delete)
+ * @swagger
+ * /workout/plans/{planId}:
+ *   delete:
+ *     summary: Delete workout plan
+ *     tags: [Workout Plans]
+ *     parameters:
+ *       - in: path
+ *         name: planId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Plan deleted
+ *       404:
+ *         description: Plan not found
  */
 router.delete("/plans/:planId", authenticateToken, async (req, res) => {
   try {
@@ -469,7 +544,7 @@ router.delete("/plans/:planId", authenticateToken, async (req, res) => {
       message: "Workout plan deleted successfully",
     });
   } catch (error) {
-    console.error("Delete workout plan error:", error);
+    logger.error("Delete workout plan error", { error: error.message });
     res.status(500).json({
       success: false,
       message: "Failed to delete workout plan",
