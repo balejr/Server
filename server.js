@@ -37,8 +37,7 @@ app.use((req, res, next) => {
 app.use("/api/data/webhooks/stripe", express.raw({ type: "application/json" }));
 app.use(express.json());
 
-// Connect to the database
-connectToDatabase();
+// Database connection is awaited in startServer() below
 
 // Swagger API Documentation
 app.use(
@@ -69,9 +68,35 @@ app.use("/api/chatbot", chatbotRoutes);
 app.use("/api/usage", usageRoutes);
 app.use("/api/workout", workoutRoutes);
 
-// Root route for health check
+// Root route for basic health check
 app.get("/", (req, res) => {
   res.send("ApogeeHnP backend is running!");
+});
+
+// Health check endpoint - verifies actual DB connectivity
+// Configure Azure App Service to use this path for health probes
+app.get("/health", async (req, res) => {
+  try {
+    const pool = require("./config/db").getPool();
+    if (!pool) {
+      return res.status(503).json({ 
+        status: "unhealthy", 
+        reason: "Database pool not initialized" 
+      });
+    }
+    // Quick connectivity check
+    await pool.request().query("SELECT 1");
+    res.json({ 
+      status: "healthy",
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    logger.error("Health check failed:", err.message);
+    res.status(503).json({ 
+      status: "unhealthy", 
+      reason: err.message 
+    });
+  }
 });
 
 // Version endpoint for deployment verification
@@ -90,7 +115,21 @@ app.get("/api/version", (req, res) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
+// Start server - await database connection before listening
+const startServer = async () => {
+  try {
+    logger.info("Connecting to database...");
+    await connectToDatabase();
+    logger.info("Database connected successfully");
+    
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    logger.error("Failed to start server:", err.message);
+    // Exit with error code so Azure knows the container failed
+    process.exit(1);
+  }
+};
+
+startServer();
