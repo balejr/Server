@@ -4,12 +4,26 @@ const axios = require('axios');
 const mssql = require('mssql');
 const { getPool } = require('../config/db');
 const { authenticateToken } = require('../middleware/authMiddleware');
+const { paginate, paginatedResponse } = require('../utils/pagination');
+const { exerciseCache } = require('../utils/cache');
+const logger = require('../utils/logger');
 const router = express.Router();
 
 // GET EXERCISES
-// GET exercises from external API (proxy)
+// GET exercises from external API (proxy) with server-side caching
 router.get('/exercises', authenticateToken, async (req, res) => {
+  const CACHE_KEY = 'exercisedb_all_exercises';
+  
   try {
+    // Check cache first
+    const cachedData = exerciseCache.get(CACHE_KEY);
+    if (cachedData) {
+      logger.debug('Returning cached exercise list');
+      return res.status(200).json(cachedData);
+    }
+
+    // Cache miss - fetch from ExerciseDB API
+    logger.info('Cache miss - fetching exercises from ExerciseDB API');
     const response = await axios.get('https://exercisedb.p.rapidapi.com/exercises?limit=1000&offset=0', {
       headers: {
         'X-RapidAPI-Key': process.env.RAPID_API_KEY,
@@ -17,7 +31,7 @@ router.get('/exercises', authenticateToken, async (req, res) => {
       },
     });
 
-    // Optionally shape the data
+    // Shape the data
     const exerciseList = response.data.map(item => ({
       id: item.id,
       name: item.name,
@@ -29,9 +43,13 @@ router.get('/exercises', authenticateToken, async (req, res) => {
       instructions: item.instructions
     }));
 
+    // Store in cache (24h TTL)
+    exerciseCache.set(CACHE_KEY, exerciseList);
+    logger.info(`Cached ${exerciseList.length} exercises`);
+
     res.status(200).json(exerciseList);
   } catch (error) {
-    console.error('Failed to fetch exercises:', error);
+    logger.error('Failed to fetch exercises:', error.message);
     res.status(500).json({ message: 'Failed to fetch exercises' });
   }
 });
@@ -87,23 +105,38 @@ router.get('/dailylog/:logId', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all daily logs for specific user
+// GET all daily logs for specific user (with pagination)
 router.get('/dailylogs', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
+    const { page, limit, offset } = paginate(req);
 
     try {
       const pool = getPool();
+      
+      // Get total count first
+      const countResult = await pool.request()
+        .input('userId', userId)
+        .query(`SELECT COUNT(DISTINCT EffectiveDate) as total FROM dbo.DailyLogs WHERE UserID = @userId`);
+      
+      const total = countResult.recordset[0].total;
+
+      // Get paginated data
       const result = await pool.request()
         .input('userId', userId)
+        .input('limit', mssql.Int, limit)
+        .input('offset', mssql.Int, offset)
         .query(`SELECT dl.* FROM dbo.DailyLogs dl
                 INNER JOIN (SELECT MAX(LogId) AS LogId, EffectiveDate FROM dbo.DailyLogs 
                 WHERE UserID = @userId
                 GROUP BY EffectiveDate) dlx
                   ON dl.LogId = dlx.LogId
+                ORDER BY dl.EffectiveDate DESC
+                OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
                 `);
 
-      res.status(200).json(result.recordset);
+      res.status(200).json(paginatedResponse(result.recordset, page, limit, total));
     } catch (err) {
+      logger.error('Failed to fetch daily logs:', err.message);
       res.status(500).json({ message: 'Failed to fetch daily logs' });
     }
 });
@@ -142,6 +175,55 @@ router.delete('/dailylog/:logId', authenticateToken, async (req, res) => {
     } catch (err) {
       res.status(500).json({ message: 'Failed to delete daily log' });
     }
+});
+
+// -------------------- DASHBOARD --------------------
+// GET weekly summary - aggregated workout completion data for past 7 days
+// This replaces N+1 queries from frontend (7x getWorkoutRoutinesByDate + N x getRoutineExerciseInstances)
+router.get('/dashboard/weekly-summary', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  
+  try {
+    const pool = getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+        WITH DateRange AS (
+          SELECT CAST(DATEADD(DAY, -n, GETDATE()) AS DATE) as Date, n as DayOffset
+          FROM (VALUES (0),(1),(2),(3),(4),(5),(6)) AS Numbers(n)
+        ),
+        DailyWorkouts AS (
+          SELECT 
+            CAST(wr.WorkoutRoutineDate AS DATE) as WorkoutDate,
+            COUNT(DISTINCT wr.WorkoutRoutineID) as RoutineCount,
+            COUNT(ee.ExerciseExistenceID) as TotalExercises,
+            SUM(CASE WHEN ee.Completed = 1 THEN 1 ELSE 0 END) as CompletedExercises
+          FROM dbo.WorkoutRoutine wr
+          LEFT JOIN dbo.ExerciseExistence ee ON ee.WorkoutRoutineID = wr.WorkoutRoutineID
+          WHERE wr.UserID = @userId 
+            AND CAST(wr.WorkoutRoutineDate AS DATE) >= CAST(DATEADD(DAY, -6, GETDATE()) AS DATE)
+          GROUP BY CAST(wr.WorkoutRoutineDate AS DATE)
+        )
+        SELECT 
+          dr.Date,
+          DATENAME(WEEKDAY, dr.Date) as DayName,
+          COALESCE(dw.RoutineCount, 0) as PlannedWorkouts,
+          COALESCE(dw.TotalExercises, 0) as TotalExercises,
+          COALESCE(dw.CompletedExercises, 0) as CompletedExercises,
+          CASE WHEN dw.TotalExercises > 0 
+            THEN CAST(dw.CompletedExercises * 100.0 / dw.TotalExercises AS DECIMAL(5,2))
+            ELSE 0 
+          END as CompletionPercent
+        FROM DateRange dr
+        LEFT JOIN DailyWorkouts dw ON dr.Date = dw.WorkoutDate
+        ORDER BY dr.DayOffset DESC
+      `);
+    
+    res.status(200).json({ success: true, data: result.recordset });
+  } catch (err) {
+    logger.error('Failed to fetch weekly summary:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch weekly summary' });
+  }
 });
 
 // -------------------- EXERCISE EXISTENCE --------------------
@@ -314,16 +396,33 @@ router.post('/exerciseexistence', authenticateToken, async (req, res) => {
   }
 });
 
-// GET all exercise instances for specific user
+// GET all exercise instances for specific user (with pagination)
 router.get('/exerciseexistences', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
+    const { page, limit, offset } = paginate(req);
+    
     try {
       const pool = getPool();
+      
+      // Get total count
+      const countResult = await pool.request()
+        .input('userId', userId)
+        .query('SELECT COUNT(*) as total FROM dbo.ExerciseExistence WHERE UserID = @userId');
+      
+      const total = countResult.recordset[0].total;
+      
+      // Get paginated data
       const result = await pool.request()
         .input('userId', userId)
-        .query('SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId');
-      res.status(200).json(result.recordset);
+        .input('limit', mssql.Int, limit)
+        .input('offset', mssql.Int, offset)
+        .query(`SELECT * FROM dbo.ExerciseExistence WHERE UserID = @userId 
+                ORDER BY Date DESC
+                OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`);
+      
+      res.status(200).json(paginatedResponse(result.recordset, page, limit, total));
     } catch (err) {
+      logger.error('Failed to fetch exercise existences:', err.message);
       res.status(500).json({ message: 'Failed to fetch exercise existences' });
     }
 });
@@ -491,16 +590,33 @@ router.get('/workoutroutine/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all workout routines for a specific user
+// GET all workout routines for a specific user (with pagination)
 router.get('/workoutroutines', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
+    const { page, limit, offset } = paginate(req);
+    
     try {
       const pool = getPool();
+      
+      // Get total count
+      const countResult = await pool.request()
+        .input('userId', userId)
+        .query('SELECT COUNT(*) as total FROM dbo.WorkoutRoutine WHERE UserID = @userId');
+      
+      const total = countResult.recordset[0].total;
+      
+      // Get paginated data
       const result = await pool.request()
         .input('userId', userId)
-        .query('SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId');
-      res.status(200).json(result.recordset);
+        .input('limit', mssql.Int, limit)
+        .input('offset', mssql.Int, offset)
+        .query(`SELECT * FROM dbo.WorkoutRoutine WHERE UserID = @userId 
+                ORDER BY WorkoutRoutineDate DESC
+                OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`);
+      
+      res.status(200).json(paginatedResponse(result.recordset, page, limit, total));
     } catch (err) {
+      logger.error('Failed to fetch workout routines:', err.message);
       res.status(500).json({ message: 'Failed to fetch workout routines' });
     }
 });
@@ -614,16 +730,33 @@ router.post('/mesocycle', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all users mesocycles
+// GET all users mesocycles (with pagination)
 router.get('/mesocycles', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
+    const { page, limit, offset } = paginate(req);
+    
     try {
       const pool = getPool();
+      
+      // Get total count
+      const countResult = await pool.request()
+        .input('userId', userId)
+        .query('SELECT COUNT(*) as total FROM dbo.Mesocycles WHERE UserId = @userId AND is_current = 1');
+      
+      const total = countResult.recordset[0].total;
+      
+      // Get paginated data
       const result = await pool.request()
         .input('userId', userId)
-        .query('SELECT * FROM dbo.Mesocycles WHERE UserId = @userId and is_current = 1');
-      res.status(200).json(result.recordset);
+        .input('limit', mssql.Int, limit)
+        .input('offset', mssql.Int, offset)
+        .query(`SELECT * FROM dbo.Mesocycles WHERE UserId = @userId AND is_current = 1
+                ORDER BY created_date DESC
+                OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`);
+      
+      res.status(200).json(paginatedResponse(result.recordset, page, limit, total));
     } catch (err) {
+      logger.error('Failed to fetch mesocycles:', err.message);
       res.status(500).json({ message: 'Failed to fetch mesocycles' });
     }
 });
@@ -725,20 +858,41 @@ router.post('/microcycle', authenticateToken, async (req, res) => {
     }
 });
 
-// GET all microcyles by user
+// GET all microcyles by user (with pagination)
 router.get('/microcycles', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
+    const { page, limit, offset } = paginate(req);
+    
     try {
       const pool = getPool();
+      
+      // Get total count
+      const countResult = await pool.request()
+        .input('userId', userId)
+        .query(`
+          SELECT COUNT(*) as total FROM dbo.Microcycles m
+          INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
+          WHERE ms.UserId = @userId
+        `);
+      
+      const total = countResult.recordset[0].total;
+      
+      // Get paginated data
       const result = await pool.request()
         .input('userId', userId)
+        .input('limit', mssql.Int, limit)
+        .input('offset', mssql.Int, offset)
         .query(`
           SELECT m.* FROM dbo.Microcycles m
           INNER JOIN dbo.Mesocycles ms ON m.mesocycle_id = ms.mesocycle_id
           WHERE ms.UserId = @userId
+          ORDER BY m.created_date DESC
+          OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
         `);
-      res.status(200).json(result.recordset);
+      
+      res.status(200).json(paginatedResponse(result.recordset, page, limit, total));
     } catch (err) {
+      logger.error('Failed to fetch microcycles:', err.message);
       res.status(500).json({ message: 'Failed to fetch microcycles' });
     }
 });
