@@ -424,20 +424,22 @@ END
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user_subscriptions')
 BEGIN
     CREATE TABLE [dbo].[user_subscriptions] (
-        id INT IDENTITY(1,1) PRIMARY KEY,
         UserId INT NOT NULL,
+        [plan] NVARCHAR(32) NOT NULL,
+        status NVARCHAR(32) NOT NULL,
+        payment_intent_id NVARCHAR(128) NULL,
+        started_at DATETIMEOFFSET NULL,
+        updated_at DATETIMEOFFSET NULL,
         subscription_id NVARCHAR(128) NULL,
         customer_id NVARCHAR(128) NULL,
-        [plan] NVARCHAR(50) NULL,
-        status NVARCHAR(50) DEFAULT 'inactive',
-        billing_interval NVARCHAR(32) NULL,
         current_period_start DATETIMEOFFSET NULL,
         current_period_end DATETIMEOFFSET NULL,
+        billing_interval NVARCHAR(32) NULL,
+        cancellation_scheduled BIT NULL,
         cancel_at_period_end BIT DEFAULT 0,
+        payment_platform NVARCHAR(32) NULL,
         transaction_type NVARCHAR(32) NULL,
         transaction_date DATETIMEOFFSET NULL,
-        created_at DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
-        updated_at DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
         
         CONSTRAINT FK_user_subscriptions_UserProfile 
             FOREIGN KEY (UserId) REFERENCES [dbo].[UserProfile](UserID),
@@ -772,4 +774,3 @@ PRINT '  - PreWorkoutAssessment (readiness)';
 PRINT '  - DeviceData (connected devices)';
 PRINT '  - OuraTokens (Oura integration)';
 PRINT '';
-
