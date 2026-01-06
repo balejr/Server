@@ -17,6 +17,7 @@ const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const dataRoutes = require("./routes/dataRoutes");
 const chatbotRoutes = require("./routes/chatbotRoutes");
+const configRoutes = require("./routes/configRoutes");
 const { router: usageRoutes } = require("./routes/usageRoutes");
 const { router: workoutRoutes } = require("./routes/workoutRoutes");
 
@@ -67,6 +68,7 @@ app.use("/api/data", dataRoutes);
 app.use("/api/chatbot", chatbotRoutes);
 app.use("/api/usage", usageRoutes);
 app.use("/api/workout", workoutRoutes);
+app.use("/api/config", configRoutes);
 
 // Root route for basic health check
 app.get("/", (req, res) => {

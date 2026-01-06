@@ -176,6 +176,10 @@ const options = {
       {
         name: 'Webhooks',
         description: 'External webhook handlers (Stripe)'
+      },
+      {
+        name: "Config",
+        description: "Runtime configuration endpoints for mobile/web clients",
       }
     ]
   },
