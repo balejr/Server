@@ -1,4 +1,4 @@
-// server.js - Azure HARDENED startup version
+// server.js - Azure Hardened v4
 
 require("dotenv").config();
 const express = require("express");
@@ -16,13 +16,12 @@ try {
 
 const { connectToDatabase, getPool } = require("./config/db");
 
-// SAFE logger wrapper
+// SAFE logger fallback
 let logger = {
   info: console.log,
   error: console.error,
-  request: () => {}
+  request: () => {},
 };
-
 try {
   logger = require("./utils/logger");
 } catch (err) {
@@ -41,6 +40,10 @@ console.log("NODE VERSION:", process.version);
 ====================== */
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  logger.request(req.method, req.originalUrl);
+  next();
+});
 
 /* ======================
    Routes (SAFE LOAD)
@@ -65,36 +68,63 @@ if (swaggerUi && swaggerSpec) {
 }
 
 /* ======================
-   Health
+   Health & Root
 ====================== */
 app.get("/", (_, res) => res.send("ApogeeHnP backend is running"));
 
 app.get("/health", async (_, res) => {
   try {
     const pool = getPool();
-    if (!pool) throw new Error("DB not initialized");
+    if (!pool) {
+      return res.json({
+        status: "healthy",
+        db: "not ready",
+        timestamp: new Date().toISOString(),
+      });
+    }
     await pool.request().query("SELECT 1");
-    res.json({ status: "healthy" });
+    res.json({ status: "healthy", db: "connected" });
   } catch (err) {
-    res.status(503).json({ status: "unhealthy", error: err.message });
+    res.json({ status: "healthy", db: "error", error: err.message });
   }
 });
 
 /* ======================
-   START SERVER (DO NOT FAIL)
+   Version endpoint
+====================== */
+app.get("/api/version", (_, res) => {
+  res.json({
+    version: "2026-01-07-v4-azure",
+    nodeVersion: process.version,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/* ======================
+   START SERVER (Azure-safe)
 ====================== */
 app.listen(PORT, () => {
   console.log("✅ Server listening on port", PORT);
 });
 
 /* ======================
-   DB CONNECT (NON-BLOCKING)
+   Database Connect (Async + Retry)
 ====================== */
-(async () => {
-  try {
-    await connectToDatabase();
-    console.log("✅ Database connected");
-  } catch (err) {
-    console.error("❌ Database connection failed:", err.message);
+const MAX_RETRIES = 5;
+let attempt = 0;
+
+async function initDB() {
+  while (attempt < MAX_RETRIES) {
+    try {
+      await connectToDatabase();
+      console.log("✅ Database connected");
+      return;
+    } catch (err) {
+      attempt++;
+      console.error(`❌ DB connection attempt ${attempt} failed:`, err.message);
+      await new Promise(r => setTimeout(r, 5000)); // 5s retry
+    }
   }
-})();
+  console.error("❌ DB connection failed after retries, continuing without blocking server");
+}
+initDB();
