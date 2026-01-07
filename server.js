@@ -1,138 +1,100 @@
-// server.js - v3 Azure-safe deployment fix
+// server.js - Azure HARDENED startup version
 
-require("dotenv").config(); // Load env vars FIRST
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const swaggerUi = require("swagger-ui-express");
-const swaggerSpec = require("./swagger");
+
+let swaggerUi;
+let swaggerSpec;
+
+try {
+  swaggerUi = require("swagger-ui-express");
+  swaggerSpec = require("./swagger");
+} catch (err) {
+  console.error("⚠️ Swagger disabled:", err.message);
+}
+
 const { connectToDatabase, getPool } = require("./config/db");
-const logger = require("./utils/logger");
 
-// Metadata
-const SERVER_START_TIME = new Date().toISOString();
-const BUILD_VERSION = "2026-01-07-v3-azure-fix";
+// SAFE logger wrapper
+let logger = {
+  info: console.log,
+  error: console.error,
+  request: () => {}
+};
 
-// Routes
-const authRoutes = require("./routes/authRoutes");
-const userRoutes = require("./routes/userRoutes");
-const dataRoutes = require("./routes/dataRoutes");
-const chatbotRoutes = require("./routes/chatbotRoutes");
-const configRoutes = require("./routes/configRoutes");
-const { router: usageRoutes } = require("./routes/usageRoutes");
-const { router: workoutRoutes } = require("./routes/workoutRoutes");
+try {
+  logger = require("./utils/logger");
+} catch (err) {
+  console.error("⚠️ Logger fallback enabled:", err.message);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+console.log("🚀 Starting server...");
+console.log("PORT:", PORT);
+console.log("NODE VERSION:", process.version);
 
 /* ======================
    Middleware
 ====================== */
 app.use(cors());
-
-// Request logging (important for Azure diagnostics)
-app.use((req, res, next) => {
-  logger.request(req.method, req.originalUrl);
-  next();
-});
-
-// Stripe webhook requires raw body
-app.use("/api/data/webhooks/stripe", express.raw({ type: "application/json" }));
-
-// JSON body parser
 app.use(express.json());
 
 /* ======================
-   Swagger
+   Routes (SAFE LOAD)
 ====================== */
-app.use(
-  "/api/docs",
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customCss: ".swagger-ui .topbar { display: none }",
-    customSiteTitle: "ApogeeHnP API Docs",
-    swaggerOptions: {
-      persistAuthorization: true,
-      tagsSorter: "alpha",
-      operationsSorter: "alpha",
-    },
-  })
-);
-
-app.get("/api/docs.json", (req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send(swaggerSpec);
-});
+try {
+  app.use("/api/auth", require("./routes/authRoutes"));
+  app.use("/api/user", require("./routes/userRoutes"));
+  app.use("/api/data", require("./routes/dataRoutes"));
+  app.use("/api/chatbot", require("./routes/chatbotRoutes"));
+  app.use("/api/config", require("./routes/configRoutes"));
+  app.use("/api/usage", require("./routes/usageRoutes").router);
+  app.use("/api/workout", require("./routes/workoutRoutes").router);
+} catch (err) {
+  console.error("❌ Route load failure:", err.message);
+}
 
 /* ======================
-   Routes
+   Swagger (OPTIONAL)
 ====================== */
-app.use("/api/auth", authRoutes);
-app.use("/api/user", userRoutes);
-app.use("/api/data", dataRoutes);
-app.use("/api/chatbot", chatbotRoutes);
-app.use("/api/usage", usageRoutes);
-app.use("/api/workout", workoutRoutes);
-app.use("/api/config", configRoutes);
+if (swaggerUi && swaggerSpec) {
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 /* ======================
-   Health & Meta
+   Health
 ====================== */
+app.get("/", (_, res) => res.send("ApogeeHnP backend is running"));
 
-// Root — Azure startup probe hits this
-app.get("/", (req, res) => {
-  res.status(200).send("ApogeeHnP backend is running");
-});
-
-// Azure health probe (safe DB check)
-app.get("/health", async (req, res) => {
+app.get("/health", async (_, res) => {
   try {
     const pool = getPool();
-    if (!pool) {
-      return res.status(503).json({
-        status: "unhealthy",
-        reason: "Database not initialized",
-      });
-    }
-
+    if (!pool) throw new Error("DB not initialized");
     await pool.request().query("SELECT 1");
-    res.json({
-      status: "healthy",
-      timestamp: new Date().toISOString(),
-    });
+    res.json({ status: "healthy" });
   } catch (err) {
-    logger.error("Health check failed:", err.message);
-    res.status(503).json({
-      status: "unhealthy",
-      reason: err.message,
-    });
+    res.status(503).json({ status: "unhealthy", error: err.message });
   }
 });
 
-app.get("/api/version", (req, res) => {
-  res.json({
-    version: BUILD_VERSION,
-    serverStartedAt: SERVER_START_TIME,
-    nodeVersion: process.version,
-  });
+/* ======================
+   START SERVER (DO NOT FAIL)
+====================== */
+app.listen(PORT, () => {
+  console.log("✅ Server listening on port", PORT);
 });
 
 /* ======================
-   START SERVER (CRITICAL)
+   DB CONNECT (NON-BLOCKING)
 ====================== */
-
-// 🔥 LISTEN FIRST — DO NOT BLOCK AZURE
-app.listen(PORT, () => {
-  logger.info(`✅ Server listening on port ${PORT}`);
-});
-
-// 🔄 Connect DB asynchronously (non-blocking)
 (async () => {
   try {
-    logger.info("Connecting to database...");
     await connectToDatabase();
-    logger.info("✅ Database connected");
+    console.log("✅ Database connected");
   } catch (err) {
-    logger.error("❌ Database connection failed:", err.message);
-    // Do NOT exit — Azure must stay alive
+    console.error("❌ Database connection failed:", err.message);
   }
 })();
