@@ -147,12 +147,12 @@ router.post("/dailylog", authenticateToken, async (req, res) => {
 
       // Award XP for hitting step goal (10,000+ steps)
       if (steps && steps >= 10000) {
-        const stepsResult = await xpEventService.awardStepGoal(userId);
+        const stepsResult = await xpEventService.awardStepGoal(userId, steps);
         xpResults.steps = stepsResult;
       }
 
       // Check for daily combo (workout + water + sleep in same day)
-      const comboResult = await xpEventService.checkDailyCombo(userId);
+      const comboResult = await xpEventService.checkDailyCombo(userId, pool);
       if (comboResult?.awarded) {
         xpResults.combo = comboResult;
       }
@@ -206,6 +206,10 @@ router.get("/dailylog/:logId", authenticateToken, async (req, res) => {
       .request()
       .input("logId", logId)
       .query("SELECT * FROM dbo.DailyLogs WHERE LogID = @logId");
+
+    if (!result.recordset[0]) {
+      return res.status(404).json({ success: false, message: "Daily log not found" });
+    }
     res.status(200).json(result.recordset[0]);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch daily log" });
@@ -254,7 +258,7 @@ router.get("/dailylogs", authenticateToken, async (req, res) => {
         `SELECT COUNT(DISTINCT EffectiveDate) as total FROM dbo.DailyLogs WHERE UserID = @userId`
       );
 
-    const total = countResult.recordset[0].total;
+    const total = countResult.recordset[0]?.total || 0;
 
     // Get paginated data
     const result = await pool
@@ -823,7 +827,7 @@ router.get("/exerciseexistences", authenticateToken, async (req, res) => {
         "SELECT COUNT(*) as total FROM dbo.ExerciseExistence WHERE UserID = @userId"
       );
 
-    const total = countResult.recordset[0].total;
+    const total = countResult.recordset[0]?.total || 0;
 
     // Get paginated data
     const result = await pool
@@ -909,28 +913,9 @@ router.get(
     const { date } = req.params;
     try {
       const pool = getPool();
-      const result = await // .query(`SELECT ex.* , e.ExerciseName
-      //         FROM dbo.ExerciseExistence ex
-      //         INNER JOIN
-      //         (
-      //         SELECT MAX(ee.ExerciseExistenceID) as ExerciseExistenceID, ee.UserId, ee.ExerciseID
-      //         FROM dbo.ExerciseExistence ee
-      //         INNER JOIN (SELECT UserId, MAX(FORMAT([Date], 'yyyy-MM-dd')) as [Date]
-      //             FROM dbo.ExerciseExistence
-      //             WHERE UserID = @userId
-      //             AND CONVERT(date, [Date]) = @date
-      //             GROUP BY UserId) eex
-      //         ON ee.UserId = eex.UserId
-      //         AND FORMAT(ee.[Date], 'yyyy-MM-dd') = eex.[Date]
-      //         GROUP BY ee.UserId, ee.ExerciseID
-      //         ) ey
-      //         on ex.ExerciseExistenceID = ey.ExerciseExistenceID
-      //         LEFT JOIN dbo.[Exercise] e
-      //         ON ex.ExerciseId = e.ExerciseId`)
-
-      pool.request().input("userId", userId).input("date", date)
-        .query(`SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee 
-                LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId 
+      const result = await pool.request().input("userId", userId).input("date", date)
+        .query(`SELECT ee.*, e.ExerciseName FROM dbo.ExerciseExistence ee
+                LEFT JOIN dbo.[Exercise] e ON ee.ExerciseId = e.ExerciseId
                 WHERE ee.UserID = @userId AND CONVERT(date, ee.Date) = @date`);
 
       res.status(200).json(result.recordset);
@@ -1205,6 +1190,10 @@ router.get("/workoutroutine/:id", authenticateToken, async (req, res) => {
       .request()
       .input("id", id)
       .query("SELECT * FROM dbo.WorkoutRoutine WHERE WorkoutRoutineID = @id");
+
+    if (!result.recordset[0]) {
+      return res.status(404).json({ success: false, message: "Workout routine not found" });
+    }
     res.status(200).json(result.recordset[0]);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch workout routine" });
@@ -1249,7 +1238,7 @@ router.get("/workoutroutines", authenticateToken, async (req, res) => {
         "SELECT COUNT(*) as total FROM dbo.WorkoutRoutine WHERE UserID = @userId"
       );
 
-    const total = countResult.recordset[0].total;
+    const total = countResult.recordset[0]?.total || 0;
 
     // Get paginated data
     const result = await pool
@@ -1619,7 +1608,7 @@ router.get("/mesocycles", authenticateToken, async (req, res) => {
         "SELECT COUNT(*) as total FROM dbo.Mesocycles WHERE UserId = @userId AND is_current = 1"
       );
 
-    const total = countResult.recordset[0].total;
+    const total = countResult.recordset[0]?.total || 0;
 
     // Get paginated data
     const result = await pool
@@ -1919,7 +1908,7 @@ router.get("/microcycles", authenticateToken, async (req, res) => {
           WHERE ms.UserId = @userId
         `);
 
-    const total = countResult.recordset[0].total;
+    const total = countResult.recordset[0]?.total || 0;
 
     // Get paginated data
     const result = await pool
@@ -2138,10 +2127,10 @@ router.delete(
  *       200:
  *         description: List of unfinished exercises
  */
-router.get("/exercises/unfinished/:userId", async (req, res) => {
-  const { userId } = req.params;
+router.get("/exercises/unfinished", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
   try {
-    const pool = await getPool();
+    const pool = getPool();
     const result = await pool.request().input("userId", userId).query(`
         SELECT ex.* , e.ExerciseName
                 FROM dbo.ExerciseExistence ex
@@ -2296,11 +2285,11 @@ router.post(
  *       200:
  *         description: Previous workout data
  */
-router.get("/exercises/previous-all/:userId", async (req, res) => {
-  const { userId } = req.params;
+router.get("/exercises/previous-all", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
 
   try {
-    const pool = await getPool();
+    const pool = getPool();
 
     const result = await pool.request().input("userId", userId).query(`
         WITH LatestCompletedSets AS (
@@ -2370,10 +2359,10 @@ router.get("/exercises/previous-all/:userId", async (req, res) => {
  *       200:
  *         description: Exercise history data
  */
-router.get("/exercises/history/:userId", async (req, res) => {
-  const { userId } = req.params;
+router.get("/exercises/history", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
   try {
-    const pool = await getPool();
+    const pool = getPool();
     const result = await pool.request().input("userId", userId).query(`
               SELECT DISTINCT ex.ExerciseId, e.ExerciseName, ImageURL
               FROM dbo.ExerciseExistence ex
