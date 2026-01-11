@@ -151,7 +151,7 @@ const config = {
 
 | Table         | Key Columns                                                                                                               | Purpose                    |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `UserProfile` | UserID (IDENTITY), FirstName, LastName, Age, Weight, Height, Gender, FitnessLevel, FitnessGoal, UserType, ProfileImageUrl | User profile data (parent) |
+| `UserProfile` | UserID (IDENTITY), FirstName, LastName, Age, Weight, Height, BodyFat, Muscle, Gender, FitnessLevel, FitnessGoal, UserType, ProfileImageUrl | User profile data (parent) |
 | `UserLogin`   | UserID (FK→UserProfile), Email, Password, RefreshToken, RefreshTokenVersion, MFAEnabled, MFAMethod, TokenInvalidatedAt    | Authentication credentials |
 
 > **Note:** `UserProfile` is the parent table with `IDENTITY`. `UserLogin` references `UserProfile` via FK.
@@ -199,6 +199,25 @@ const config = {
 | Table       | Key Columns                                                          | Purpose               |
 | ----------- | -------------------------------------------------------------------- | --------------------- |
 | `UserUsage` | UsageID, UserID, GeneralInquiryCount, WorkoutInquiryCount, WeekStart | Weekly usage tracking |
+
+#### Rewards Tables
+
+| Table                  | Key Columns                                                                                  | Purpose                          |
+| ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- |
+| `RewardDefinitions`    | RewardID (PK), RewardKey, Category, Name, Description, XPValue, RequiredCount, IsActive      | Available rewards catalog        |
+| `UserRewards`          | UserRewardID (PK), UserID, TotalXP, CurrentTier, LastUpdated                                 | User's XP and tier progress      |
+| `UserRewardProgress`   | ProgressID (PK), UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt      | Track progress on each reward    |
+| `UserRewardHistory`    | HistoryID (PK), UserID, RewardID, XPEarned, Reason, EarnedAt                                 | Log of all XP earned             |
+
+**Reward Categories:** `daily`, `weekly`, `milestone`, `streak`, `special`
+
+**Tier System:**
+| Tier      | Min XP | Max XP | Benefits                                |
+| --------- | ------ | ------ | --------------------------------------- |
+| Bronze    | 0      | 99     | Custom avatar, badge, sticker           |
+| Silver    | 100    | 499    | 1 week premium, free workout plan       |
+| Gold      | 500    | 999    | Gear discounts, gift cards, coaching    |
+| Exclusive | 1000   | -      | Prize draws, equipment, recognition     |
 
 ### Connection Pooling Pattern
 
@@ -968,6 +987,7 @@ Routes to correct payment gateway based on user's subscription.
 | `chatbotRoutes.js` | `/api/chatbot` | 3         | AI assistant                                   |
 | `workoutRoutes.js` | `/api/workout` | 5         | AI workout plans                               |
 | `usageRoutes.js`   | `/api/usage`   | 3         | Usage tracking                                 |
+| `rewardsRoutes.js` | `/api/rewards` | 3         | XP rewards and tier progression                |
 
 ### Auth Routes (`/api/auth`)
 
@@ -1078,6 +1098,56 @@ Routes to correct payment gateway based on user's subscription.
 | GET    | `/usage`         | Access | Get current usage stats     |
 | GET    | `/usage/history` | Access | Get usage history           |
 | POST   | `/usage/reset`   | Access | Reset usage (admin/testing) |
+
+### Rewards Routes (`/api/rewards`)
+
+| Method | Endpoint              | Auth   | Description                                  |
+| ------ | --------------------- | ------ | -------------------------------------------- |
+| GET    | `/user`               | Access | Get user's XP, tier, and reward progress     |
+| POST   | `/:rewardId/claim`    | Access | Claim a completed reward                     |
+| GET    | `/history`            | Access | Get completed rewards history (paginated)    |
+| POST   | `/progress/:rewardKey`| Access | Update progress on a specific reward         |
+
+**GET /rewards/user Response:**
+
+```json
+{
+  "success": true,
+  "totalXP": 1247,
+  "currentTier": "Gold",
+  "nextTier": "Exclusive",
+  "xpToNextTier": 247,
+  "rewardProgress": [
+    {
+      "category": "daily",
+      "rewards": [
+        { "id": "daily_signin", "name": "Daily Sign-In", "xp": 10, "progress": 100, "claimable": true },
+        { "id": "log_water", "name": "Log Water Intake", "xp": 5, "progress": 80, "claimable": false }
+      ]
+    }
+  ],
+  "completedCount": 89
+}
+```
+
+**POST /rewards/:id/claim Response:**
+
+```json
+{
+  "success": true,
+  "xpEarned": 10,
+  "newTotalXP": 1257,
+  "tierUp": false
+}
+```
+
+**GET /rewards/history Query Parameters:**
+
+| Parameter | Type   | Default | Description           |
+| --------- | ------ | ------- | --------------------- |
+| `search`  | string | -       | Search reward names   |
+| `page`    | number | 1       | Page number           |
+| `limit`   | number | 20      | Items per page        |
 
 ---
 

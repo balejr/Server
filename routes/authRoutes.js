@@ -3129,6 +3129,8 @@ router.patch(
       fitnessGoal,
       weight,
       height,
+      bodyFat,
+      muscle,
       fitnessLevel,
       age,
     } = req.body;
@@ -3156,31 +3158,66 @@ router.patch(
       const request = pool.request();
 
       request.input("userId", userId);
-      request.input("firstname", firstname);
-      request.input("lastname", lastname);
-      request.input("gender", gender);
-      request.input("fitnessGoal", fitnessGoal);
-      // Convert empty strings to null for numeric columns to prevent SQL conversion errors
-      request.input("weight", weight === '' ? null : weight);
-      request.input("height", height === '' ? null : height);
-      request.input("fitnessLevel", fitnessLevel);
-      request.input("age", age === '' ? null : age);
+
+      // Build dynamic SET clause - only update fields that are provided
+      const setClauses = [];
+
+      if (firstname !== undefined && firstname !== null) {
+        request.input("firstname", firstname);
+        setClauses.push("FirstName = @firstname");
+      }
+      if (lastname !== undefined && lastname !== null) {
+        request.input("lastname", lastname);
+        setClauses.push("LastName = @lastname");
+      }
+      if (gender !== undefined && gender !== null) {
+        request.input("gender", gender);
+        setClauses.push("Gender = @gender");
+      }
+      if (fitnessGoal !== undefined && fitnessGoal !== null) {
+        request.input("fitnessGoal", fitnessGoal);
+        setClauses.push("FitnessGoal = @fitnessGoal");
+      }
+      if (weight !== undefined && weight !== null && weight !== '') {
+        request.input("weight", weight);
+        setClauses.push("Weight = @weight");
+      }
+      if (height !== undefined && height !== null && height !== '') {
+        request.input("height", height);
+        setClauses.push("Height = @height");
+      }
+      if (bodyFat !== undefined && bodyFat !== null && bodyFat !== '') {
+        request.input("bodyFat", bodyFat);
+        setClauses.push("BodyFat = @bodyFat");
+      }
+      if (muscle !== undefined && muscle !== null && muscle !== '') {
+        request.input("muscle", muscle);
+        setClauses.push("Muscle = @muscle");
+      }
+      if (fitnessLevel !== undefined && fitnessLevel !== null) {
+        request.input("fitnessLevel", fitnessLevel);
+        setClauses.push("FitnessLevel = @fitnessLevel");
+      }
+      if (age !== undefined && age !== null && age !== '') {
+        request.input("age", age);
+        setClauses.push("Age = @age");
+      }
       if (profileImageUrl) {
         request.input("profileImageUrl", profileImageUrl);
+        setClauses.push("ProfileImageUrl = @profileImageUrl");
+      }
+
+      // Only run update if there are fields to update
+      if (setClauses.length === 0) {
+        return res.status(200).json({
+          success: true,
+          message: "No fields to update.",
+        });
       }
 
       const updateQuery = `
       UPDATE dbo.UserProfile
-      SET 
-        FirstName = @firstname,
-        LastName = @lastname,
-        Gender = @gender,
-        FitnessGoal = @fitnessGoal,
-        Weight = @weight,
-        Height = @height,
-        FitnessLevel = @fitnessLevel,
-        Age = @age
-        ${profileImageUrl ? ", ProfileImageUrl = @profileImageUrl" : ""}
+      SET ${setClauses.join(", ")}
       WHERE UserID = @userId
     `;
 

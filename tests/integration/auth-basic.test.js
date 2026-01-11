@@ -347,6 +347,55 @@ describe("Basic Auth Flow", () => {
 
       expect(response.status).toBe(401);
     });
+
+    test("partial update does not wipe other fields", async () => {
+      const state = getState();
+
+      // First, set firstname and lastname
+      const { response: setupRes } = await api.patch(
+        `/auth/update-profile/${state.userId}`,
+        {
+          firstname: "PartialTest",
+          lastname: "UserName",
+        },
+        { Authorization: `Bearer ${state.accessToken}` }
+      );
+      expect(setupRes.status).toBe(200);
+
+      // Now update only weight - this should NOT wipe firstname/lastname
+      const { response: weightRes } = await api.patch(
+        `/auth/update-profile/${state.userId}`,
+        { weight: 175 },
+        { Authorization: `Bearer ${state.accessToken}` }
+      );
+      expect(weightRes.status).toBe(200);
+
+      // Verify firstname/lastname are still intact
+      const { response: statusRes } = await api.get("/auth/status", {
+        Authorization: `Bearer ${state.accessToken}`,
+      });
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.data.authStatus.firstName).toBe("PartialTest");
+      expect(statusRes.data.authStatus.lastName).toBe("UserName");
+
+      console.log("     Partial update verified - other fields preserved");
+    });
+
+    test("updates bodyFat and muscle fields", async () => {
+      const state = getState();
+      const { response, duration } = await api.patch(
+        `/auth/update-profile/${state.userId}`,
+        {
+          bodyFat: 18.5,
+          muscle: 42.0,
+        },
+        { Authorization: `Bearer ${state.accessToken}` }
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.data.success).toBe(true);
+      console.log(`     Body metrics updated (${duration}ms)`);
+    });
   });
 
   // =========================================================================

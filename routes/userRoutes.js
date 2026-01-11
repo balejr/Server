@@ -37,7 +37,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const result = await pool.request().input("userId", userId).query(`
-        SELECT FirstName, LastName, FitnessGoal, Age, Weight, Height, Gender, FitnessLevel, ProfileImageUrl
+        SELECT FirstName, LastName, FitnessGoal, Age, Weight, Height, BodyFat, Muscle, Gender, FitnessLevel, ProfileImageUrl
         FROM dbo.UserProfile
         WHERE UserID = @userId
       `);

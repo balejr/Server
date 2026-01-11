@@ -56,6 +56,7 @@ try {
   app.use("/api/config", require("./routes/configRoutes"));
   app.use("/api/usage", require("./routes/usageRoutes").router);
   app.use("/api/workout", require("./routes/workoutRoutes").router);
+  app.use("/api/rewards", require("./routes/rewardsRoutes"));
 } catch (err) {
   console.error("❌ Route load failure:", err.message);
 }

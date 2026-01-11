@@ -21,8 +21,9 @@ A comprehensive step-by-step guide for testing all API routes in the ApogeeHnP b
 11. [Chatbot / AI Assistant](#chatbot--ai-assistant)
 12. [Usage Tracking](#usage-tracking)
 13. [Subscription Management](#subscription-management)
-14. [Testing Security Fixes](#-testing-security-fixes)
-15. [Troubleshooting](#troubleshooting)
+14. [Rewards System](#rewards-system)
+15. [Testing Security Fixes](#-testing-security-fixes)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -887,19 +888,38 @@ Permanently delete user account and all associated data.
 
 | Setting       | Value                                                            |
 | ------------- | ---------------------------------------------------------------- |
-| **Method**    | `PUT`                                                            |
+| **Method**    | `PATCH`                                                          |
 | **URL**       | `https://apogeehnp.azurewebsites.net/api/auth/update-profile/32` |
 | **Headers**   | `Authorization: Bearer <your_access_token>`                      |
-| **Body Type** | raw → JSON                                                       |
+| **Body Type** | form-data (multipart)                                            |
 
-**Body:**
+**Available Fields (all optional - only provided fields are updated):**
 
-```json
-{
-  "firstName": "Updated",
-  "lastName": "Name"
-}
+| Field          | Type    | Description                    |
+| -------------- | ------- | ------------------------------ |
+| `firstname`    | string  | User's first name              |
+| `lastname`     | string  | User's last name               |
+| `gender`       | string  | Gender                         |
+| `fitnessGoal`  | string  | Fitness goal                   |
+| `fitnessLevel` | string  | Fitness level                  |
+| `age`          | number  | Age in years                   |
+| `weight`       | number  | Weight in lbs                  |
+| `height`       | number  | Height in inches               |
+| `bodyFat`      | number  | Body fat percentage (0-100)    |
+| `muscle`       | number  | Muscle percentage (0-100)      |
+| `profileImage` | file    | Profile image (jpg/png)        |
+
+**Example Body (form-data):**
+
 ```
+firstname: Updated
+lastname: Name
+weight: 180
+bodyFat: 15.5
+muscle: 42.3
+```
+
+> **Note:** This endpoint uses partial updates - only fields included in the request are modified. Missing fields retain their existing values.
 
 > 🔒 **Security Fix #12 Test:** See [Testing Profile Update Authorization](#test-12-profile-update-authorization-fix-12).
 
@@ -1779,6 +1799,191 @@ stripe listen --forward-to localhost:3000/api/data/webhook
 
 ---
 
+## Rewards System
+
+Track XP, tier progression, and reward achievements.
+
+### Get User Rewards
+
+Retrieve the user's current XP, tier, and reward progress.
+
+| Setting     | Value                                                     |
+| ----------- | --------------------------------------------------------- |
+| **Method**  | `GET`                                                     |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/user`    |
+| **Headers** | `Authorization: Bearer <your_access_token>`               |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "totalXP": 150,
+  "currentTier": "SILVER",
+  "tierProgress": {
+    "current": "SILVER",
+    "currentXP": 150,
+    "nextTier": "GOLD",
+    "xpToNextTier": 350
+  },
+  "rewardProgress": {
+    "daily": [
+      { "id": "daily_signin", "rewardId": 1, "name": "Daily Sign-In", "xp": 10, "requiredCount": 1, "currentProgress": 1, "isCompleted": true, "isClaimed": false }
+    ],
+    "weekly": [
+      { "id": "weekly_5_workouts", "rewardId": 5, "name": "Workout Warrior", "xp": 50, "requiredCount": 5, "currentProgress": 3, "isCompleted": false, "isClaimed": false }
+    ],
+    "milestone": [
+      { "id": "first_workout", "rewardId": 9, "name": "First Steps", "xp": 25, "requiredCount": 1, "currentProgress": 1, "isCompleted": true, "isClaimed": true }
+    ]
+  },
+  "completedRewards": [
+    { "id": "first_workout", "name": "First Steps", "xp": 25, "category": "milestone", "claimedAt": "2026-01-10T..." }
+  ],
+  "lastUpdated": "2026-01-11T..."
+}
+```
+
+**Tier System:**
+| Tier      | Min XP | Max XP | Description             |
+| --------- | ------ | ------ | ----------------------- |
+| BRONZE    | 0      | 99     | Starting tier           |
+| SILVER    | 100    | 499    | 1 week premium included |
+| GOLD      | 500    | 999    | Gear discounts          |
+| EXCLUSIVE | 1000   | -      | Prize draws, equipment  |
+
+---
+
+### Claim Reward
+
+Claim a completed reward to receive XP. Use the numeric `rewardId` from the progress response.
+
+| Setting       | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| **Method**    | `POST`                                                      |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/rewards/1/claim`   |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                 |
+| **Body**      | `{}`                                                        |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "xpEarned": 10,
+  "newTotalXP": 160,
+  "newTier": "SILVER",
+  "message": "Claimed 10 XP for Daily Sign-In"
+}
+```
+
+**Error Responses:**
+
+| Error | Status | When It Occurs |
+|-------|--------|----------------|
+| "Reward not found" | 404 | Invalid reward ID |
+| "Reward not yet completed" | 400 | Progress not at required count |
+| "Reward already claimed" | 400 | Already claimed this reward |
+
+---
+
+### Update Reward Progress
+
+Increment progress on a specific reward (used internally when user completes actions).
+
+| Setting       | Value                                                              |
+| ------------- | ------------------------------------------------------------------ |
+| **Method**    | `POST`                                                             |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/rewards/progress/daily_signin` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                        |
+| **Body**      | `{ "increment": 1 }`                                               |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "currentProgress": 1,
+  "requiredCount": 1,
+  "isCompleted": true,
+  "readyToClaim": true,
+  "xpAvailable": 10
+}
+```
+
+---
+
+### Get Reward History
+
+Get a paginated list of completed rewards.
+
+| Setting     | Value                                                                                |
+| ----------- | ------------------------------------------------------------------------------------ |
+| **Method**  | `GET`                                                                                |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/history?page=1&limit=20&search=streak` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                                          |
+
+**Query Parameters:**
+| Parameter | Type   | Default | Description                |
+| --------- | ------ | ------- | -------------------------- |
+| `page`    | number | 1       | Page number                |
+| `limit`   | number | 20      | Items per page (max 100)   |
+| `search`  | string | -       | Search by reward name      |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "rewards": [
+    {
+      "id": "completion_123",
+      "rewardId": "streak_100",
+      "name": "Hit a 100-day Streak",
+      "xpEarned": 50,
+      "completedAt": "2025-01-08T10:30:00Z"
+    },
+    {
+      "id": "completion_122",
+      "rewardId": "try_premium",
+      "name": "Try Premium once",
+      "xpEarned": 25,
+      "completedAt": "2025-01-02T14:15:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 89,
+    "totalPages": 5,
+    "hasMore": true
+  }
+}
+```
+
+---
+
+### XP Values Reference
+
+| Category | Reward | XP |
+|----------|--------|----|
+| **Daily** | Daily Sign-In | 10 |
+| **Daily** | Log Water Intake | 5 |
+| **Daily** | Log Sleep | 5 |
+| **Daily** | Daily Combo (all daily tasks) | +5 bonus |
+| **Workout** | Complete a Workout | 50 |
+| **Workout** | Complete Custom Routine | 75 |
+| **Workout** | Hit Daily Step Goal | 20 |
+| **Workout** | AI Form Review | 25 |
+| **Workout** | Personal Record | 50 |
+| **Weekly** | Weekly Workout Goal | 100 |
+| **Weekly** | Complete Challenge | 150 |
+| **Weekly** | Weekly Power-Up (100% goals) | +150 bonus |
+| **Social** | Invite a Friend | 100 |
+| **Social** | Referral Signs Up | 250 |
+| **Streak** | 7+ day streak | +10% XP multiplier |
+
+---
+
 ## 🔒 Testing Security Fixes
 
 This section provides specific tests to verify that security fixes are working correctly.
@@ -2354,6 +2559,15 @@ Use this to verify all features work:
   - [ ] Resume subscription
   - [ ] Cancel subscription
   - [ ] Get subscription history
+
+- [ ] **Rewards System**
+
+  - [ ] Get user rewards (XP, tier, progress)
+  - [ ] Claim a completed reward
+  - [ ] Verify XP and tier update after claim
+  - [ ] Get reward history (paginated)
+  - [ ] Search completed rewards
+  - [ ] Test tier-up scenario
 
 - [ ] **Security Fixes Verification**
 

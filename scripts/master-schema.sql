@@ -27,6 +27,8 @@ BEGIN
         Age INT NULL,
         Weight DECIMAL(5,2) NULL,
         Height DECIMAL(5,2) NULL,
+        BodyFat DECIMAL(5,2) NULL,
+        Muscle DECIMAL(5,2) NULL,
         Gender NVARCHAR(20) NULL,
         FitnessLevel NVARCHAR(20) NULL,
         ProfileImageUrl NVARCHAR(500) NULL,
@@ -738,6 +740,99 @@ BEGIN
 END
 
 -- ============================================
+-- REWARDS SYSTEM TABLES
+-- ============================================
+
+-- RewardDefinitions: Available rewards/challenges
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RewardDefinitions')
+BEGIN
+    CREATE TABLE [dbo].[RewardDefinitions] (
+        RewardID INT IDENTITY(1,1) PRIMARY KEY,
+        RewardKey NVARCHAR(50) NOT NULL UNIQUE,
+        Category NVARCHAR(20) NOT NULL,
+        Name NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        XPValue INT NOT NULL DEFAULT 0,
+        RequiredCount INT DEFAULT 1,
+        RequiredStreak INT NULL,
+        IsActive BIT DEFAULT 1,
+        CreatedAt DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
+        CONSTRAINT CK_RewardCategory CHECK (Category IN ('daily', 'weekly', 'milestone', 'streak', 'special'))
+    );
+    PRINT 'Created RewardDefinitions table';
+
+    -- Insert default rewards
+    INSERT INTO dbo.RewardDefinitions (RewardKey, Category, Name, Description, XPValue, RequiredCount) VALUES
+    ('daily_signin', 'daily', 'Daily Sign-In', 'Log in to the app', 10, 1),
+    ('log_water', 'daily', 'Log Water Intake', 'Track your hydration', 5, 1),
+    ('log_sleep', 'daily', 'Log Sleep', 'Record your sleep hours', 5, 1),
+    ('daily_combo', 'daily', 'Daily Combo', 'Log Workout + Water + Sleep', 5, 1),
+    ('weekly_5_workouts', 'weekly', 'Workout Warrior', 'Complete 5 workouts this week', 50, 5),
+    ('weekly_hydration', 'weekly', 'Hydration Hero', 'Log water intake 7 days', 30, 7),
+    ('streak_7', 'streak', '7-Day Streak', 'Maintain a 7-day workout streak', 100, 1),
+    ('streak_30', 'streak', '30-Day Streak', 'Maintain a 30-day workout streak', 500, 1),
+    ('first_workout', 'milestone', 'First Steps', 'Complete your first workout', 25, 1),
+    ('workouts_10', 'milestone', 'Getting Stronger', 'Complete 10 total workouts', 50, 10),
+    ('workouts_50', 'milestone', 'Dedicated Athlete', 'Complete 50 total workouts', 150, 50),
+    ('workouts_100', 'milestone', 'Century Club', 'Complete 100 total workouts', 300, 100);
+    PRINT 'Inserted default reward definitions';
+END
+
+-- UserRewards: Track user XP and tier
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserRewards')
+BEGIN
+    CREATE TABLE [dbo].[UserRewards] (
+        UserRewardID INT IDENTITY(1,1) PRIMARY KEY,
+        UserID INT NOT NULL,
+        TotalXP INT DEFAULT 0,
+        CurrentTier NVARCHAR(20) DEFAULT 'BRONZE',
+        LastUpdated DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
+        CONSTRAINT FK_UserRewards_UserProfile FOREIGN KEY (UserID) REFERENCES dbo.UserProfile(UserID),
+        CONSTRAINT CK_UserTier CHECK (CurrentTier IN ('BRONZE', 'SILVER', 'GOLD', 'EXCLUSIVE'))
+    );
+    PRINT 'Created UserRewards table';
+    CREATE INDEX IX_UserRewards_UserID ON dbo.UserRewards(UserID);
+END
+
+-- UserRewardProgress: Track progress on each reward
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserRewardProgress')
+BEGIN
+    CREATE TABLE [dbo].[UserRewardProgress] (
+        ProgressID INT IDENTITY(1,1) PRIMARY KEY,
+        UserID INT NOT NULL,
+        RewardID INT NOT NULL,
+        CurrentProgress INT DEFAULT 0,
+        IsCompleted BIT DEFAULT 0,
+        IsClaimed BIT DEFAULT 0,
+        CompletedAt DATETIMEOFFSET NULL,
+        ClaimedAt DATETIMEOFFSET NULL,
+        PeriodStart DATETIMEOFFSET NULL,
+        CONSTRAINT FK_UserRewardProgress_User FOREIGN KEY (UserID) REFERENCES dbo.UserProfile(UserID),
+        CONSTRAINT FK_UserRewardProgress_Reward FOREIGN KEY (RewardID) REFERENCES dbo.RewardDefinitions(RewardID)
+    );
+    PRINT 'Created UserRewardProgress table';
+    CREATE INDEX IX_UserRewardProgress_UserID ON dbo.UserRewardProgress(UserID);
+    CREATE INDEX IX_UserRewardProgress_Completed ON dbo.UserRewardProgress(UserID, IsCompleted, IsClaimed);
+END
+
+-- UserRewardHistory: Log of all XP earned
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'UserRewardHistory')
+BEGIN
+    CREATE TABLE [dbo].[UserRewardHistory] (
+        HistoryID INT IDENTITY(1,1) PRIMARY KEY,
+        UserID INT NOT NULL,
+        RewardID INT NULL,
+        XPEarned INT NOT NULL,
+        Reason NVARCHAR(200) NULL,
+        EarnedAt DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
+        CONSTRAINT FK_UserRewardHistory_User FOREIGN KEY (UserID) REFERENCES dbo.UserProfile(UserID),
+        CONSTRAINT FK_UserRewardHistory_Reward FOREIGN KEY (RewardID) REFERENCES dbo.RewardDefinitions(RewardID)
+    );
+    PRINT 'Created UserRewardHistory table';
+    CREATE INDEX IX_UserRewardHistory_UserID ON dbo.UserRewardHistory(UserID);
+END
+
+-- ============================================
 -- VERIFICATION
 -- ============================================
 
@@ -773,4 +868,8 @@ PRINT '  - OnboardingProfile (onboarding)';
 PRINT '  - PreWorkoutAssessment (readiness)';
 PRINT '  - DeviceData (connected devices)';
 PRINT '  - OuraTokens (Oura integration)';
+PRINT '  - RewardDefinitions (rewards catalog)';
+PRINT '  - UserRewards (user XP and tier)';
+PRINT '  - UserRewardProgress (reward progress)';
+PRINT '  - UserRewardHistory (XP history)';
 PRINT '';
