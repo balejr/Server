@@ -149,10 +149,10 @@ const config = {
 
 #### User Tables
 
-| Table         | Key Columns                                                                                                               | Purpose                    |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| Table         | Key Columns                                                                                                                                | Purpose                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
 | `UserProfile` | UserID (IDENTITY), FirstName, LastName, Age, Weight, Height, BodyFat, Muscle, Gender, FitnessLevel, FitnessGoal, UserType, ProfileImageUrl | User profile data (parent) |
-| `UserLogin`   | UserID (FK→UserProfile), Email, Password, RefreshToken, RefreshTokenVersion, MFAEnabled, MFAMethod, TokenInvalidatedAt    | Authentication credentials |
+| `UserLogin`   | UserID (FK→UserProfile), Email, Password, RefreshToken, RefreshTokenVersion, MFAEnabled, MFAMethod, TokenInvalidatedAt                     | Authentication credentials |
 
 > **Note:** `UserProfile` is the parent table with `IDENTITY`. `UserLogin` references `UserProfile` via FK.
 
@@ -202,23 +202,23 @@ const config = {
 
 #### Rewards Tables
 
-| Table                  | Key Columns                                                                                  | Purpose                          |
-| ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- |
-| `RewardDefinitions`    | RewardID (PK), RewardKey, Category, Name, Description, XPValue, RequiredCount, IsActive      | Available rewards catalog        |
-| `UserRewards`          | UserRewardID (PK), UserID, TotalXP, CurrentTier, CurrentLevel, LevelUpAt, LastUpdated        | User's XP, level, and tier       |
-| `UserRewardProgress`   | ProgressID (PK), UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt      | Track progress on each reward    |
-| `UserRewardHistory`    | HistoryID (PK), UserID, RewardID, XPEarned, Reason, EarnedAt                                 | Log of all XP earned             |
+| Table                | Key Columns                                                                             | Purpose                       |
+| -------------------- | --------------------------------------------------------------------------------------- | ----------------------------- |
+| `RewardDefinitions`  | RewardID (PK), RewardKey, Category, Name, Description, XPValue, RequiredCount, IsActive | Available rewards catalog     |
+| `UserRewards`        | UserRewardID (PK), UserID, TotalXP, CurrentTier, CurrentLevel, LevelUpAt, LastUpdated   | User's XP, level, and tier    |
+| `UserRewardProgress` | ProgressID (PK), UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt | Track progress on each reward |
+| `UserRewardHistory`  | HistoryID (PK), UserID, RewardID, XPEarned, Reason, EarnedAt                            | Log of all XP earned          |
 
 **Level System Tables:**
 
-| Table                  | Key Columns                                                                                  | Purpose                          |
-| ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- |
-| `PersonalRecords`      | RecordID (PK), UserID, ExerciseID, ExerciseName, RecordType, RecordValue, PreviousValue, SetAt | Personal best tracking           |
-| `DailySignIn`          | SignInID (PK), UserID, SignInDate, XPAwarded, SignInAt                                       | Daily sign-in XP tracking        |
-| `AchievementBadges`    | BadgeID (PK), BadgeKey, Name, Description, Category, RequiredValue, Icon, XPReward           | Badge definitions catalog        |
-| `UserBadges`           | UserBadgeID (PK), UserID, BadgeID, CurrentProgress, IsEarned, EarnedAt, PeriodStart          | User badge progress              |
-| `UserStreaks`          | StreakID (PK), UserID, StreakType, CurrentStreak, LongestStreak, LastActivityDate            | Streak tracking                  |
-| `DailyXPAwards`        | AwardID (PK), UserID, AwardType, AwardDate, XPAwarded, AwardedAt                             | Prevent double XP awards         |
+| Table               | Key Columns                                                                                    | Purpose                   |
+| ------------------- | ---------------------------------------------------------------------------------------------- | ------------------------- |
+| `PersonalRecords`   | RecordID (PK), UserID, ExerciseID, ExerciseName, RecordType, RecordValue, PreviousValue, SetAt | Personal best tracking    |
+| `DailySignIn`       | SignInID (PK), UserID, SignInDate, XPAwarded, SignInAt                                         | Daily sign-in XP tracking |
+| `AchievementBadges` | BadgeID (PK), BadgeKey, Name, Description, Category, RequiredValue, Icon, XPReward             | Badge definitions catalog |
+| `UserBadges`        | UserBadgeID (PK), UserID, BadgeID, CurrentProgress, IsEarned, EarnedAt, PeriodStart            | User badge progress       |
+| `UserStreaks`       | StreakID (PK), UserID, StreakType, CurrentStreak, LongestStreak, LastActivityDate              | Streak tracking           |
+| `DailyXPAwards`     | AwardID (PK), UserID, AwardType, AwardDate, XPAwarded, AwardedAt                               | Prevent double XP awards  |
 
 **Reward Categories:** `daily`, `weekly`, `monthly`, `universal`, `streak`, `special`
 
@@ -234,28 +234,28 @@ const config = {
 
 **XP Events:**
 
-| Event              | XP   | Trigger                     |
-| ------------------ | ---- | --------------------------- |
-| Daily sign-in      | 10   | First API call of day       |
-| Workout complete   | 50   | All routine exercises done  |
-| Custom routine     | 75   | Custom workout completed    |
-| Water logged       | 5    | Water intake recorded       |
-| Sleep logged       | 5    | Sleep data recorded         |
-| Step goal (10k)    | 20   | Daily steps >= 10,000       |
-| AI form review     | 25   | Form analysis completed     |
-| Personal record    | 50   | New PR detected             |
-| Daily combo        | 5    | Workout + water + sleep     |
-| Streak bonus       | +10% | Applied after 7-day streak  |
+| Event            | XP   | Trigger                    |
+| ---------------- | ---- | -------------------------- |
+| Daily sign-in    | 10   | First API call of day      |
+| Workout complete | 50   | All routine exercises done |
+| Custom routine   | 75   | Custom workout completed   |
+| Water logged     | 5    | Water intake recorded      |
+| Sleep logged     | 5    | Sleep data recorded        |
+| Step goal (10k)  | 20   | Daily steps >= 10,000      |
+| AI form review   | 25   | Form analysis completed    |
+| Personal record  | 50   | New PR detected            |
+| Daily combo      | 5    | Workout + water + sleep    |
+| Streak bonus     | +10% | Applied after 7-day streak |
 
 **Achievement Badges:**
 
-| Badge Key          | Name              | Requirement                      | XP Reward |
-| ------------------ | ----------------- | -------------------------------- | --------- |
-| `consistency_king` | Consistency King  | 30-day workout streak            | 200       |
-| `hydration_hero`   | Hydration Hero    | 7 consecutive water logging days | 75        |
-| `sleep_master`     | Sleep Master      | 20% sleep score improvement      | 100       |
-| `step_slayer`      | Step Slayer       | 100,000 steps in one week        | 150       |
-| `record_breaker`   | Record Breaker    | 5 personal records in one month  | 125       |
+| Badge Key          | Name             | Requirement                      | XP Reward |
+| ------------------ | ---------------- | -------------------------------- | --------- |
+| `consistency_king` | Consistency King | 30-day workout streak            | 200       |
+| `hydration_hero`   | Hydration Hero   | 7 consecutive water logging days | 75        |
+| `sleep_master`     | Sleep Master     | 20% sleep score improvement      | 100       |
+| `step_slayer`      | Step Slayer      | 100,000 steps in one week        | 150       |
+| `record_breaker`   | Record Breaker   | 5 personal records in one month  | 125       |
 
 ### Connection Pooling Pattern
 
@@ -1169,13 +1169,13 @@ Routes to correct payment gateway based on user's subscription.
 
 ### Rewards Routes (`/api/rewards`)
 
-| Method | Endpoint              | Auth   | Description                                  |
-| ------ | --------------------- | ------ | -------------------------------------------- |
-| GET    | `/user`               | Access | Get user's XP, tier, and reward progress     |
-| POST   | `/:rewardId/claim`    | Access | Claim a completed reward                     |
-| GET    | `/history`            | Access | Get completed rewards history (paginated)    |
-| POST   | `/progress/:rewardKey`| Access | Update progress on a specific reward         |
-| POST   | `/recalculate`        | Access | Recalculate weekly/monthly rewards from history |
+| Method | Endpoint               | Auth   | Description                                     |
+| ------ | ---------------------- | ------ | ----------------------------------------------- |
+| GET    | `/user`                | Access | Get user's XP, tier, and reward progress        |
+| POST   | `/:rewardId/claim`     | Access | Claim a completed reward                        |
+| GET    | `/history`             | Access | Get completed rewards history (paginated)       |
+| POST   | `/progress/:rewardKey` | Access | Update progress on a specific reward            |
+| POST   | `/recalculate`         | Access | Recalculate weekly/monthly rewards from history |
 
 **GET /rewards/user Response:**
 
@@ -1190,8 +1190,20 @@ Routes to correct payment gateway based on user's subscription.
     {
       "category": "daily",
       "rewards": [
-        { "id": "daily_signin", "name": "Daily Sign-In", "xp": 10, "progress": 100, "claimable": true },
-        { "id": "log_water", "name": "Log Water Intake", "xp": 5, "progress": 80, "claimable": false }
+        {
+          "id": "daily_signin",
+          "name": "Daily Sign-In",
+          "xp": 10,
+          "progress": 100,
+          "claimable": true
+        },
+        {
+          "id": "log_water",
+          "name": "Log Water Intake",
+          "xp": 5,
+          "progress": 80,
+          "claimable": false
+        }
       ]
     }
   ],
@@ -1212,11 +1224,11 @@ Routes to correct payment gateway based on user's subscription.
 
 **GET /rewards/history Query Parameters:**
 
-| Parameter | Type   | Default | Description           |
-| --------- | ------ | ------- | --------------------- |
-| `search`  | string | -       | Search reward names   |
-| `page`    | number | 1       | Page number           |
-| `limit`   | number | 20      | Items per page        |
+| Parameter | Type   | Default | Description         |
+| --------- | ------ | ------- | ------------------- |
+| `search`  | string | -       | Search reward names |
+| `page`    | number | 1       | Page number         |
+| `limit`   | number | 20      | Items per page      |
 
 **POST /rewards/recalculate Response:**
 
@@ -1230,21 +1242,29 @@ Recalculates weekly/monthly rewards based on user activity history. Called after
     "weekly_goal": { "completed": true, "count": 3, "required": 3 },
     "step_streak_7": { "completed": false, "currentStreak": 4, "required": 7 },
     "weekly_powerup": { "completed": true, "weeklyGoalMet": true },
-    "perfect_month": { "completed": false, "currentStreak": 12, "required": 30 },
-    "hydration_streak": { "completed": false, "currentStreak": 5, "required": 7 }
+    "perfect_month": {
+      "completed": false,
+      "currentStreak": 12,
+      "required": 30
+    },
+    "hydration_streak": {
+      "completed": false,
+      "currentStreak": 5,
+      "required": 7
+    }
   }
 }
 ```
 
 **Reward Calculation Logic (services/rewardCalculator.js):**
 
-| Reward Key | Calculation | Required |
-|------------|-------------|----------|
-| `weekly_goal` | Count distinct workout days in last 7 days | 3 workouts |
-| `step_streak_7` | Consecutive days with 10k+ steps | 7 days |
-| `weekly_powerup` | Same as weekly_goal completion | 1 (boolean) |
-| `perfect_month` | Consecutive days with any activity (logs or workouts) | 30 days |
-| `challenge_complete` | 7-day hydration streak (water logged daily) | 7 days |
+| Reward Key           | Calculation                                           | Required    |
+| -------------------- | ----------------------------------------------------- | ----------- |
+| `weekly_goal`        | Count distinct workout days in last 7 days            | 3 workouts  |
+| `step_streak_7`      | Consecutive days with 10k+ steps                      | 7 days      |
+| `weekly_powerup`     | Same as weekly_goal completion                        | 1 (boolean) |
+| `perfect_month`      | Consecutive days with any activity (logs or workouts) | 30 days     |
+| `challenge_complete` | 7-day hydration streak (water logged daily)           | 7 days      |
 
 ---
 
