@@ -1073,32 +1073,62 @@ Routes to correct payment gateway based on user's subscription.
 | PATCH | `/dailylog/:logId` | Update daily log |
 | DELETE | `/dailylog/:logId` | Delete daily log |
 
+**Dashboard:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/dashboard/weekly-summary` | Get 7-day workout completion summary |
+
 **Exercises:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/exercises` | Get exercise database |
-| GET | `/exerciseexistence` | Get user's logged exercises |
-| POST | `/exerciseexistence` | Log new exercise |
+| GET | `/exercises` | Get exercise database from ExerciseDB API |
+| GET | `/exerciseexistences` | Get user's logged exercises (paginated) |
+| GET | `/exerciseexistence/user/:exerciseId` | Get logged exercises by exercise ID |
+| GET | `/exerciseexistence/date/:date` | Get logged exercises by date |
+| POST | `/exerciseexistence` | Log new exercise(s) |
 | PATCH | `/exerciseexistence/:id` | Update logged exercise |
 | DELETE | `/exerciseexistence/:id` | Delete logged exercise |
+
+**Exercise History:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/exercises/unfinished` | Get unfinished exercises (Jump Back In) |
+| GET | `/exercises/previous-all` | Get previous workout data for comparison |
+| GET | `/exercises/history` | Get completed exercise history |
 
 **Workout Routines:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/workoutroutines` | Get all routines |
+| GET | `/workoutroutines` | Get all routines (paginated) |
 | GET | `/workoutroutine/:id` | Get specific routine |
+| GET | `/workoutroutines/date/:date` | Get routines by date |
+| GET | `/workoutroutine/exerciseinstances/:id` | Get exercises in a routine |
 | POST | `/workoutroutine` | Create routine |
 | PATCH | `/workoutroutine/:id` | Update routine |
 | DELETE | `/workoutroutine/:id` | Delete routine |
 
-**Mesocycles & Microcycles:**
+**Mesocycles:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/mesocycles` | Get all mesocycles |
-| GET | `/mesocycles/current` | Get current mesocycle |
-| POST | `/mesocycles` | Create mesocycle |
-| GET | `/microcycles/:mesocycleId` | Get microcycles for mesocycle |
-| POST | `/microcycles` | Create microcycle |
+| GET | `/mesocycles` | Get all mesocycles (paginated) |
+| GET | `/mesocycles/date` | Get mesocycles by date range (query: start_date, end_date) |
+| POST | `/mesocycle` | Create mesocycle |
+| PATCH | `/mesocycle/:id` | Update mesocycle |
+| DELETE | `/mesocycle/:id` | Delete mesocycle |
+
+**Microcycles:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/microcycles` | Get all microcycles (paginated) |
+| GET | `/microcycles/:mesocycle_id` | Get microcycles for a mesocycle |
+| POST | `/microcycle` | Create microcycle |
+| PATCH | `/microcycle/:id` | Update microcycle |
+| DELETE | `/microcycle/:id` | Delete microcycle |
+
+**Combined Training Cycles:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/mesocycle-with-microcycle` | Create mesocycle and microcycle together |
 
 **Subscriptions:**
 | Method | Endpoint | Description |

@@ -1133,6 +1133,112 @@ muscle: 42.3
 
 ---
 
+#### Get Exercise Instances by Exercise ID
+
+| Setting     | Value                                                                     |
+| ----------- | ------------------------------------------------------------------------- |
+| **Method**  | `GET`                                                                     |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/exerciseexistence/user/0001` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                               |
+
+Returns all logged instances of a specific exercise (by exercise ID) for the authenticated user.
+
+---
+
+### Exercise History
+
+These endpoints provide exercise history and workout tracking data.
+
+#### Get Unfinished Exercises (Jump Back In)
+
+| Setting     | Value                                                                  |
+| ----------- | ---------------------------------------------------------------------- |
+| **Method**  | `GET`                                                                  |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/exercises/unfinished`    |
+| **Headers** | `Authorization: Bearer <your_access_token>`                            |
+
+Returns exercises with status "not started", "in progress", or "aborted" from the most recent workout date.
+
+**Expected Response:**
+
+```json
+[
+  {
+    "ExerciseExistenceID": 123,
+    "ExerciseID": "0001",
+    "ExerciseName": "Bench Press",
+    "Sets": 3,
+    "Reps": 10,
+    "Weight": 135,
+    "Status": "in progress",
+    "Date": "2025-01-02"
+  }
+]
+```
+
+---
+
+#### Get Previous Workout Data
+
+| Setting     | Value                                                                  |
+| ----------- | ---------------------------------------------------------------------- |
+| **Method**  | `GET`                                                                  |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/exercises/previous-all`  |
+| **Headers** | `Authorization: Bearer <your_access_token>`                            |
+
+Returns the most recent completed sets for each exercise, grouped by exercise name. Useful for pre-filling workout forms.
+
+**Expected Response:**
+
+```json
+{
+  "bench press": {
+    "sets": [
+      { "weight": 135, "reps": 10 },
+      { "weight": 145, "reps": 8 },
+      { "weight": 155, "reps": 6 }
+    ]
+  },
+  "squat": {
+    "sets": [
+      { "weight": 185, "reps": 8 },
+      { "weight": 205, "reps": 6 }
+    ]
+  }
+}
+```
+
+---
+
+#### Get Exercise History
+
+| Setting     | Value                                                              |
+| ----------- | ------------------------------------------------------------------ |
+| **Method**  | `GET`                                                              |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/exercises/history`   |
+| **Headers** | `Authorization: Bearer <your_access_token>`                        |
+
+Returns distinct exercises the user has completed, with exercise names and images.
+
+**Expected Response:**
+
+```json
+[
+  {
+    "ExerciseId": "0001",
+    "ExerciseName": "Bench Press",
+    "ImageURL": "https://..."
+  },
+  {
+    "ExerciseId": "0002",
+    "ExerciseName": "Squat",
+    "ImageURL": "https://..."
+  }
+]
+```
+
+---
+
 ### Workout Routines
 
 #### Create Workout Routine
@@ -1190,6 +1296,41 @@ muscle: 42.3
 | **Method**  | `GET`                                                             |
 | **URL**     | `https://apogeehnp.azurewebsites.net/api/data/workoutroutine/123` |
 | **Headers** | `Authorization: Bearer <your_access_token>`                       |
+
+---
+
+#### Get Exercise Instances for Routine
+
+| Setting     | Value                                                                           |
+| ----------- | ------------------------------------------------------------------------------- |
+| **Method**  | `GET`                                                                           |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/workoutroutine/exerciseinstances/123` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                                     |
+
+Returns all exercise instances associated with a specific workout routine.
+
+**Expected Response:**
+
+```json
+[
+  {
+    "ExerciseExistenceID": 1,
+    "ExerciseID": "0001",
+    "Reps": 10,
+    "Sets": 3,
+    "Weight": 135,
+    "Completed": true
+  },
+  {
+    "ExerciseExistenceID": 2,
+    "ExerciseID": "0002",
+    "Reps": 8,
+    "Sets": 4,
+    "Weight": 185,
+    "Completed": false
+  }
+]
+```
 
 ---
 
@@ -1268,6 +1409,36 @@ muscle: 42.3
 
 ---
 
+#### Update Mesocycle
+
+| Setting       | Value                                                        |
+| ------------- | ------------------------------------------------------------ |
+| **Method**    | `PATCH`                                                      |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/mesocycle/123` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                  |
+| **Body Type** | raw → JSON                                                   |
+
+**Body:**
+
+```json
+{
+  "end_date": "2025-03-15",
+  "is_current": 1
+}
+```
+
+---
+
+#### Delete Mesocycle
+
+| Setting     | Value                                                        |
+| ----------- | ------------------------------------------------------------ |
+| **Method**  | `DELETE`                                                     |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/mesocycle/123` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                  |
+
+---
+
 #### Create Microcycle
 
 | Setting       | Value                                                       |
@@ -1301,9 +1472,51 @@ muscle: 42.3
 
 ---
 
+#### Get All Microcycles
+
+| Setting     | Value                                                        |
+| ----------- | ------------------------------------------------------------ |
+| **Method**  | `GET`                                                        |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/microcycles`   |
+| **Headers** | `Authorization: Bearer <your_access_token>`                  |
+
+Returns all microcycles for the authenticated user (paginated).
+
+---
+
+#### Update Microcycle
+
+| Setting       | Value                                                         |
+| ------------- | ------------------------------------------------------------- |
+| **Method**    | `PATCH`                                                       |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/microcycle/123` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                   |
+| **Body Type** | raw → JSON                                                    |
+
+**Body:**
+
+```json
+{
+  "end_date": "2025-01-10",
+  "is_current": 1
+}
+```
+
+---
+
+#### Delete Microcycle
+
+| Setting     | Value                                                         |
+| ----------- | ------------------------------------------------------------- |
+| **Method**  | `DELETE`                                                      |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/microcycle/123` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                   |
+
+---
+
 #### Create Mesocycle with Microcycles
 
-Create a mesocycle and its associated microcycles in a single transaction.
+Create a mesocycle and its associated microcycle in a single transaction. This endpoint automatically sets `is_current = 0` for all existing mesocycles and microcycles before creating the new ones.
 
 | Setting       | Value                                                                    |
 | ------------- | ------------------------------------------------------------------------ |
@@ -1311,6 +1524,28 @@ Create a mesocycle and its associated microcycles in a single transaction.
 | **URL**       | `https://apogeehnp.azurewebsites.net/api/data/mesocycle-with-microcycle` |
 | **Headers**   | `Authorization: Bearer <your_access_token>`                              |
 | **Body Type** | raw → JSON                                                               |
+
+**Body:**
+
+```json
+{
+  "mesocycleStart": "2025-01-01",
+  "mesocycleEnd": "2025-02-28",
+  "microcycleStart": "2025-01-01",
+  "microcycleEnd": "2025-01-07",
+  "is_current": 1,
+  "created_date": "2025-01-01T00:00:00.000Z"
+}
+```
+
+**Expected Response:**
+
+```json
+{
+  "message": "Mesocycle and Microcycle added successfully",
+  "mesocycle_id": 123
+}
+```
 
 ---
 
