@@ -205,19 +205,57 @@ const config = {
 | Table                  | Key Columns                                                                                  | Purpose                          |
 | ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- |
 | `RewardDefinitions`    | RewardID (PK), RewardKey, Category, Name, Description, XPValue, RequiredCount, IsActive      | Available rewards catalog        |
-| `UserRewards`          | UserRewardID (PK), UserID, TotalXP, CurrentTier, LastUpdated                                 | User's XP and tier progress      |
+| `UserRewards`          | UserRewardID (PK), UserID, TotalXP, CurrentTier, CurrentLevel, LevelUpAt, LastUpdated        | User's XP, level, and tier       |
 | `UserRewardProgress`   | ProgressID (PK), UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt      | Track progress on each reward    |
 | `UserRewardHistory`    | HistoryID (PK), UserID, RewardID, XPEarned, Reason, EarnedAt                                 | Log of all XP earned             |
 
-**Reward Categories:** `daily`, `weekly`, `milestone`, `streak`, `special`
+**Level System Tables:**
 
-**Tier System:**
-| Tier      | Min XP | Max XP | Benefits                                |
-| --------- | ------ | ------ | --------------------------------------- |
-| Bronze    | 0      | 99     | Custom avatar, badge, sticker           |
-| Silver    | 100    | 499    | 1 week premium, free workout plan       |
-| Gold      | 500    | 999    | Gear discounts, gift cards, coaching    |
-| Exclusive | 1000   | -      | Prize draws, equipment, recognition     |
+| Table                  | Key Columns                                                                                  | Purpose                          |
+| ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------- |
+| `PersonalRecords`      | RecordID (PK), UserID, ExerciseID, ExerciseName, RecordType, RecordValue, PreviousValue, SetAt | Personal best tracking           |
+| `DailySignIn`          | SignInID (PK), UserID, SignInDate, XPAwarded, SignInAt                                       | Daily sign-in XP tracking        |
+| `AchievementBadges`    | BadgeID (PK), BadgeKey, Name, Description, Category, RequiredValue, Icon, XPReward           | Badge definitions catalog        |
+| `UserBadges`           | UserBadgeID (PK), UserID, BadgeID, CurrentProgress, IsEarned, EarnedAt, PeriodStart          | User badge progress              |
+| `UserStreaks`          | StreakID (PK), UserID, StreakType, CurrentStreak, LongestStreak, LastActivityDate            | Streak tracking                  |
+| `DailyXPAwards`        | AwardID (PK), UserID, AwardType, AwardDate, XPAwarded, AwardedAt                             | Prevent double XP awards         |
+
+**Reward Categories:** `daily`, `weekly`, `monthly`, `universal`, `streak`, `special`
+
+**Level System (1-21+):**
+
+| Levels | Tier      | Name         | Min XP | XP Gap per Level |
+| ------ | --------- | ------------ | ------ | ---------------- |
+| 1-5    | BRONZE    | Beginner     | 0      | 100 XP           |
+| 6-10   | SILVER    | Intermediate | 500    | 200 XP           |
+| 11-15  | GOLD      | Advanced     | 1500   | 300 XP           |
+| 16-20  | EXCLUSIVE | Elite        | 3000   | 400 XP           |
+| 21+    | CHAMPION  | Champion     | 5000   | -                |
+
+**XP Events:**
+
+| Event              | XP   | Trigger                     |
+| ------------------ | ---- | --------------------------- |
+| Daily sign-in      | 10   | First API call of day       |
+| Workout complete   | 50   | All routine exercises done  |
+| Custom routine     | 75   | Custom workout completed    |
+| Water logged       | 5    | Water intake recorded       |
+| Sleep logged       | 5    | Sleep data recorded         |
+| Step goal (10k)    | 20   | Daily steps >= 10,000       |
+| AI form review     | 25   | Form analysis completed     |
+| Personal record    | 50   | New PR detected             |
+| Daily combo        | 5    | Workout + water + sleep     |
+| Streak bonus       | +10% | Applied after 7-day streak  |
+
+**Achievement Badges:**
+
+| Badge Key          | Name              | Requirement                      | XP Reward |
+| ------------------ | ----------------- | -------------------------------- | --------- |
+| `consistency_king` | Consistency King  | 30-day workout streak            | 200       |
+| `hydration_hero`   | Hydration Hero    | 7 consecutive water logging days | 75        |
+| `sleep_master`     | Sleep Master      | 20% sleep score improvement      | 100       |
+| `step_slayer`      | Step Slayer       | 100,000 steps in one week        | 150       |
+| `record_breaker`   | Record Breaker    | 5 personal records in one month  | 125       |
 
 ### Connection Pooling Pattern
 

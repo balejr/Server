@@ -16,6 +16,8 @@ const {
   logIdParamValidation,
 } = require("../middleware/validators");
 const logger = require("../utils/logger");
+const xpEventService = require("../services/xpEventService");
+const prService = require("../services/prService");
 const router = express.Router();
 
 /**
@@ -122,12 +124,46 @@ router.post("/dailylog", authenticateToken, async (req, res) => {
       .input("heartrateVariability", heartrateVariability)
       .input("weight", weight)
       .input("effectiveDate", effectiveDate).query(`
-          INSERT INTO dbo.DailyLogs 
+          INSERT INTO dbo.DailyLogs
           (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, caloriesBurned, RestingHeartrate, HeartrateVariability, Weight, EffectiveDate)
-          VALUES 
+          VALUES
            (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @caloriesBurned, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate)
         `);
-    res.status(200).json({ message: "Daily log added successfully" });
+
+    // Award XP for logging activities (fire and forget - don't block response)
+    const xpResults = {};
+    try {
+      // Award XP for water logging
+      if (waterIntake && waterIntake > 0) {
+        const waterResult = await xpEventService.awardWaterLog(userId);
+        xpResults.water = waterResult;
+      }
+
+      // Award XP for sleep logging
+      if (sleep && sleep > 0) {
+        const sleepResult = await xpEventService.awardSleepLog(userId);
+        xpResults.sleep = sleepResult;
+      }
+
+      // Award XP for hitting step goal (10,000+ steps)
+      if (steps && steps >= 10000) {
+        const stepsResult = await xpEventService.awardStepGoal(userId);
+        xpResults.steps = stepsResult;
+      }
+
+      // Check for daily combo (workout + water + sleep in same day)
+      const comboResult = await xpEventService.checkDailyCombo(userId);
+      if (comboResult?.awarded) {
+        xpResults.combo = comboResult;
+      }
+
+      logger.debug("XP awards for daily log", { userId, xpResults });
+    } catch (xpError) {
+      logger.warn("XP award failed for daily log", { userId, error: xpError.message });
+      // Don't fail the request if XP awarding fails
+    }
+
+    res.status(200).json({ message: "Daily log added successfully", xpAwarded: xpResults });
   } catch (err) {
     logger.error("DailyLog POST Error", { error: err.message });
     res.status(500).json({ message: "Failed to insert daily log" });
@@ -641,6 +677,22 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       const insertedId = result.recordset[0].ExerciseExistenceID;
       insertedIds.push(insertedId);
       totalLoad += reps * sets * weight;
+
+      // Check for Personal Record if exercise has weight
+      if (weight && weight > 0 && completed) {
+        try {
+          await prService.checkAndRecordPR(
+            userId,
+            sourceExerciseId,
+            exerciseName,
+            weight,
+            reps,
+            insertedId
+          );
+        } catch (prError) {
+          logger.warn("PR check failed", { userId, exerciseId: sourceExerciseId, error: prError.message });
+        }
+      }
     }
 
     // After loop: insert/update WorkoutRoutine
@@ -706,9 +758,26 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
         `);
     }
 
+    // Award workout completion XP if any exercises were completed
+    let workoutXPResult = null;
+    const hasCompletedExercises = exerciseList.some(item => item.completed);
+    if (hasCompletedExercises) {
+      try {
+        // Check if this is a custom routine (has workoutName that's not a muscle group)
+        const isCustomRoutine = exerciseList.some(item =>
+          item.workoutName && !['chest', 'back', 'legs', 'shoulders', 'arms', 'core', 'full body'].includes(item.workoutName?.toLowerCase())
+        );
+        workoutXPResult = await xpEventService.awardWorkoutComplete(userId, isCustomRoutine);
+        logger.debug("Workout XP awarded", { userId, isCustomRoutine, result: workoutXPResult });
+      } catch (xpError) {
+        logger.warn("Workout XP award failed", { userId, error: xpError.message });
+      }
+    }
+
     res.status(200).json({
       message: "Exercise existence(s) added successfully",
       ids: insertedIds,
+      xpAwarded: workoutXPResult,
     });
   } catch (err) {
     logger.error("ExerciseExistence POST Error", { error: err.message });

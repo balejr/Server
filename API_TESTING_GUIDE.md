@@ -2001,6 +2001,195 @@ Get a paginated list of completed rewards.
 
 ---
 
+### Get User Level
+
+Get the user's current level, XP progress, and tier information.
+
+| Setting     | Value                                                     |
+| ----------- | --------------------------------------------------------- |
+| **Method**  | `GET`                                                     |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/level`   |
+| **Headers** | `Authorization: Bearer <your_access_token>`               |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "level": 5,
+  "totalXP": 420,
+  "currentLevelXP": 400,
+  "nextLevelXP": 500,
+  "xpIntoLevel": 20,
+  "xpToNextLevel": 80,
+  "progressPercent": 25,
+  "tier": "BRONZE",
+  "tierName": "Beginner",
+  "streakBonus": false,
+  "workoutStreak": 3,
+  "lastLevelUp": "2026-01-10T..."
+}
+```
+
+**Level Tiers:**
+| Tier      | Levels | XP Range    | Name         |
+| --------- | ------ | ----------- | ------------ |
+| BRONZE    | 1-5    | 0-400       | Beginner     |
+| SILVER    | 6-10   | 500-1300    | Intermediate |
+| GOLD      | 11-15  | 1500-2700   | Advanced     |
+| EXCLUSIVE | 16-20  | 3000-4600   | Elite        |
+| CHAMPION  | 21+    | 5000+       | Champion     |
+
+---
+
+### Get User Badges
+
+Get all achievement badges with user's progress.
+
+| Setting     | Value                                                     |
+| ----------- | --------------------------------------------------------- |
+| **Method**  | `GET`                                                     |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/badges`  |
+| **Headers** | `Authorization: Bearer <your_access_token>`               |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "badges": [
+    {
+      "badgeId": 1,
+      "name": "Consistency King",
+      "description": "30-day workout streak",
+      "category": "consistency",
+      "type": "streak",
+      "requiredValue": 30,
+      "icon": "crown",
+      "currentProgress": 12,
+      "progressPercent": 40,
+      "isEarned": false,
+      "earnedAt": null
+    }
+  ],
+  "totalBadges": 5,
+  "earnedBadges": 2
+}
+```
+
+**Available Badges:**
+| Badge | Requirement | XP Reward |
+|-------|-------------|-----------|
+| Consistency King | 30-day workout streak | 200 |
+| Hydration Hero | 7-day water logging streak | 75 |
+| Sleep Master | 20% sleep improvement in 1 week | 100 |
+| Step Slayer | 100,000 steps in 1 week | 150 |
+| Record Breaker | 5 personal records in 1 month | 125 |
+
+---
+
+### Daily Sign-In
+
+Record daily sign-in and award XP (10 XP, once per day).
+
+| Setting       | Value                                                          |
+| ------------- | -------------------------------------------------------------- |
+| **Method**    | `POST`                                                         |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/rewards/daily-signin` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                    |
+| **Body**      | `{}`                                                           |
+
+**Expected Response (200 OK - first sign-in today):**
+
+```json
+{
+  "awarded": true,
+  "xpAwarded": 10,
+  "newTotalXP": 430,
+  "newLevel": 5,
+  "newTier": "BRONZE",
+  "leveledUp": false
+}
+```
+
+**Expected Response (already signed in):**
+
+```json
+{
+  "awarded": false,
+  "reason": "Already signed in today"
+}
+```
+
+---
+
+### Get User Streaks
+
+Get all streak information (workout, water, sleep, login).
+
+| Setting     | Value                                                      |
+| ----------- | ---------------------------------------------------------- |
+| **Method**  | `GET`                                                      |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/streaks`  |
+| **Headers** | `Authorization: Bearer <your_access_token>`                |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "streaks": {
+    "workout": { "current": 5, "longest": 14, "lastActivity": "2026-01-11" },
+    "water": { "current": 3, "longest": 7, "lastActivity": "2026-01-11" },
+    "login": { "current": 12, "longest": 30, "lastActivity": "2026-01-11" }
+  },
+  "hasStreakBonus": false
+}
+```
+
+> **Note:** A 7+ day workout streak grants +10% XP bonus on all earned XP.
+
+---
+
+### Get Personal Records
+
+Get the user's personal records (PRs) for exercises.
+
+| Setting     | Value                                                               |
+| ----------- | ------------------------------------------------------------------- |
+| **Method**  | `GET`                                                               |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/personal-records`  |
+| **Headers** | `Authorization: Bearer <your_access_token>`                         |
+
+**Query Parameters:**
+| Parameter    | Type   | Default | Description                |
+| ------------ | ------ | ------- | -------------------------- |
+| `exerciseId` | string | -       | Filter by exercise ID      |
+| `limit`      | number | 50      | Max records to return      |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "history": [
+    {
+      "id": 45,
+      "exerciseId": "0001",
+      "exerciseName": "Bench Press",
+      "recordType": "weight",
+      "recordValue": 225,
+      "previousValue": 215,
+      "improvement": 10,
+      "setAt": "2026-01-10T..."
+    }
+  ],
+  "currentPRs": [
+    { "exerciseId": "0001", "exerciseName": "Bench Press", "recordValue": 225 }
+  ],
+  "recentPRs": [],
+  "totalPRs": 8
+}
+```
+
+---
+
 ### XP Values Reference
 
 | Category | Reward | XP |

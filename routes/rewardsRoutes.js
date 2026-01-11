@@ -3,6 +3,10 @@ const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
 const rewardCalculator = require("../services/rewardCalculator");
+const levelCalculator = require("../services/levelCalculator");
+const { awardDailySignIn, getUserStreaks } = require("../services/xpEventService");
+const { getUserBadges, checkAllBadges } = require("../services/badgeService");
+const { getPRHistory, getCurrentPRs, getRecentPRs } = require("../services/prService");
 
 const logger = require("../utils/logger");
 
@@ -144,9 +148,23 @@ router.get("/user", authenticateToken, async (req, res) => {
         ORDER BY urp.ClaimedAt DESC
       `);
 
+    // Calculate level progress
+    const levelProgress = levelCalculator.getLevelProgress(userRewards.TotalXP);
+
     res.status(200).json({
       totalXP: userRewards.TotalXP,
       currentTier: userRewards.CurrentTier,
+      // New level data
+      level: levelProgress.level,
+      levelProgress: {
+        level: levelProgress.level,
+        xpIntoLevel: levelProgress.xpIntoLevel,
+        xpToNextLevel: levelProgress.xpToNextLevel,
+        progressPercent: levelProgress.progressPercent,
+        tier: levelProgress.tier,
+        tierName: levelProgress.tierName,
+      },
+      // Legacy tier progress (for backwards compatibility)
       tierProgress: {
         current: userRewards.CurrentTier,
         currentXP: userRewards.TotalXP,
@@ -272,16 +290,25 @@ router.post("/:rewardId/claim", authenticateToken, async (req, res) => {
         `);
 
       const newTotalXP = xpResult.recordset[0]?.TotalXP || reward.XPValue;
-      const newTier = calculateTier(newTotalXP);
+      const oldXP = newTotalXP - reward.XPValue;
 
-      // Update tier if changed
+      // Check for level up
+      const levelUpResult = levelCalculator.checkLevelUp(oldXP, newTotalXP);
+      const newLevel = levelCalculator.calculateLevel(newTotalXP);
+      const newTier = levelCalculator.getTierFromLevel(newLevel);
+
+      // Update tier and level if changed
       await transaction.request()
         .input("userId", userId)
         .input("tier", newTier)
+        .input("level", newLevel)
+        .input("levelUpAt", levelUpResult.leveledUp ? new Date() : null)
         .query(`
           UPDATE dbo.UserRewards
-          SET CurrentTier = @tier
-          WHERE UserID = @userId AND CurrentTier != @tier
+          SET CurrentTier = @tier,
+              CurrentLevel = @level,
+              LevelUpAt = CASE WHEN @levelUpAt IS NOT NULL THEN @levelUpAt ELSE LevelUpAt END
+          WHERE UserID = @userId
         `);
 
       // Add to history
@@ -302,6 +329,9 @@ router.post("/:rewardId/claim", authenticateToken, async (req, res) => {
         xpEarned: reward.XPValue,
         newTotalXP,
         newTier,
+        newLevel,
+        leveledUp: levelUpResult.leveledUp,
+        levelUpInfo: levelUpResult.leveledUp ? levelUpResult : null,
         message: `Claimed ${reward.XPValue} XP for ${reward.Name}`,
       });
     } catch (txError) {
@@ -576,6 +606,234 @@ router.post("/recalculate", authenticateToken, async (req, res) => {
   } catch (error) {
     logger.error("Recalculate Rewards Error", { error: error.message, userId });
     res.status(500).json({ message: "Failed to recalculate rewards" });
+  }
+});
+
+// ============================================
+// LEVEL SYSTEM ENDPOINTS
+// ============================================
+
+/**
+ * @swagger
+ * /rewards/level:
+ *   get:
+ *     summary: Get user's level info
+ *     description: Returns level, XP progress, tier, and progress to next level
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: User level data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/level", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+
+    // Get user's XP and level
+    const result = await pool.request()
+      .input("userId", userId)
+      .query(`
+        SELECT TotalXP, CurrentLevel, CurrentTier, LevelUpAt
+        FROM dbo.UserRewards
+        WHERE UserID = @userId
+      `);
+
+    if (result.recordset.length === 0) {
+      // Create default record
+      await pool.request()
+        .input("userId", userId)
+        .query(`
+          INSERT INTO dbo.UserRewards (UserID, TotalXP, CurrentLevel, CurrentTier)
+          VALUES (@userId, 0, 1, 'BRONZE')
+        `);
+
+      return res.status(200).json(levelCalculator.getLevelProgress(0));
+    }
+
+    const user = result.recordset[0];
+    const levelProgress = levelCalculator.getLevelProgress(user.TotalXP);
+
+    // Get streaks for bonus info
+    const streaks = await getUserStreaks(userId);
+
+    res.status(200).json({
+      ...levelProgress,
+      streakBonus: streaks.workout?.current >= 7,
+      workoutStreak: streaks.workout?.current || 0,
+      lastLevelUp: user.LevelUpAt,
+    });
+  } catch (error) {
+    logger.error("Get Level Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get level info" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/badges:
+ *   get:
+ *     summary: Get user's badges
+ *     description: Returns all badges with user progress
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: User badges data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/badges", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const badges = await getUserBadges(userId);
+
+    // Count earned badges
+    const earnedCount = badges.filter(b => b.isEarned).length;
+
+    res.status(200).json({
+      badges,
+      totalBadges: badges.length,
+      earnedBadges: earnedCount,
+    });
+  } catch (error) {
+    logger.error("Get Badges Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get badges" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/badges/check:
+ *   post:
+ *     summary: Check all badge progress
+ *     description: Recalculates badge progress based on current activity data
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: Badge check results
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/badges/check", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const result = await checkAllBadges(userId);
+
+    res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    logger.error("Check Badges Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to check badges" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/personal-records:
+ *   get:
+ *     summary: Get personal records history
+ *     description: Returns user's PR history, optionally filtered by exercise
+ *     tags: [Rewards]
+ *     parameters:
+ *       - in: query
+ *         name: exerciseId
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *     responses:
+ *       200:
+ *         description: Personal records data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/personal-records", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { exerciseId, limit = 50 } = req.query;
+
+  try {
+    // Get PR history
+    const history = await getPRHistory(userId, exerciseId, parseInt(limit));
+
+    // Get current PRs (best per exercise)
+    const currentPRs = await getCurrentPRs(userId);
+
+    // Get recent PRs
+    const recentPRs = await getRecentPRs(userId, 5);
+
+    res.status(200).json({
+      history,
+      currentPRs,
+      recentPRs,
+      totalPRs: history.length,
+    });
+  } catch (error) {
+    logger.error("Get Personal Records Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get personal records" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/daily-signin:
+ *   post:
+ *     summary: Record daily sign-in
+ *     description: Awards 10 XP for first sign-in of the day
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: Sign-in result
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/daily-signin", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const result = await awardDailySignIn(userId);
+
+    res.status(200).json(result);
+  } catch (error) {
+    logger.error("Daily Sign-in Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to record daily sign-in" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/streaks:
+ *   get:
+ *     summary: Get user's streaks
+ *     description: Returns all streak types (workout, login, water, sleep)
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: User streaks data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/streaks", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const streaks = await getUserStreaks(userId);
+
+    res.status(200).json({
+      streaks,
+      hasStreakBonus: (streaks.workout?.current || 0) >= 7,
+    });
+  } catch (error) {
+    logger.error("Get Streaks Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get streaks" });
   }
 });
 

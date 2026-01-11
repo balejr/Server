@@ -323,7 +323,7 @@ async function checkAndUpdateRewards(userId) {
       updates.hydration_streak = hydrationStreak;
     }
 
-    logger.log("Rewards recalculated for user:", userId);
+    logger.info("Rewards recalculated for user:", userId);
     return updates;
   } catch (error) {
     logger.error("checkAndUpdateRewards error:", { userId, error: error.message });
