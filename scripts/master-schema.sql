@@ -757,24 +757,32 @@ BEGIN
         RequiredStreak INT NULL,
         IsActive BIT DEFAULT 1,
         CreatedAt DATETIMEOFFSET DEFAULT SYSDATETIMEOFFSET(),
-        CONSTRAINT CK_RewardCategory CHECK (Category IN ('daily', 'weekly', 'milestone', 'streak', 'special'))
+        CONSTRAINT CK_RewardCategory CHECK (Category IN ('daily', 'weekly', 'monthly', 'universal'))
     );
     PRINT 'Created RewardDefinitions table';
 
     -- Insert default rewards
     INSERT INTO dbo.RewardDefinitions (RewardKey, Category, Name, Description, XPValue, RequiredCount) VALUES
+    -- Daily (4)
     ('daily_signin', 'daily', 'Daily Sign-In', 'Log in to the app', 10, 1),
     ('log_water', 'daily', 'Log Water Intake', 'Track your hydration', 5, 1),
     ('log_sleep', 'daily', 'Log Sleep', 'Record your sleep hours', 5, 1),
     ('daily_combo', 'daily', 'Daily Combo', 'Log Workout + Water + Sleep', 5, 1),
-    ('weekly_5_workouts', 'weekly', 'Workout Warrior', 'Complete 5 workouts this week', 50, 5),
-    ('weekly_hydration', 'weekly', 'Hydration Hero', 'Log water intake 7 days', 30, 7),
-    ('streak_7', 'streak', '7-Day Streak', 'Maintain a 7-day workout streak', 100, 1),
-    ('streak_30', 'streak', '30-Day Streak', 'Maintain a 30-day workout streak', 500, 1),
-    ('first_workout', 'milestone', 'First Steps', 'Complete your first workout', 25, 1),
-    ('workouts_10', 'milestone', 'Getting Stronger', 'Complete 10 total workouts', 50, 10),
-    ('workouts_50', 'milestone', 'Dedicated Athlete', 'Complete 50 total workouts', 150, 50),
-    ('workouts_100', 'milestone', 'Century Club', 'Complete 100 total workouts', 300, 100);
+    -- Weekly (3)
+    ('weekly_goal', 'weekly', 'Weekly Workout Goal', 'Complete your weekly workout target', 100, 5),
+    ('step_streak_7', 'weekly', '7-Day Step Streak', 'Meet step goal daily for a week', 50, 7),
+    ('weekly_powerup', 'weekly', 'Weekly Power-Up', 'Complete 100% of weekly goals', 150, 1),
+    -- Monthly (2)
+    ('challenge_complete', 'monthly', 'Complete a Challenge', 'Finish a monthly challenge', 150, 1),
+    ('perfect_month', 'monthly', 'Perfect Month', 'Log every day for a month', 250, 30),
+    -- Universal (7)
+    ('complete_workout', 'universal', 'Complete Workout', 'Finish any workout session', 50, 1),
+    ('custom_routine', 'universal', 'Create Custom Routine', 'Design your own workout', 75, 1),
+    ('step_goal', 'universal', 'Hit Daily Step Goal', 'Reach your step target', 20, 1),
+    ('form_ai_review', 'universal', 'AI Form Review', 'Get AI feedback on your form', 25, 1),
+    ('personal_record', 'universal', 'Set a Personal Record', 'Beat your personal best', 50, 1),
+    ('invite_friend', 'universal', 'Invite a Friend', 'Refer someone to Apogee', 100, 1),
+    ('referral_join', 'universal', 'Friend Joins', 'Your referral signs up', 250, 1);
     PRINT 'Inserted default reward definitions';
 END
 

@@ -92,13 +92,13 @@ router.get("/user", authenticateToken, async (req, res) => {
         WHERE UserID = @userId
       `);
 
-    // Build progress map
+    // Build progress map by RewardID
     const progressMap = {};
     progressResult.recordset.forEach((p) => {
       progressMap[p.RewardID] = p;
     });
 
-    // Build reward progress with definitions
+    // Build flat reward progress keyed by rewardKey (for frontend compatibility)
     const rewardProgress = {};
     rewardDefsResult.recordset.forEach((reward) => {
       const progress = progressMap[reward.RewardID] || {
@@ -107,23 +107,27 @@ router.get("/user", authenticateToken, async (req, res) => {
         IsClaimed: false,
       };
 
-      if (!rewardProgress[reward.Category]) {
-        rewardProgress[reward.Category] = [];
-      }
+      // Calculate progress percentage (0-100)
+      const progressPercent = reward.RequiredCount > 0
+        ? Math.min(100, Math.round((progress.CurrentProgress / reward.RequiredCount) * 100))
+        : 0;
 
-      rewardProgress[reward.Category].push({
-        id: reward.RewardKey,
+      // Flat map keyed by rewardKey
+      rewardProgress[reward.RewardKey] = {
         rewardId: reward.RewardID,
+        completed: progress.IsCompleted,
+        claimed: progress.IsClaimed,
+        canClaim: progress.IsCompleted && !progress.IsClaimed,
+        progress: progressPercent,
+        currentCount: progress.CurrentProgress,
+        requiredCount: reward.RequiredCount,
+        xp: reward.XPValue,
         name: reward.Name,
         description: reward.Description,
-        xp: reward.XPValue,
-        requiredCount: reward.RequiredCount,
-        currentProgress: progress.CurrentProgress,
-        isCompleted: progress.IsCompleted,
-        isClaimed: progress.IsClaimed,
+        category: reward.Category,
         completedAt: progress.CompletedAt,
         claimedAt: progress.ClaimedAt,
-      });
+      };
     });
 
     // Get completed (claimed) rewards for history
@@ -156,7 +160,7 @@ router.get("/user", authenticateToken, async (req, res) => {
         name: r.Name,
         xp: r.XPValue,
         category: r.Category,
-        claimedAt: r.ClaimedAt,
+        completedAt: r.ClaimedAt, // Frontend expects completedAt
       })),
       lastUpdated: userRewards.LastUpdated,
     });
