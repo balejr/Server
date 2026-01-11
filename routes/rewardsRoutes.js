@@ -2,6 +2,7 @@
 const express = require("express");
 const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
+const rewardCalculator = require("../services/rewardCalculator");
 
 const logger = require("../utils/logger");
 
@@ -543,6 +544,38 @@ router.post("/progress/:rewardKey", authenticateToken, async (req, res) => {
   } catch (error) {
     logger.error("Update Reward Progress Error", { error: error.message, userId, rewardKey });
     res.status(500).json({ message: "Failed to update reward progress" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/recalculate:
+ *   post:
+ *     summary: Recalculate weekly/monthly rewards
+ *     description: Checks and updates progress for weekly_goal, step_streak_7, weekly_powerup, perfect_month, and challenge_complete
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: Rewards recalculated
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post("/recalculate", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const updates = await rewardCalculator.checkAndUpdateRewards(userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Rewards recalculated",
+      updates,
+    });
+  } catch (error) {
+    logger.error("Recalculate Rewards Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to recalculate rewards" });
   }
 });
 

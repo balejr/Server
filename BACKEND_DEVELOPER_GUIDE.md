@@ -987,7 +987,7 @@ Routes to correct payment gateway based on user's subscription.
 | `chatbotRoutes.js` | `/api/chatbot` | 3         | AI assistant                                   |
 | `workoutRoutes.js` | `/api/workout` | 5         | AI workout plans                               |
 | `usageRoutes.js`   | `/api/usage`   | 3         | Usage tracking                                 |
-| `rewardsRoutes.js` | `/api/rewards` | 3         | XP rewards and tier progression                |
+| `rewardsRoutes.js` | `/api/rewards` | 5         | XP rewards and tier progression                |
 
 ### Auth Routes (`/api/auth`)
 
@@ -1107,6 +1107,7 @@ Routes to correct payment gateway based on user's subscription.
 | POST   | `/:rewardId/claim`    | Access | Claim a completed reward                     |
 | GET    | `/history`            | Access | Get completed rewards history (paginated)    |
 | POST   | `/progress/:rewardKey`| Access | Update progress on a specific reward         |
+| POST   | `/recalculate`        | Access | Recalculate weekly/monthly rewards from history |
 
 **GET /rewards/user Response:**
 
@@ -1148,6 +1149,34 @@ Routes to correct payment gateway based on user's subscription.
 | `search`  | string | -       | Search reward names   |
 | `page`    | number | 1       | Page number           |
 | `limit`   | number | 20      | Items per page        |
+
+**POST /rewards/recalculate Response:**
+
+Recalculates weekly/monthly rewards based on user activity history. Called after daily log saves or when rewards screen opens.
+
+```json
+{
+  "success": true,
+  "message": "Rewards recalculated",
+  "updates": {
+    "weekly_goal": { "completed": true, "count": 3, "required": 3 },
+    "step_streak_7": { "completed": false, "currentStreak": 4, "required": 7 },
+    "weekly_powerup": { "completed": true, "weeklyGoalMet": true },
+    "perfect_month": { "completed": false, "currentStreak": 12, "required": 30 },
+    "hydration_streak": { "completed": false, "currentStreak": 5, "required": 7 }
+  }
+}
+```
+
+**Reward Calculation Logic (services/rewardCalculator.js):**
+
+| Reward Key | Calculation | Required |
+|------------|-------------|----------|
+| `weekly_goal` | Count distinct workout days in last 7 days | 3 workouts |
+| `step_streak_7` | Consecutive days with 10k+ steps | 7 days |
+| `weekly_powerup` | Same as weekly_goal completion | 1 (boolean) |
+| `perfect_month` | Consecutive days with any activity (logs or workouts) | 30 days |
+| `challenge_complete` | 7-day hydration streak (water logged daily) | 7 days |
 
 ---
 

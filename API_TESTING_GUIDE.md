@@ -1912,6 +1912,45 @@ Increment progress on a specific reward (used internally when user completes act
 
 ---
 
+### Recalculate Weekly/Monthly Rewards
+
+Recalculates all weekly and monthly rewards based on user's activity history. Call this after saving daily logs or when opening the rewards screen to ensure reward progress is up-to-date.
+
+| Setting       | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| **Method**    | `POST`                                                      |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/rewards/recalculate` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                 |
+| **Body**      | `{}` (empty)                                                |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "Rewards recalculated",
+  "updates": {
+    "weekly_goal": { "completed": true, "count": 3, "required": 3 },
+    "step_streak_7": { "completed": false, "currentStreak": 4, "required": 7 },
+    "weekly_powerup": { "completed": true, "weeklyGoalMet": true },
+    "perfect_month": { "completed": false, "currentStreak": 12, "required": 30 },
+    "hydration_streak": { "completed": false, "currentStreak": 5, "required": 7 }
+  }
+}
+```
+
+**Rewards Calculated:**
+
+| Reward Key | Description | Requirement |
+|------------|-------------|-------------|
+| `weekly_goal` | Complete workouts in 7 days | 3 workouts |
+| `step_streak_7` | Consecutive days with 10k+ steps | 7 days |
+| `weekly_powerup` | Complete 100% of weekly goals | All 3 workouts |
+| `perfect_month` | Consecutive days with any activity | 30 days |
+| `challenge_complete` | Hydration streak (water logged daily) | 7 days |
+
+---
+
 ### Get Reward History
 
 Get a paginated list of completed rewards.
