@@ -48,18 +48,32 @@ app.use((req, res, next) => {
 /* ======================
    Routes (SAFE LOAD)
 ====================== */
-try {
-  app.use("/api/auth", require("./routes/authRoutes"));
-  app.use("/api/user", require("./routes/userRoutes"));
-  app.use("/api/data", require("./routes/dataRoutes"));
-  app.use("/api/chatbot", require("./routes/chatbotRoutes"));
-  app.use("/api/config", require("./routes/configRoutes"));
-  app.use("/api/usage", require("./routes/usageRoutes").router);
-  app.use("/api/workout", require("./routes/workoutRoutes").router);
-  app.use("/api/rewards", require("./routes/rewardsRoutes"));
-} catch (err) {
-  console.error("❌ Route load failure:", err.message);
-}
+
+const routes = [
+  { path: "/api/auth", file: "./routes/authRoutes" },
+  { path: "/api/user", file: "./routes/userRoutes" },
+  { path: "/api/data", file: "./routes/dataRoutes" },
+  { path: "/api/chatbot", file: "./routes/chatbotRoutes" },
+  { path: "/api/config", file: "./routes/configRoutes" },
+  { path: "/api/usage", file: "./routes/usageRoutes", sub: "router" },
+  { path: "/api/workout", file: "./routes/workoutRoutes", sub: "router" },
+  { path: "/api/rewards", file: "./routes/rewardsRoutes" },
+];
+
+routes.forEach(r => {
+  try {
+    const routeModule = require(r.file);
+    if (r.sub) {
+      app.use(r.path, routeModule[r.sub]);
+    } else {
+      app.use(r.path, routeModule);
+    }
+    console.log(`✅ Mounted ${r.path} from ${r.file}`);
+  } catch (err) {
+    console.error(`❌ Failed to load route ${r.path} (${r.file}):`, err);
+  }
+});
+
 
 /* ======================
    Swagger (OPTIONAL)
