@@ -31,6 +31,7 @@ jobs:
             config/
             middleware/
             routes/
+            services/
             swagger/
             types/
             utils/
