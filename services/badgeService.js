@@ -57,22 +57,30 @@ async function getUserBadges(userId) {
         ORDER BY a.Category, a.Title
       `);
 
-    return result.recordset.map((badge) => ({
-      badgeId: badge.badgeId,
-      name: badge.name,
-      description: badge.description,
-      category: badge.category,
-      type: badge.type,
-      requiredValue: badge.requiredValue,
-      icon: badge.icon,
-      currentProgress: badge.currentProgress,
-      progressPercent: Math.min(
-        100,
-        Math.round((badge.currentProgress / badge.requiredValue) * 100)
-      ),
-      isEarned: badge.isEarned === 1 || badge.isEarned === true,
-      earnedAt: badge.earnedAt,
-    }));
+    return result.recordset.map((badge) => {
+      // Get XP reward from BADGE_XP map using badge type/name
+      // Convert name to snake_case key format (e.g., "Consistency King" -> "consistency_king")
+      const badgeKey = badge.name?.toLowerCase().replace(/\s+/g, '_');
+      const xpReward = BADGE_XP[badgeKey] || 50; // Default to 50 XP if not found
+
+      return {
+        badgeId: badge.badgeId,
+        name: badge.name,
+        description: badge.description,
+        category: badge.category,
+        type: badge.type,
+        requiredValue: badge.requiredValue,
+        icon: badge.icon,
+        currentProgress: badge.currentProgress,
+        progressPercent: Math.min(
+          100,
+          Math.round((badge.currentProgress / badge.requiredValue) * 100)
+        ),
+        isEarned: badge.isEarned === 1 || badge.isEarned === true,
+        earnedAt: badge.earnedAt,
+        xpReward: xpReward,
+      };
+    });
   } catch (error) {
     logger.error("getUserBadges error:", error.message);
     return [];
