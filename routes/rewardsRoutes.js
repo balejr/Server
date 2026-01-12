@@ -103,6 +103,40 @@ router.get("/user", authenticateToken, async (req, res) => {
       progressMap[p.RewardID] = p;
     });
 
+    // Check TODAY's daily reward completion status
+    // Daily rewards reset each day, so we need to check daily-specific tables
+    const dailyStatusResult = await pool.request()
+      .input("userId", userId)
+      .query(`
+        -- Check daily sign-in for today
+        SELECT 'daily_signin' as rewardKey, 1 as completed
+        FROM dbo.DailySignIn
+        WHERE UserID = @userId AND SignInDate = CAST(GETDATE() AS DATE)
+        UNION ALL
+        -- Check daily XP awards for today (water, sleep, step goal, etc.)
+        SELECT
+          CASE AwardType
+            WHEN 'water_log' THEN 'log_water'
+            WHEN 'sleep_log' THEN 'log_sleep'
+            WHEN 'step_goal' THEN 'step_goal'
+            WHEN 'form_review' THEN 'form_ai_review'
+            WHEN 'daily_combo' THEN 'daily_combo'
+            ELSE AwardType
+          END as rewardKey,
+          1 as completed
+        FROM dbo.DailyXPAwards
+        WHERE UserID = @userId AND AwardDate = CAST(GETDATE() AS DATE)
+      `);
+
+    // Build map of today's completed daily rewards
+    const todayDailyStatus = {};
+    dailyStatusResult.recordset.forEach((row) => {
+      todayDailyStatus[row.rewardKey] = true;
+    });
+
+    // Daily reward keys that reset each day
+    const dailyRewardKeys = ['daily_signin', 'log_water', 'log_sleep', 'step_goal', 'form_ai_review', 'daily_combo'];
+
     // Build flat reward progress keyed by rewardKey (for frontend compatibility)
     const rewardProgress = {};
     rewardDefsResult.recordset.forEach((reward) => {
@@ -117,14 +151,19 @@ router.get("/user", authenticateToken, async (req, res) => {
         ? Math.min(100, Math.round((progress.CurrentProgress / reward.RequiredCount) * 100))
         : 0;
 
+      // For daily rewards, check TODAY's status instead of all-time progress
+      const isDailyReward = dailyRewardKeys.includes(reward.RewardKey);
+      const isCompletedToday = isDailyReward ? todayDailyStatus[reward.RewardKey] || false : progress.IsCompleted;
+      const isClaimedToday = isDailyReward ? todayDailyStatus[reward.RewardKey] || false : progress.IsClaimed;
+
       // Flat map keyed by rewardKey
       rewardProgress[reward.RewardKey] = {
         rewardId: reward.RewardID,
-        completed: progress.IsCompleted,
-        claimed: progress.IsClaimed,
-        canClaim: progress.IsCompleted && !progress.IsClaimed,
-        progress: progressPercent,
-        currentCount: progress.CurrentProgress,
+        completed: isCompletedToday,
+        claimed: isClaimedToday,
+        canClaim: !isDailyReward && progress.IsCompleted && !progress.IsClaimed, // Daily rewards are auto-claimed
+        progress: isDailyReward ? (isCompletedToday ? 100 : 0) : progressPercent,
+        currentCount: isDailyReward ? (isCompletedToday ? 1 : 0) : progress.CurrentProgress,
         requiredCount: reward.RequiredCount,
         xp: reward.XPValue,
         name: reward.Name,
@@ -132,6 +171,7 @@ router.get("/user", authenticateToken, async (req, res) => {
         category: reward.Category,
         completedAt: progress.CompletedAt,
         claimedAt: progress.ClaimedAt,
+        isDaily: isDailyReward, // Flag for frontend to know this is a daily reward
       };
     });
 
