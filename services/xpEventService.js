@@ -217,6 +217,60 @@ async function awardDailySignIn(userId) {
       pool
     );
 
+    // Also update UserRewardProgress for daily_signin so UI shows as completed
+    try {
+      // Get the daily_signin reward ID
+      const rewardDef = await pool
+        .request()
+        .query(`
+          SELECT RewardID FROM dbo.RewardDefinitions
+          WHERE RewardKey = 'daily_signin' AND IsActive = 1
+        `);
+
+      if (rewardDef.recordset.length > 0) {
+        const rewardId = rewardDef.recordset[0].RewardID;
+
+        // Check if progress record exists
+        const progressCheck = await pool
+          .request()
+          .input("userId", userId)
+          .input("rewardId", rewardId)
+          .query(`
+            SELECT ProgressID FROM dbo.UserRewardProgress
+            WHERE UserID = @userId AND RewardID = @rewardId
+          `);
+
+        if (progressCheck.recordset.length === 0) {
+          // Create progress record marked as completed and claimed
+          await pool
+            .request()
+            .input("userId", userId)
+            .input("rewardId", rewardId)
+            .query(`
+              INSERT INTO dbo.UserRewardProgress
+                (UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt, ClaimedAt)
+              VALUES
+                (@userId, @rewardId, 1, 1, 1, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())
+            `);
+        } else {
+          // Update existing progress as completed and claimed
+          await pool
+            .request()
+            .input("userId", userId)
+            .input("rewardId", rewardId)
+            .query(`
+              UPDATE dbo.UserRewardProgress
+              SET CurrentProgress = 1, IsCompleted = 1, IsClaimed = 1,
+                  CompletedAt = SYSDATETIMEOFFSET(), ClaimedAt = SYSDATETIMEOFFSET()
+              WHERE UserID = @userId AND RewardID = @rewardId
+            `);
+        }
+      }
+    } catch (progressError) {
+      // Don't fail the whole operation if progress update fails
+      logger.warn("Failed to update daily_signin progress:", progressError.message);
+    }
+
     return {
       awarded: true,
       ...result,
