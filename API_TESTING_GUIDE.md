@@ -835,6 +835,35 @@ Permanently delete user account and all associated data.
 
 ## Utility Routes
 
+### Mobile App Configuration
+
+| Setting    | Value                                                        |
+| ---------- | ------------------------------------------------------------ |
+| **Method** | `GET`                                                        |
+| **URL**    | `https://apogeehnp.azurewebsites.net/api/config/mobile`       |
+| **Body**   | None                                                         |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "features": {
+      "rapidApiEnabled": true,
+      "nutritionixEnabled": true,
+      "stripeEnabled": true
+    },
+    "public": {
+      "nutritionixAppId": "nutritionix-app-id",
+      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx"
+    }
+  }
+}
+```
+
+> **Note:** `nutritionixAppId` and `stripePublishableKey` return `null` if the server is not configured with those values.
+
 ### Update Login Preference
 
 | Setting       | Value                                                                  |
