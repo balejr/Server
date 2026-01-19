@@ -2446,18 +2446,49 @@ router.get("/exercises/history", authenticateToken, async (req, res) => {
 // module.exports = router;
 
 // Safe initialization that won't crash the app
+const stripeFactory = require("stripe");
 let stripe = null;
-try {
-  if (process.env.STRIPE_SECRET_KEY) {
-    stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-    logger.info("Stripe initialized");
-  } else {
-    logger.warn("STRIPE_SECRET_KEY not set - Stripe features disabled");
-  }
-} catch (err) {
-  logger.error("Failed to initialize Stripe", { error: err.message });
-  // Don't crash - just log the error
+let stripeSecretKey = null;
+let stripeMissingKeyLogged = false;
+
+function getStripeSecretKey() {
+  const secretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
+  return secretKey.length > 0 ? secretKey : null;
 }
+
+function ensureStripeClient() {
+  const secretKey = getStripeSecretKey();
+
+  if (!secretKey) {
+    stripe = null;
+    stripeSecretKey = null;
+    if (!stripeMissingKeyLogged) {
+      logger.warn("STRIPE_SECRET_KEY not set - Stripe features disabled");
+      stripeMissingKeyLogged = true;
+    }
+    return null;
+  }
+
+  stripeMissingKeyLogged = false;
+
+  if (!stripe || stripeSecretKey !== secretKey) {
+    try {
+      stripe = stripeFactory(secretKey);
+      stripeSecretKey = secretKey;
+      logger.info("Stripe initialized");
+    } catch (err) {
+      stripe = null;
+      stripeSecretKey = null;
+      logger.error("Failed to initialize Stripe", { error: err.message });
+      return null;
+    }
+  }
+
+  return stripe;
+}
+
+// Attempt initialization at startup (safe, no-throw)
+ensureStripeClient();
 
 /**
  * @swagger
@@ -2671,7 +2702,7 @@ router.post("/payments/initialize", authenticateToken, async (req, res) => {
 
   try {
     // Validate environment variables
-    if (!process.env.STRIPE_SECRET_KEY) {
+    if (!ensureStripeClient()) {
       return sendErrorResponse(
         res,
         500,
@@ -3477,6 +3508,15 @@ router.post(
 
       const customerId = customerResult.recordset[0].customer_id;
 
+      if (!ensureStripeClient()) {
+        return sendErrorResponse(
+          res,
+          500,
+          "Configuration Error",
+          "STRIPE_SECRET_KEY missing on server"
+        );
+      }
+
       // CRITICAL: Ensure customer has a default payment method before creating portal session
       // This is required for Customer Portal to process prorated charges when upgrading/downgrading
       try {
@@ -3712,7 +3752,7 @@ router.post("/payments/confirm", authenticateToken, async (req, res) => {
   console.log(`[${timestamp}] 📥 Payment confirmation request received`);
 
   try {
-    if (!process.env.STRIPE_SECRET_KEY) {
+    if (!ensureStripeClient()) {
       return sendErrorResponse(
         res,
         500,
@@ -4204,14 +4244,8 @@ async function updateSubscriptionInDatabase(
   billingInterval = null,
   cancellationScheduled = null
 ) {
-  if (!process.env.STRIPE_SECRET_KEY) {
+  if (!ensureStripeClient()) {
     throw new Error("STRIPE_SECRET_KEY missing on server");
-  }
-
-  if (!stripe) {
-    throw new Error(
-      "Stripe not initialized - check STRIPE_SECRET_KEY configuration"
-    );
   }
 
   console.log(
@@ -5466,7 +5500,8 @@ router.post(
 
       // If subscriptionId is provided but dates are missing, refresh from Stripe
       if (subscriptionId && (!validatedPeriodStart || !validatedPeriodEnd)) {
-        if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+        const stripeClient = ensureStripeClient();
+        if (!stripeClient) {
           console.warn(
             "⚠️ Stripe not initialized, cannot refresh subscription from Stripe"
           );
@@ -5475,7 +5510,7 @@ router.post(
             console.log(
               `🔄 Refreshing subscription ${subscriptionId} from Stripe to get billing dates...`
             );
-            const refreshedSubscription = await stripe.subscriptions.retrieve(
+            const refreshedSubscription = await stripeClient.subscriptions.retrieve(
               subscriptionId,
               {
                 expand: ["items.data.price"],
@@ -5742,11 +5777,12 @@ router.get(
 
       if (shouldFetchFromStripe) {
         try {
-          if (stripe && process.env.STRIPE_SECRET_KEY) {
+          const stripeClient = ensureStripeClient();
+          if (stripeClient) {
             console.log(
               `📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`
             );
-            const stripeSubscription = await stripe.subscriptions.retrieve(
+            const stripeSubscription = await stripeClient.subscriptions.retrieve(
               subscription.subscription_id,
               {
                 expand: ["latest_invoice", "items.data.price"],
@@ -5805,7 +5841,7 @@ router.get(
                       derivedBillingInterval
                   ) {
                     try {
-                      await stripe.subscriptions.update(stripeSubscription.id, {
+                      await stripeClient.subscriptions.update(stripeSubscription.id, {
                         metadata: {
                           ...stripeSubscription.metadata,
                           billingInterval: derivedBillingInterval,
@@ -6173,6 +6209,11 @@ router.get(
 router.post("/webhooks/stripe", async (req, res) => {
   const sig = req.headers["stripe-signature"];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!ensureStripeClient()) {
+    console.warn("⚠️ STRIPE_SECRET_KEY not set - cannot process Stripe webhooks");
+    return res.status(500).send("Stripe not configured");
+  }
 
   if (!webhookSecret) {
     console.warn(
@@ -6801,11 +6842,11 @@ router.post(
       }
 
       // Route to appropriate gateway
-      if (gatewayInfo.gateway === "stripe") {
-        // Stripe plan change logic
-        if (!stripe) {
-          return res.status(500).json({ error: "Stripe not configured" });
-        }
+    if (gatewayInfo.gateway === "stripe") {
+      // Stripe plan change logic
+      if (!ensureStripeClient()) {
+        return res.status(500).json({ error: "Stripe not configured" });
+      }
 
         // Get new price ID
         const priceIdMap = {
@@ -6991,7 +7032,7 @@ router.post("/subscriptions/pause", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
+      if (!ensureStripeClient()) {
         return res.status(500).json({ error: "Stripe not configured" });
       }
 
@@ -7112,7 +7153,7 @@ router.post("/subscriptions/cancel", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
+      if (!ensureStripeClient()) {
         return res.status(500).json({ error: "Stripe not configured" });
       }
 
@@ -7243,7 +7284,7 @@ router.post("/subscriptions/resume", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
+      if (!ensureStripeClient()) {
         return res.status(500).json({ error: "Stripe not configured" });
       }
 
@@ -7412,7 +7453,7 @@ router.post(
       console.log(`✅ Gateway info retrieved:`, JSON.stringify(gatewayInfo));
 
       if (gatewayInfo.gateway === "stripe") {
-        if (!stripe) {
+        if (!ensureStripeClient()) {
           return res.status(500).json({ error: "Stripe not configured" });
         }
 
@@ -7473,6 +7514,11 @@ router.post(
         );
         requestBody.append("subscription_details[items][0][price]", newPriceId);
 
+        const stripeSecret = getStripeSecretKey();
+        if (!stripeSecret) {
+          return res.status(500).json({ error: "Stripe not configured" });
+        }
+
         console.log(`🔗 Calling Stripe Create Preview Invoice API`);
         console.log(`📝 Request body:`, requestBody.toString());
 
@@ -7481,7 +7527,7 @@ router.post(
           requestBody.toString(),
           {
             headers: {
-              Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+              Authorization: `Bearer ${stripeSecret}`,
               "Content-Type": "application/x-www-form-urlencoded",
             },
           }

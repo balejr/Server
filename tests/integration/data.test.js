@@ -1172,6 +1172,41 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // PAYMENTS (STRIPE CONFIGURATION GUARD)
+  // =========================================================================
+
+  describe("Payments", () => {
+    test("initializes payment or returns config error when Stripe is missing", async () => {
+      const state = getState();
+      const payload = {
+        plan: "premium",
+        billingInterval: "monthly",
+        paymentMethod: "card",
+      };
+
+      const { response, duration } = await api.post(
+        "/data/payments/initialize",
+        payload,
+        { Authorization: `Bearer ${state.accessToken}` }
+      );
+
+      if (response.status === 200) {
+        expect(response.data).toHaveProperty("clientSecret");
+        expect(response.data).toHaveProperty("subscriptionId");
+        console.log(`     Payment initialized (${duration}ms)`);
+        return;
+      }
+
+      expect(response.status).toBe(500);
+      expect(response.data.error).toBe("Configuration Error");
+      expect(response.data.message).toMatch(/STRIPE_/i);
+      console.log(
+        `     Payment initialization blocked by config (${duration}ms)`
+      );
+    });
+  });
+
+  // =========================================================================
   // CLEANUP - Delete mesocycle at the end
   // =========================================================================
 

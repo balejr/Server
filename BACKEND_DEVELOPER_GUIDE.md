@@ -749,6 +749,12 @@ Used for subscription management and payments.
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 ```
 
+**Runtime guardrails:**
+
+- `STRIPE_SECRET_KEY` is trimmed at runtime; empty/whitespace values are treated as missing.
+- Stripe client initialization is lazy and re-runs if the key changes.
+- Payment/subscription endpoints return `Configuration Error` when Stripe isn't configured.
+
 **Key Operations:**
 
 - Create checkout sessions
