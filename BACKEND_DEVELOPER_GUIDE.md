@@ -1023,6 +1023,7 @@ Routes to correct payment gateway based on user's subscription.
 | `userRoutes.js`    | `/api/user`    | 3         | User profile CRUD                              |
 | `dataRoutes.js`    | `/api/data`    | 40+       | Daily logs, exercises, routines, subscriptions |
 | `chatbotRoutes.js` | `/api/chatbot` | 3         | AI assistant                                   |
+| `configRoutes.js`  | `/api/config`  | 1         | Mobile app runtime configuration               |
 | `workoutRoutes.js` | `/api/workout` | 5         | AI workout plans                               |
 | `usageRoutes.js`   | `/api/usage`   | 3         | Usage tracking                                 |
 | `rewardsRoutes.js` | `/api/rewards` | 5         | XP rewards and tier progression                |
@@ -1148,6 +1149,33 @@ Routes to correct payment gateway based on user's subscription.
 | POST   | `/chat`         | Access | Send message to AI |
 | GET    | `/chat/history` | Access | Get chat history   |
 | DELETE | `/chat/history` | Access | Clear chat history |
+
+### Config Routes (`/api/config`)
+
+| Method | Endpoint  | Auth | Description                        |
+| ------ | --------- | ---- | ---------------------------------- |
+| GET    | `/mobile` | -    | Mobile app runtime configuration   |
+
+**GET /config/mobile Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "features": {
+      "rapidApiEnabled": true,
+      "nutritionixEnabled": true,
+      "stripeEnabled": true
+    },
+    "public": {
+      "nutritionixAppId": "nutritionix-app-id",
+      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx"
+    }
+  }
+}
+```
+
+> **Note:** `nutritionixAppId` and `stripePublishableKey` return `null` when unset.
 
 ### Workout Routes (`/api/workout`)
 
@@ -1305,6 +1333,8 @@ EMAIL_PASS=your_app_password
 # ===================
 STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxxx
 STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxxx
+STRIPE_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxx
+EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxx
 
 # ===================
 # Azure Storage (Required for profile images)

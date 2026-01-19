@@ -36,10 +36,15 @@ const router = express.Router();
  *                           type: boolean
  *                         nutritionixEnabled:
  *                           type: boolean
+ *                         stripeEnabled:
+ *                           type: boolean
  *                     public:
  *                       type: object
  *                       properties:
  *                         nutritionixAppId:
+ *                           type: string
+ *                           nullable: true
+ *                         stripePublishableKey:
  *                           type: string
  *                           nullable: true
  *       500:
@@ -49,9 +54,17 @@ router.get("/mobile", (req, res) => {
   try {
     const rapidApiEnabled = Boolean(process.env.RAPID_API_KEY);
     const nutritionixEnabled = Boolean(process.env.NUTRITIONIX_API_KEY);
+    const stripeEnabled = Boolean(
+      process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
+        process.env.STRIPE_PUBLISHABLE_KEY
+    );
  
     // App IDs are typically not secret; API keys are.
     const nutritionixAppId = process.env.NUTRITIONIX_APP_ID || null;
+    const stripePublishableKey =
+      process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
+      process.env.STRIPE_PUBLISHABLE_KEY ||
+      null;
  
     return res.json({
       success: true,
@@ -59,9 +72,11 @@ router.get("/mobile", (req, res) => {
         features: {
           rapidApiEnabled,
           nutritionixEnabled,
+          stripeEnabled,
         },
         public: {
           nutritionixAppId,
+          stripePublishableKey,
         },
       },
     });
