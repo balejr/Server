@@ -1809,6 +1809,8 @@ Monitor your API usage limits and history.
 }
 ```
 
+> **Note:** `user_type` is always returned in lowercase (e.g., `free`, `premium`).
+
 ---
 
 ### Get Usage History
