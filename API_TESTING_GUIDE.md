@@ -1751,6 +1751,7 @@ Interact with the FitNext AI fitness assistant for workout plans, nutrition guid
 > - Premium users: 100 total inquiries per week
 
 > **If AI is not configured:** Response includes `errors: ["AI_NOT_CONFIGURED"]` with setup guidance.
+> **If AI returns non-JSON:** The server will attempt to extract JSON, otherwise a fallback response is returned.
 
 ---
 

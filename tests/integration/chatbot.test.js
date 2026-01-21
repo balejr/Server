@@ -12,6 +12,7 @@ describe("Chatbot API", () => {
       const { response } = await api.post("/chatbot/chat", {
         message: "Hello",
         sessionType: "inquiry",
+        model: "gemini-2.5-pro",
       });
 
       expect([401, 403]).toContain(response.status);

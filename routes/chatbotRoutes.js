@@ -363,7 +363,7 @@ const callGeminiAPI = async (
         : MODEL_NAME;
 
     // Initialize Google Generative AI
-    const ai = new GoogleGenerativeAI({ apiKey: GOOGLE_API_KEY });
+    const ai = new GoogleGenerativeAI(GOOGLE_API_KEY);
 
     // Configuration for structured response
     const config = {
@@ -397,12 +397,15 @@ const callGeminiAPI = async (
       hasSchema: !!config.responseSchema,
     });
 
-    // Try the exact structure from Google AI Studio
-    const response = await ai.models.generateContent({
+    const model = ai.getGenerativeModel({
       model: modelNameToUse,
-      config,
-      contents,
+      generationConfig: { temperature: 0.3 },
+      systemInstruction: FITNEXT_SYSTEM_INSTRUCTION,
     });
+
+    const response = await model.generateContent(
+      `${FITNEXT_SYSTEM_INSTRUCTION}\n\nReturn ONLY valid JSON.\n\n${contents[0].parts[0].text}`
+    );
 
     // Parse the structured response
     logger.debug("Gemini response received", {
