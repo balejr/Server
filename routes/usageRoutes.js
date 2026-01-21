@@ -37,11 +37,14 @@ const checkUsageLimit = async (userId, inquiryType = "general") => {
         SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId
       `);
 
-    const userType = userResult.recordset[0]?.UserType || "free";
+    const userType = String(
+      userResult.recordset[0]?.UserType || "free"
+    ).toLowerCase();
+    const isPremium = userType === "premium";
 
     // Set limits based on user type and inquiry type
     let weeklyLimit;
-    if (userType === "premium") {
+    if (isPremium) {
       weeklyLimit = 100; // Premium users get 100 total inquiries
     } else {
       // Free users: 5 general + 3 workout inquiries per week
@@ -174,7 +177,10 @@ router.get("/usage", authenticateToken, async (req, res) => {
         SELECT UserType FROM dbo.UserProfile WHERE UserID = @userId
       `);
 
-    const userType = userResult.recordset[0]?.UserType || "free";
+    const userType = String(
+      userResult.recordset[0]?.UserType || "free"
+    ).toLowerCase();
+    const isPremium = userType === "premium";
 
     // Get current week's usage from database
     const usageResult = await pool
@@ -189,7 +195,7 @@ router.get("/usage", authenticateToken, async (req, res) => {
 
     const usage = usageResult.recordset[0];
 
-    if (userType === "premium") {
+    if (isPremium) {
       // Premium users have unified limits (100 total)
       const totalUsed = usage
         ? usage.GeneralInquiryCount + usage.WorkoutInquiryCount

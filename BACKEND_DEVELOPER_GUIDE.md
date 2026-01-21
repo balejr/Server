@@ -1195,6 +1195,8 @@ Routes to correct payment gateway based on user's subscription.
 | GET    | `/usage/history` | Access | Get usage history           |
 | POST   | `/usage/reset`   | Access | Reset usage (admin/testing) |
 
+**Note:** `user_type` in usage responses is normalized to lowercase (e.g., `free`, `premium`).
+
 ### Rewards Routes (`/api/rewards`)
 
 | Method | Endpoint               | Auth   | Description                                     |
