@@ -1705,13 +1705,17 @@ Interact with the FitNext AI fitness assistant for workout plans, nutrition guid
 ```json
 {
   "message": "Create a 4-day workout plan for muscle gain",
-  "sessionType": "workout_plan"
+  "sessionType": "workout_plan",
+  "model": "gemini-2.5-pro"
 }
 ```
 
 **Session Types:**
 - `inquiry` - General fitness questions (default)
 - `workout_plan` - Workout plan creation
+
+**Optional Fields:**
+- `model` - Gemini model override (only model names containing `gemini` are accepted).
 
 **Expected Response:**
 
@@ -1745,6 +1749,8 @@ Interact with the FitNext AI fitness assistant for workout plans, nutrition guid
 > **Usage Limits:** See [Configuration Reference](BACKEND_DEVELOPER_GUIDE.md#6-configuration-reference) for details.
 > - Free users: 5 general inquiries + 3 workout inquiries per week
 > - Premium users: 100 total inquiries per week
+
+> **If AI is not configured:** Response includes `errors: ["AI_NOT_CONFIGURED"]` with setup guidance.
 
 ---
 

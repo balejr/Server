@@ -311,7 +311,11 @@ const createOrGetChatSession = async (userId, sessionType = "inquiry") => {
  * @param {Array} conversationHistory - Previous conversation messages
  * @returns {Promise<Object>} Structured response object
  */
-const callGeminiAPI = async (userMessage, conversationHistory = []) => {
+const callGeminiAPI = async (
+  userMessage,
+  conversationHistory = [],
+  options = {}
+) => {
   try {
     logger.debug("API Key check", {
       hasKey: !!GOOGLE_API_KEY,
@@ -327,13 +331,17 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
     });
 
     if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
-      logger.warn("API key not configured, returning mock response");
-      return getMockStructuredResponse(userMessage, conversationHistory);
+      logger.warn("API key not configured, returning fallback response");
+      return getMockStructuredResponse(userMessage, conversationHistory, {
+        reason: "AI_NOT_CONFIGURED",
+      });
     }
 
     if (!MODEL_NAME || !MODEL_NAME.includes("gemini")) {
-      logger.warn("Invalid model name, returning mock response");
-      return getMockStructuredResponse(userMessage, conversationHistory);
+      logger.warn("Invalid model name, returning fallback response");
+      return getMockStructuredResponse(userMessage, conversationHistory, {
+        reason: "AI_MODEL_INVALID",
+      });
     }
 
     // Build conversation context
@@ -346,10 +354,16 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
       });
     }
 
-    // Initialize Google Generative AI with new SDK
-    const ai = new GoogleGenerativeAI({
-      apiKey: GOOGLE_API_KEY,
-    });
+    // Allow request-level model override (client may request gemini-2.5-pro).
+    // Only allow Gemini models by name to avoid unexpected routing.
+    const requestedModel = String(options?.model || "").trim();
+    const modelNameToUse =
+      requestedModel && requestedModel.includes("gemini")
+        ? requestedModel
+        : MODEL_NAME;
+
+    // Initialize Google Generative AI
+    const ai = new GoogleGenerativeAI({ apiKey: GOOGLE_API_KEY });
 
     // Configuration for structured response
     const config = {
@@ -377,7 +391,7 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
 
     // Generate structured content
     logger.debug("Making API call to Gemini", {
-      model: MODEL_NAME,
+      model: modelNameToUse,
       userMessage: userMessage.substring(0, 50) + "...",
       hasConfig: !!config,
       hasSchema: !!config.responseSchema,
@@ -385,7 +399,7 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
 
     // Try the exact structure from Google AI Studio
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: modelNameToUse,
       config,
       contents,
     });
@@ -416,9 +430,25 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
       throw new Error("Unable to extract text from Gemini response");
     }
 
-    logger.debug("Raw API Response", { preview: responseText.substring(0, 200) + "..." });
+    logger.debug("Raw API Response", {
+      preview: String(responseText || "").substring(0, 200) + "...",
+    });
 
-    const structuredResponse = JSON.parse(responseText);
+    // Some models may wrap JSON in markdown fences or extra text.
+    // Try a robust parse: first direct JSON.parse, then extract the outermost JSON object.
+    let structuredResponse;
+    try {
+      structuredResponse = JSON.parse(responseText);
+    } catch (parseErr) {
+      const raw = String(responseText || "");
+      const first = raw.indexOf("{");
+      const last = raw.lastIndexOf("}");
+      if (first >= 0 && last > first) {
+        structuredResponse = JSON.parse(raw.slice(first, last + 1));
+      } else {
+        throw parseErr;
+      }
+    }
     logger.info("Parsed structured response", {
       mode: structuredResponse.mode,
       intent: structuredResponse.intent,
@@ -446,8 +476,11 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
       });
     }
 
-    // Return fallback structured response
-    return getMockStructuredResponse(userMessage, conversationHistory);
+    // Return fallback structured response (do not block UX).
+    return getMockStructuredResponse(userMessage, conversationHistory, {
+      reason: "AI_CALL_FAILED",
+      error: error?.message,
+    });
   }
 };
 
@@ -457,29 +490,57 @@ const callGeminiAPI = async (userMessage, conversationHistory = []) => {
  * @param {Array} conversationHistory - Previous conversation messages
  * @returns {Object} Structured response object
  */
-const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
+const getMockStructuredResponse = (
+  userMessage,
+  conversationHistory = [],
+  meta = {}
+) => {
   // Check if this is a follow-up question based on conversation history
   const hasPreviousContext = conversationHistory.length > 0;
   const lastMessage = hasPreviousContext
     ? conversationHistory[conversationHistory.length - 1]
     : null;
 
-  const isWorkoutRequest =
-    userMessage.toLowerCase().includes("workout") ||
-    userMessage.toLowerCase().includes("exercise") ||
-    userMessage.toLowerCase().includes("strength") ||
-    userMessage.toLowerCase().includes("cardio") ||
-    userMessage.toLowerCase().includes("weight loss") ||
-    userMessage.toLowerCase().includes("full body") ||
-    userMessage.toLowerCase().includes("create") ||
-    userMessage.toLowerCase().includes("plan");
+  const msg = String(userMessage || "").toLowerCase();
+  const wantsPlanVerb =
+    msg.includes("create") ||
+    msg.includes("generate") ||
+    msg.includes("build") ||
+    msg.includes("make") ||
+    msg.includes("design");
+  const mentionsPlanThing =
+    msg.includes("workout plan") ||
+    msg.includes("training plan") ||
+    msg.includes("routine") ||
+    msg.includes("program");
+
+  const isWorkoutRequest = mentionsPlanThing || (wantsPlanVerb && msg.includes("plan"));
 
   const isOutOfScope =
-    userMessage.toLowerCase().includes("pain") ||
-    userMessage.toLowerCase().includes("hurt") ||
-    userMessage.toLowerCase().includes("injury") ||
-    userMessage.toLowerCase().includes("medicine") ||
-    userMessage.toLowerCase().includes("doctor");
+    msg.includes("pain") ||
+    msg.includes("hurt") ||
+    msg.includes("injury") ||
+    msg.includes("medicine") ||
+    msg.includes("doctor");
+
+  if (meta?.reason === "AI_NOT_CONFIGURED") {
+    return {
+      mode: "GENERAL",
+      intent: "GENERAL",
+      message: {
+        title: "AI not configured",
+        body: "The AI service is not configured on the server yet. Please set GEMINI_API_KEY and restart the backend.",
+      },
+      payload: {
+        answer: [
+          "Set App Service env var GEMINI_API_KEY",
+          "Optionally set GEMINI_MODEL_NAME=gemini-2.5-pro",
+          "Restart the App Service",
+        ],
+      },
+      errors: ["AI_NOT_CONFIGURED"],
+    };
+  }
 
   if (isOutOfScope) {
     return {
@@ -524,7 +585,7 @@ const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
       intent: "GENERAL",
       message: {
         title: "Fitness Assistant",
-        body: "I'm your FitNext AI fitness assistant! I can help you with workout plans, exercise routines, form analysis, nutrition guidance, and general fitness advice.",
+        body: "I'm your FitNext AI fitness assistant. Ask me anything about training, technique, recovery, and nutrition basics, or ask me to create a workout plan.",
       },
       payload: {
         answer: [
@@ -573,7 +634,7 @@ const getMockStructuredResponse = (userMessage, conversationHistory = []) => {
  */
 router.post("/chat", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
-  const { message, sessionType = "inquiry" } = req.body;
+  const { message, sessionType = "inquiry", model } = req.body;
 
   // Validate sessionType to match database constraints
   const validSessionTypes = ["inquiry", "workout_plan"];
@@ -601,7 +662,8 @@ router.post("/chat", authenticateToken, async (req, res) => {
     // Call Gemini API to get structured response
     const structuredResponse = await callGeminiAPI(
       message,
-      conversationHistory
+      conversationHistory,
+      { model }
     );
 
     // Determine inquiry type based on intent for usage tracking
