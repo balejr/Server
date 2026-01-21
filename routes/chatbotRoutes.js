@@ -479,6 +479,51 @@ const callGeminiAPI = async (
       });
     }
 
+    // Best-effort plain-text fallback using Gemini (no strict JSON schema).
+    try {
+      const requestedModel = String(options?.model || "").trim();
+      const modelNameToUse =
+        requestedModel && requestedModel.includes("gemini")
+          ? requestedModel
+          : MODEL_NAME;
+
+      const ai = new GoogleGenerativeAI(GOOGLE_API_KEY);
+      const model = ai.getGenerativeModel({
+        model: modelNameToUse,
+        generationConfig: { temperature: 0.35 },
+        systemInstruction:
+          "You are FitNext AI, an in-app fitness assistant. Answer the user's question directly and concisely. No emojis. No medical diagnoses. Use bullet points when helpful.",
+      });
+
+      const plain = await model.generateContent(
+        `User question: ${String(userMessage || "").trim()}\n\nAnswer:`
+      );
+
+      let text = "";
+      if (plain?.response && typeof plain.response.text === "function") {
+        text = plain.response.text();
+      } else if (typeof plain?.text === "function") {
+        text = plain.text();
+      } else if (plain?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        text = plain.candidates[0].content.parts[0].text;
+      }
+
+      const cleaned = String(text || "").trim();
+      if (cleaned) {
+        return {
+          mode: "GENERAL",
+          intent: "GENERAL",
+          message: { title: "Answer", body: cleaned.slice(0, 800) },
+          payload: { answer: [cleaned] },
+          errors: [],
+        };
+      }
+    } catch (fallbackErr) {
+      logger.warn("Plain-text Gemini fallback failed", {
+        error: fallbackErr?.message,
+      });
+    }
+
     // Return fallback structured response (do not block UX).
     return getMockStructuredResponse(userMessage, conversationHistory, {
       reason: "AI_CALL_FAILED",
@@ -558,7 +603,7 @@ const getMockStructuredResponse = (
         whatICanDo:
           "I can help with fitness education, safe workouts, and healthy habit tips.",
       },
-      errors: [],
+      errors: meta?.reason ? [String(meta.reason)] : [],
     };
   }
 
@@ -580,7 +625,7 @@ const getMockStructuredResponse = (
           constraints: [],
         },
       },
-      errors: [],
+      errors: meta?.reason ? [String(meta.reason)] : [],
     };
   } else {
     return {
@@ -601,7 +646,7 @@ const getMockStructuredResponse = (
         nextBestAction:
           "What specific fitness topic would you like to discuss?",
       },
-      errors: [],
+      errors: meta?.reason ? [String(meta.reason)] : [],
     };
   }
 };

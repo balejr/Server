@@ -1154,6 +1154,7 @@ Routes to correct payment gateway based on user's subscription.
 - Optional `model` field allows Gemini model override (only model names containing `gemini` are accepted).
 - If the AI service is not configured, the response includes `errors: ["AI_NOT_CONFIGURED"]` with a setup message.
 - The server prompts for JSON-only output and will attempt to parse the model response before falling back.
+- On AI errors, the server may return a plain-text fallback response; if that fails, it returns a structured fallback with `errors: ["AI_CALL_FAILED"]`.
 
 ### Config Routes (`/api/config`)
 
