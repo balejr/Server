@@ -1059,7 +1059,7 @@ muscle: 42.3
 | Setting       | Value                                                        |
 | ------------- | ------------------------------------------------------------ |
 | **Method**    | `POST`                                                       |
-| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/preassessment` |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/preworkoutassessment` |
 | **Headers**   | `Authorization: Bearer <your_access_token>`                  |
 | **Body Type** | raw → JSON                                                   |
 

@@ -286,7 +286,7 @@ describe("Data Routes API", () => {
   // =========================================================================
 
   describe("Pre Assessment", () => {
-    describe("POST /data/preassessment", () => {
+    describe("POST /data/preworkoutassessment", () => {
       test("creates pre assessment with valid data", async () => {
         const state = getState();
         const payload = {
@@ -300,7 +300,7 @@ describe("Data Routes API", () => {
         };
 
         const { response, duration } = await api.post(
-          "/data/preassessment",
+          "/data/preworkoutassessment",
           payload,
           { Authorization: `Bearer ${state.accessToken}` }
         );
@@ -311,7 +311,7 @@ describe("Data Routes API", () => {
       });
 
       test("requires authentication", async () => {
-        const { response } = await api.post("/data/preassessment", {
+        const { response } = await api.post("/data/preworkoutassessment", {
           Feeling: "Good",
         });
 

@@ -1077,7 +1077,7 @@ Routes to correct payment gateway based on user's subscription.
 **Pre Assessment:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/preassessment` | Save pre-workout assessment |
+| POST | `/preworkoutassessment` | Save pre-workout assessment |
 
 **Body Fields:** `WorkoutPlanID`, `Feeling`, `WaterIntake`, `SleepQuality`, `SleepHours`, `RecoveryStatus`, `CreatedAt` (optional; defaults to now).
 
