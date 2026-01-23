@@ -282,6 +282,42 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // POST ASSESSMENT
+  // =========================================================================
+
+  describe("Post Assessment", () => {
+    describe("POST /data/postassessment", () => {
+      test("creates post assessment with valid data", async () => {
+        const state = getState();
+        const payload = {
+          FeelingAfterWorkout: "Great session",
+          Assessperformance: "Felt strong and stable",
+          NextSessionPlans: "Increase reps next time",
+          LastUpdateDate: new Date().toISOString(),
+        };
+
+        const { response, duration } = await api.post(
+          "/data/postassessment",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        console.log(`     Post assessment saved (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/data/postassessment", {
+          FeelingAfterWorkout: "Good",
+        });
+
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
   // DASHBOARD
   // =========================================================================
 

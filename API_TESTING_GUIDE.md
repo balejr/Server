@@ -1054,6 +1054,38 @@ muscle: 42.3
 
 ---
 
+#### Create Post-Workout Assessment
+
+| Setting       | Value                                                         |
+| ------------- | ------------------------------------------------------------- |
+| **Method**    | `POST`                                                        |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/postassessment` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                   |
+| **Body Type** | raw → JSON                                                    |
+
+**Body:**
+
+```json
+{
+  "FeelingAfterWorkout": "Great session",
+  "Assessperformance": "Felt strong and stable",
+  "NextSessionPlans": "Increase reps next time",
+  "LastUpdateDate": "2025-01-02T18:30:00.000Z"
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true
+}
+```
+
+> **Note:** `LastUpdateDate` is optional; the server defaults to the current time.
+
+---
+
 #### Get Weekly Dashboard Summary
 
 | Setting     | Value                                                                |

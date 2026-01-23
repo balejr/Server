@@ -7532,6 +7532,76 @@ router.post(
   }
 );
 
+/**
+ * @swagger
+ * /data/postassessment:
+ *   post:
+ *     summary: Create post-workout assessment
+ *     description: Save post-workout assessment data for the authenticated user
+ *     tags: [Assessments]
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               FeelingAfterWorkout:
+ *                 type: string
+ *               Assessperformance:
+ *                 type: string
+ *               NextSessionPlans:
+ *                 type: string
+ *               LastUpdateDate:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       200:
+ *         description: Post-assessment saved
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post("/postassessment", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const {
+    FeelingAfterWorkout = "",
+    Assessperformance = "",
+    NextSessionPlans = "",
+    LastUpdateDate,
+  } = req.body || {};
+
+  try {
+    const pool = getPool();
+    const lastUpdate =
+      LastUpdateDate && !Number.isNaN(new Date(LastUpdateDate).getTime())
+        ? new Date(LastUpdateDate)
+        : new Date();
+
+    await pool
+      .request()
+      .input("userId", userId)
+      .input("lastUpdateDate", mssql.DateTime, lastUpdate)
+      .input("feelingAfterWorkout", FeelingAfterWorkout)
+      .input("assessperformance", Assessperformance)
+      .input("nextSessionPlans", NextSessionPlans).query(`
+        INSERT INTO dbo.PostAssessment
+          (UserId, LastUpdateDate, FeelingAfterWorkout, Assessperformance, NextSessionPlans)
+        VALUES
+          (@userId, @lastUpdateDate, @feelingAfterWorkout, @assessperformance, @nextSessionPlans)
+      `);
+
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Post assessment error", { error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save post assessment",
+    });
+  }
+});
+
 // Helper functions
 function isUpgrade(currentInterval, newInterval) {
   const hierarchy = { monthly: 1, semi_annual: 2, annual: 3 };
