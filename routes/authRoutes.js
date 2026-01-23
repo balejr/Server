@@ -493,4 +493,130 @@ router.get('/oura/callback', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------------------
+
+// ------------------- GARMIN -----------------------------------
+router.get("/garmin/getCode/:userId", (req, res) => {
+  const userId = req.params.userId;  // <-- userId comes from the route param
+
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  // 1. Generate PKCE values
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+
+  // 2. Store verifier for later
+  const pool = getPool();
+  const result = pool.request()
+  .input("userId", userId)
+  .input("codeVerifier", codeVerifier)
+  .query(`
+    MERGE GarminPKCE AS target
+    USING (SELECT @userId AS UserID, @codeVerifier AS CodeVerifier) AS source
+    ON target.UserID = source.UserID
+    WHEN MATCHED THEN
+      UPDATE SET CodeVerifier = source.CodeVerifier, CreatedAt = SYSDATETIME()
+    WHEN NOT MATCHED THEN
+      INSERT (UserID, CodeVerifier)
+      VALUES (source.UserID, source.CodeVerifier);
+  `);
+
+
+  const base = "https://connect.garmin.com/oauth2Confirm";
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: process.env.GARMIN_CLIENT_ID,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    redirect_uri: process.env.GARMIN_REDIRECT_URI,
+    state: userId.toString() // <-- send your user ID
+  });
+
+  res.redirect(`${base}?${params.toString()}`);
+});
+
+router.get('/garmin/callback', async (req, res) => {
+  console.log('[GarminCallback] Route hit');
+  console.log('[GarminCallback] Query params:', req.query);
+
+  const code = req.query.code;
+  const userId = req.query.state;
+
+  if (!code) {
+    console.log('[GarminCallback] Missing code');
+    return res.status(400).send('Missing code');
+  }
+
+  if (!userId) {
+    console.log('[GarminCallback] Missing userId(state)');
+    return res.status(400).send('Missing userId (state)');
+  }
+
+  try {
+    console.log('[GarminToken] Exchanging code for token:', code);
+    const pool = await getPool();
+
+    const result = await pool.request()
+    .input("userId", userId) // or `state` if you're using state as the key
+    .query(`
+    SELECT CodeVerifier
+    FROM GarminPKCE
+    WHERE UserID = @userId
+    `);
+
+    if (!result.recordset.length) {
+      return res.status(400).send("Missing PKCE code verifier");
+    }
+
+    const codeVerifier = result.recordset[0].CodeVerifier;
+    await pool.request()
+      .input("userId", userId)
+      .query(`
+      DELETE FROM GarminPCKE
+     WHERE UserID = @userId
+    `);
+
+    const tokenData = await exchangeGarminCodeForToken(code, constVerifier);
+
+    console.log('[GarminToken] Token response:', tokenData);
+
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
+
+    await pool.request()
+      .input('userId', userId)
+      .input('accessToken', accessToken)
+      .input('refreshToken', refreshToken)
+      .query(`
+        IF EXISTS (SELECT 1 FROM GarminTokens WHERE userId = @userId)
+        BEGIN
+          UPDATE GarminTokens
+          SET 
+            accessToken = @accessToken,
+            refreshToken = @refreshToken,
+            updatedAt = GETDATE()
+          WHERE userId = @userId;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO GarminTokens 
+            (userId, accessToken, refreshToken, createdAt, updatedAt)
+          VALUES 
+            (@userId, @accessToken, @refreshToken, GETDATE(), GETDATE());
+        END
+      `);
+
+    console.log('[GarminCallback] Token saved successfully');
+
+    res.send('Garmin connected successfully! You can close this window.');
+
+  } catch (err) {
+    console.error('[GarminCallback] Error exchanging code:', err);
+    res.status(500).send('Error processing callback');
+  }
+});
+
 module.exports = router;
