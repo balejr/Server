@@ -38,6 +38,7 @@ const router = express.Router();
 
 const upload = require("../middleware/multerUpload");
 const { containerClient } = require("../middleware/blobClient");
+const { exchangeCodeForToken } = require('../services/ouraService');
 
 /**
  * @swagger
@@ -3239,5 +3240,93 @@ router.patch(
     }
   }
 );
+
+// --------------- DEVICE DATA ---------------
+
+// --------------- OURA --------------
+router.get("/oura/getCode/:userId", (req, res) => {
+  const userId = req.params.userId;  // <-- userId comes from the route param
+
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  const base = "https://cloud.ouraring.com/oauth/authorize";
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: process.env.OURA_CLIENT_ID,
+    redirect_uri: process.env.OURA_REDIRECT_URI,
+    scope: "personal daily heartrate session workout tag email",
+    state: userId.toString() // <-- send your user ID
+  });
+
+  res.redirect(`${base}?${params.toString()}`);
+});
+
+router.get('/oura/callback', async (req, res) => {
+  console.log('[OuraCallback] Route hit');
+  console.log('[OuraCallback] Query params:', req.query);
+
+  const code = req.query.code;
+  const userId = req.query.state;
+
+  if (!code) {
+    console.log('[OuraCallback] Missing code');
+    return res.status(400).send('Missing code');
+  }
+
+  if (!userId) {
+    console.log('[OuraCallback] Missing userId(state)');
+    return res.status(400).send('Missing userId (state)');
+  }
+
+  try {
+    console.log('[OuraToken] Exchanging code for token:', code);
+
+    const tokenData = await exchangeCodeForToken(code);
+
+    console.log('[OuraToken] Token response:', tokenData);
+
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
+
+    const pool = await getPool();
+
+    await pool.request()
+      .input('userId', userId)
+      .input('accessToken', accessToken)
+      .input('refreshToken', refreshToken)
+      .query(`
+        IF EXISTS (SELECT 1 FROM OuraTokens WHERE userId = @userId)
+        BEGIN
+          UPDATE OuraTokens
+          SET 
+            accessToken = @accessToken,
+            refreshToken = @refreshToken,
+            updatedAt = GETDATE()
+          WHERE userId = @userId;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO OuraTokens 
+            (userId, accessToken, refreshToken, createdAt, updatedAt)
+          VALUES 
+            (@userId, @accessToken, @refreshToken, GETDATE(), GETDATE());
+        END
+      `);
+
+    console.log('[OuraCallback] Token saved successfully');
+
+    res.send('Oura connected successfully! You can close this window.');
+
+  } catch (err) {
+    console.error('[OuraCallback] Error exchanging code:', err);
+    res.status(500).send('Error processing callback');
+  }
+});
+
+// -------------------------------------------------------------------------
+
 
 module.exports = router;
