@@ -7701,4 +7701,93 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).replace("_", " ");
 }
 
+//-------------- DEVICE DATA --------------------
+
+// GET /api/deviceData/lastSync
+router.get('/deviceData/lastSync/:deviceType', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { deviceType } = req.params;
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('deviceType', deviceType)
+      .query(`
+            SELECT TOP 1 CollectedDate
+            FROM DeviceDataTemp
+            WHERE UserID = @UserId
+              AND DeviceType = @deviceType
+            ORDER BY CollectedDate DESC;
+      `);
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching last time device was synced:', err);
+    res.status(500).json({ message: 'Failed to fetch last time device data was synced' });
+  }
+});
+
+//  PATCH  /api/deviceData/sync
+router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const deviceType = req.params.deviceType;
+  const {
+    deviceData
+  } = req.body;
+
+  if (!Array.isArray(deviceData) || deviceData.length === 0) {
+    return res.status(400).json({ message: 'No device data provided' });
+  }
+
+  const pool = getPool();
+
+  try {
+    for (const item of deviceData) {
+      const {
+        stepCount,
+        calories,
+        sleepRating,
+        collectedDate
+      } = item;
+
+      await pool.request()
+        .input('userId', userId)
+        .input('deviceType', deviceType)
+        .input('stepCount', stepCount)
+        .input('calories', calories)
+        .input('sleepRating', sleepRating)
+        .input('collectedDate', collectedDate)
+        .query(`
+          MERGE DeviceDataTemp AS target
+          USING (SELECT 
+                  @userId AS UserID, 
+                  @deviceType AS DeviceType, 
+                  @collectedDate AS CollectedDate
+                ) AS source
+          ON target.UserID = source.UserID
+             AND target.DeviceType = source.DeviceType
+             AND target.CollectedDate = source.CollectedDate
+
+          WHEN MATCHED THEN
+            UPDATE SET 
+              StepCount = @stepCount,
+              Calories = @calories,
+              SleepRating = @sleepRating
+
+          WHEN NOT MATCHED THEN
+            INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+            VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+        `);
+    }
+
+    return res.status(200).json({ message: 'Device data synced successfully' });
+
+  } catch (err) {
+    console.error('DeviceData UPSERT Error:', err);
+    return res.status(500).json({
+      message: 'Failed to sync device data',
+      error: err.message
+    });
+  }
+});
+
 module.exports = router; // Redeployed Fri Nov 21 21:16:54 PST 2025
