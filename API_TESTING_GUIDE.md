@@ -1054,6 +1054,41 @@ muscle: 42.3
 
 ---
 
+#### Create Pre-Workout Assessment
+
+| Setting       | Value                                                        |
+| ------------- | ------------------------------------------------------------ |
+| **Method**    | `POST`                                                       |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/preassessment` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                  |
+| **Body Type** | raw → JSON                                                   |
+
+**Body:**
+
+```json
+{
+  "WorkoutPlanID": "plan-123",
+  "Feeling": "Energized",
+  "WaterIntake": "2L",
+  "SleepQuality": 4,
+  "SleepHours": "7.5",
+  "RecoveryStatus": "Ready",
+  "CreatedAt": "2025-01-02T18:00:00.000Z"
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true
+}
+```
+
+> **Note:** `CreatedAt` is optional; the server defaults to the current time.
+
+---
+
 #### Create Post-Workout Assessment
 
 | Setting       | Value                                                         |

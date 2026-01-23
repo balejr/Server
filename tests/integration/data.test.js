@@ -282,6 +282,45 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // PRE ASSESSMENT
+  // =========================================================================
+
+  describe("Pre Assessment", () => {
+    describe("POST /data/preassessment", () => {
+      test("creates pre assessment with valid data", async () => {
+        const state = getState();
+        const payload = {
+          WorkoutPlanID: "plan-123",
+          Feeling: "Energized",
+          WaterIntake: "2L",
+          SleepQuality: 4,
+          SleepHours: "7.5",
+          RecoveryStatus: "Ready",
+          CreatedAt: new Date().toISOString(),
+        };
+
+        const { response, duration } = await api.post(
+          "/data/preassessment",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        console.log(`     Pre assessment saved (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/data/preassessment", {
+          Feeling: "Good",
+        });
+
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
   // POST ASSESSMENT
   // =========================================================================
 

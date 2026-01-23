@@ -7534,6 +7534,98 @@ router.post(
 
 /**
  * @swagger
+ * /data/preassessment:
+ *   post:
+ *     summary: Create pre-workout assessment
+ *     description: Save pre-workout assessment data for the authenticated user
+ *     tags: [Assessments]
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               WorkoutPlanID:
+ *                 type: string
+ *               Feeling:
+ *                 type: string
+ *               WaterIntake:
+ *                 type: string
+ *               SleepQuality:
+ *                 type: integer
+ *               SleepHours:
+ *                 type: string
+ *               RecoveryStatus:
+ *                 type: string
+ *               CreatedAt:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       200:
+ *         description: Pre-assessment saved
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post("/preassessment", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const {
+    WorkoutPlanID,
+    Feeling = "",
+    WaterIntake = "",
+    SleepQuality,
+    SleepHours = "",
+    RecoveryStatus = "",
+    CreatedAt,
+  } = req.body || {};
+
+  try {
+    const pool = getPool();
+    const createdAt =
+      CreatedAt && !Number.isNaN(new Date(CreatedAt).getTime())
+        ? new Date(CreatedAt)
+        : new Date();
+    const workoutPlanId =
+      typeof WorkoutPlanID === "string" && WorkoutPlanID.trim() === ""
+        ? null
+        : WorkoutPlanID || null;
+    const sleepQuality =
+      SleepQuality === null || SleepQuality === undefined || SleepQuality === ""
+        ? null
+        : Number.isFinite(Number(SleepQuality))
+          ? Number(SleepQuality)
+          : null;
+
+    await pool
+      .request()
+      .input("userId", userId)
+      .input("workoutPlanId", workoutPlanId)
+      .input("feeling", Feeling)
+      .input("waterIntake", WaterIntake)
+      .input("sleepQuality", mssql.Int, sleepQuality)
+      .input("sleepHours", SleepHours)
+      .input("recoveryStatus", RecoveryStatus)
+      .input("createdAt", mssql.DateTime, createdAt).query(`
+        INSERT INTO dbo.PreWorkoutAssessment
+          (UserID, WorkoutPlanID, Feeling, WaterIntake, SleepQuality, SleepHours, RecoveryStatus, CreatedAt)
+        VALUES
+          (@userId, @workoutPlanId, @feeling, @waterIntake, @sleepQuality, @sleepHours, @recoveryStatus, @createdAt)
+      `);
+
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Pre assessment error", { error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save pre assessment",
+    });
+  }
+});
+
+/**
+ * @swagger
  * /data/postassessment:
  *   post:
  *     summary: Create post-workout assessment

@@ -1074,6 +1074,13 @@ Routes to correct payment gateway based on user's subscription.
 | PATCH | `/dailylog/:logId` | Update daily log |
 | DELETE | `/dailylog/:logId` | Delete daily log |
 
+**Pre Assessment:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/preassessment` | Save pre-workout assessment |
+
+**Body Fields:** `WorkoutPlanID`, `Feeling`, `WaterIntake`, `SleepQuality`, `SleepHours`, `RecoveryStatus`, `CreatedAt` (optional; defaults to now).
+
 **Post Assessment:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
