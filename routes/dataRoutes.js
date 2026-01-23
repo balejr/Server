@@ -7790,4 +7790,193 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
   }
 });
 
+// ----------------- OURA ------------------
+router.post('/oura/sync', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const pool = getPool();
+
+  try {
+    // Get user tokens
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT accessToken, RefreshToken
+        FROM OuraTokens
+        WHERE userId = @userId
+      `);
+
+    let ouraAccessToken = tokenResult.recordset[0]?.accessToken;
+    const refreshToken = tokenResult.recordset[0]?.RefreshToken;
+
+    if (!ouraAccessToken && !refreshToken) {
+      return res.status(400).json({ message: 'No Oura token found for this user' });
+    }
+
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('deviceType', 'oura')
+      .query(`
+      SELECT MAX(CollectedDate) AS LastSyncDate
+      FROM DeviceDataTemp
+      WHERE UserID = @userId
+        AND DeviceType = @deviceType
+    `);
+    const lastSyncDate = result.recordset[0].LastSyncDate;
+
+    // End date = today
+    const endDate = new Date();
+
+    // 7 days ago
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    // Decide start date
+    let startDate;
+
+    if (lastSyncDate) {
+      const lastSync = new Date(lastSyncDate);
+      startDate = lastSync > sevenDaysAgo ? lastSync : sevenDaysAgo;
+    } else {
+      startDate = sevenDaysAgo;
+    }
+
+    // Now SAFE to convert to strings
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+
+    // Fetch Oura activity and sleep data
+    const fetchOuraData = async (token) => {
+      const [activityRes, sleepRes] = await Promise.all([
+        axios.get(`https://api.ouraring.com/v2/usercollection/daily_activity?start_date=${startStr}&end_date=${endStr}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.get(`https://api.ouraring.com/v2/usercollection/daily_sleep?start_date=${startStr}&end_date=${endStr}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+
+      // Merge activity + sleep per day
+      const activityData = activityRes.data?.data ?? [];
+      const sleepData = sleepRes.data?.data ?? [];
+
+      // Build a lookup map for sleep by date (O(n), fast)
+      const sleepByDate = new Map(
+        sleepData.map(s => [s.day, s])
+      );
+
+      const mergedData = activityData.map(activityItem => {
+        const sleepItem = sleepByDate.get(activityItem.day);
+
+        return {
+          collectedDate: activityItem.day,
+          stepCount: activityItem.steps ?? 0,
+          calories: activityItem.total_calories ?? null,
+          sleepRating: sleepItem?.score ?? null
+        };
+      });
+
+
+      return mergedData;
+    };
+
+    let deviceData;
+    try {
+      deviceData = await fetchOuraData(ouraAccessToken);
+    } catch (err) {
+      if (err.response?.status === 401 && refreshToken) {
+        // Access token expired → refresh it
+        ouraAccessToken = await refreshOuraToken(userId, refreshToken);
+        deviceData = await fetchOuraData(ouraAccessToken);
+      } else {
+        throw err;
+      }
+    }
+
+    if (!deviceData.length) {
+      return res.status(200).json({ message: 'No new Oura data to sync' });
+    }
+
+    // Upsert data into SQL
+    for (const item of deviceData) {
+      const collectedDate = item.summary_date;
+      const stepCount = item.activity.summary.steps;
+      const calories = item.activity.summary.calories;
+      const sleepRating = item.sleep.score;
+
+      await pool.request()
+        .input('userId', userId) // actual variable, not string
+        .input('deviceType', deviceType)
+        .input('stepCount', stepCount)
+        .input('calories', calories)
+        .input('sleepRating', sleepRating)
+        .input('collectedDate', collectedDate)
+        .query(`
+    MERGE DeviceDataTemp AS target
+    USING (SELECT 
+            @userId AS UserID, 
+            @deviceType AS DeviceType, 
+            @collectedDate AS CollectedDate
+          ) AS source
+    ON target.UserID = source.UserID
+       AND target.DeviceType = source.DeviceType
+       AND target.CollectedDate = source.CollectedDate
+    WHEN MATCHED THEN
+      UPDATE SET 
+        StepCount = @stepCount,
+        Calories = @calories,
+        SleepRating = @sleepRating
+    WHEN NOT MATCHED THEN
+      INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+      VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+  `);
+    }
+
+    return res.status(200).json({ message: 'Oura data synced successfully' });
+
+  } catch (err) {
+    console.error('Oura Data Sync Error:', err);
+    return res.status(500).json({
+      message: 'Failed to sync Oura data',
+      error: err.message,
+    });
+  }
+});
+
+router.post('/oura/disconnect', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const pool = getPool();
+
+  try {
+    // Check if user has any Oura tokens
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT *
+        FROM OuraTokens
+        WHERE UserID = @userId
+      `);
+
+    if (!tokenResult.recordset.length) {
+      return res.status(400).json({ message: 'No Oura token found for this user' });
+    }
+
+    // Delete the full entry
+    const deleteResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        DELETE FROM OuraTokens
+        WHERE UserID = @userId
+      `);
+
+    return res.status(200).json({ message: 'Oura account disconnected successfully' });
+  } catch (err) {
+    console.error('Oura disconnect error:', err);
+    return res.status(500).json({
+      message: 'Failed to disconnect Oura account',
+      error: err.message
+    });
+  }
+});
+
 module.exports = router; // Redeployed Fri Nov 21 21:16:54 PST 2025
