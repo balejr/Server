@@ -83,14 +83,14 @@ describe("Rewards API", () => {
       });
 
       expect(response.status).toBe(200);
-      expect(response.data).toHaveProperty("totalXP");
+      expect(response.data).toHaveProperty("totalFitPoints");
       expect(response.data).toHaveProperty("currentTier");
       expect(response.data).toHaveProperty("rewardProgress");
       expect(response.data).toHaveProperty("completedRewards");
       expect(typeof response.data.rewardProgress).toBe("object");
 
       // New user should start at 0 XP and BRONZE tier
-      expect(response.data.totalXP).toBe(0);
+      expect(response.data.totalFitPoints).toBe(0);
       expect(response.data.currentTier).toBe("BRONZE");
 
       console.log(`     User rewards retrieved (${duration}ms)`);
@@ -184,7 +184,7 @@ describe("Rewards API", () => {
       expect(response.status).toBe(200);
       expect(response.data.success).toBe(true);
       expect(response.data).toHaveProperty("xpEarned");
-      expect(response.data).toHaveProperty("newTotalXP");
+      expect(response.data).toHaveProperty("newTotalFitPoints");
       expect(response.data).toHaveProperty("newTier");
 
       console.log(

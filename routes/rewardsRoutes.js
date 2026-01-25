@@ -52,7 +52,7 @@ router.get("/user", authenticateToken, async (req, res) => {
       .request()
       .input("userId", userId)
       .query(`
-        SELECT TotalXP, CurrentTier, LastUpdated
+        SELECT TotalFitPoints, CurrentTier, LastUpdated
         FROM dbo.UserRewards
         WHERE UserID = @userId
       `);
@@ -62,7 +62,7 @@ router.get("/user", authenticateToken, async (req, res) => {
         .request()
         .input("userId", userId)
         .query(`
-          INSERT INTO dbo.UserRewards (UserID, TotalXP, CurrentTier)
+          INSERT INTO dbo.UserRewards (UserID, TotalFitPoints, CurrentTier)
           VALUES (@userId, 0, 'BRONZE')
         `);
 
@@ -70,7 +70,7 @@ router.get("/user", authenticateToken, async (req, res) => {
         .request()
         .input("userId", userId)
         .query(`
-          SELECT TotalXP, CurrentTier, LastUpdated
+          SELECT TotalFitPoints, CurrentTier, LastUpdated
           FROM dbo.UserRewards
           WHERE UserID = @userId
         `);
@@ -193,10 +193,14 @@ router.get("/user", authenticateToken, async (req, res) => {
         ORDER BY urp.ClaimedAt DESC
       `);
 
-    const levelProgress = levelCalculator.getLevelProgress(userRewards.TotalXP);
+    const totalFitPoints = Number(
+      userRewards.TotalFitPoints ?? userRewards.TotalXP ?? 0
+    );
+    const levelProgress = levelCalculator.getLevelProgress(totalFitPoints);
 
     res.status(200).json({
-      totalXP: userRewards.TotalXP,
+      totalFitPoints,
+      totalXP: totalFitPoints,
       currentTier: userRewards.CurrentTier,
       level: levelProgress.level,
       levelProgress: {
@@ -209,16 +213,15 @@ router.get("/user", authenticateToken, async (req, res) => {
       },
       tierProgress: {
         current: userRewards.CurrentTier,
-        currentXP: userRewards.TotalXP,
+        currentXP: totalFitPoints,
         nextTier:
           userRewards.CurrentTier === "EXCLUSIVE"
             ? null
-            : calculateTier(userRewards.TotalXP + 1),
+            : calculateTier(totalFitPoints + 1),
         xpToNextTier:
           userRewards.CurrentTier === "EXCLUSIVE"
             ? 0
-            : TIERS[calculateTier(userRewards.TotalXP + 100)].minXP -
-              userRewards.TotalXP,
+            : TIERS[calculateTier(totalFitPoints + 100)].minXP - totalFitPoints,
       },
       rewardProgress,
       completedRewards: completedResult.recordset.map((r) => ({
@@ -296,16 +299,20 @@ router.post("/:rewardId/claim", authenticateToken, async (req, res) => {
         .input("xp", reward.XPValue)
         .query(`
           UPDATE dbo.UserRewards
-          SET TotalXP = TotalXP + @xp, LastUpdated = SYSDATETIMEOFFSET()
-          OUTPUT INSERTED.TotalXP
+          SET TotalFitPoints = TotalFitPoints + @xp, LastUpdated = SYSDATETIMEOFFSET()
+          OUTPUT INSERTED.TotalFitPoints
           WHERE UserID = @userId
         `);
 
-      const newTotalXP = xpResult.recordset[0]?.TotalXP || reward.XPValue;
-      const oldXP = newTotalXP - reward.XPValue;
+      const newTotalFitPoints =
+        xpResult.recordset[0]?.TotalFitPoints || reward.XPValue;
+      const oldFitPoints = newTotalFitPoints - reward.XPValue;
 
-      const levelUpResult = levelCalculator.checkLevelUp(oldXP, newTotalXP);
-      const newLevel = levelCalculator.calculateLevel(newTotalXP);
+      const levelUpResult = levelCalculator.checkLevelUp(
+        oldFitPoints,
+        newTotalFitPoints
+      );
+      const newLevel = levelCalculator.calculateLevel(newTotalFitPoints);
       const newTier = levelCalculator.getTierFromLevel(newLevel);
 
       await transaction
@@ -338,7 +345,8 @@ router.post("/:rewardId/claim", authenticateToken, async (req, res) => {
       res.status(200).json({
         success: true,
         xpEarned: reward.XPValue,
-        newTotalXP,
+        newTotalFitPoints,
+        newTotalXP: newTotalFitPoints,
         newTier,
         newLevel,
         leveledUp: levelUpResult.leveledUp,
@@ -535,7 +543,7 @@ router.get("/level", authenticateToken, async (req, res) => {
     const pool = getPool();
 
     const result = await pool.request().input("userId", userId).query(`
-        SELECT TotalXP, CurrentLevel, CurrentTier, LevelUpAt
+        SELECT TotalFitPoints, CurrentLevel, CurrentTier, LevelUpAt
         FROM dbo.UserRewards
         WHERE UserID = @userId
       `);
@@ -545,7 +553,7 @@ router.get("/level", authenticateToken, async (req, res) => {
         .request()
         .input("userId", userId)
         .query(`
-          INSERT INTO dbo.UserRewards (UserID, TotalXP, CurrentLevel, CurrentTier)
+          INSERT INTO dbo.UserRewards (UserID, TotalFitPoints, CurrentLevel, CurrentTier)
           VALUES (@userId, 0, 1, 'BRONZE')
         `);
 
@@ -553,7 +561,8 @@ router.get("/level", authenticateToken, async (req, res) => {
     }
 
     const user = result.recordset[0];
-    const levelProgress = levelCalculator.getLevelProgress(user.TotalXP);
+    const totalFitPoints = Number(user.TotalFitPoints ?? user.TotalXP ?? 0);
+    const levelProgress = levelCalculator.getLevelProgress(totalFitPoints);
     const streaks = await getXpEventStreaks(userId);
 
     res.status(200).json({
@@ -857,7 +866,7 @@ router.get("/v2/tier", authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const r = await pool.request().input("userId", userId).query(`
-      SELECT TOP 1 UserID, TotalXP, CurrentTier, LastUpdated, CurrentLevel, LevelUpAt
+      SELECT TOP 1 UserID, TotalFitPoints, CurrentTier, LastUpdated, CurrentLevel, LevelUpAt
       FROM dbo.UserRewards
       WHERE UserID=@userId
     `);

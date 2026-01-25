@@ -2157,6 +2157,7 @@ Retrieve the user's current XP, tier, and reward progress.
 
 ```json
 {
+  "totalFitPoints": 150,
   "totalXP": 150,
   "currentTier": "SILVER",
   "tierProgress": {
@@ -2215,6 +2216,7 @@ Claim a completed reward to receive XP. Use the numeric `rewardId` from the prog
 {
   "success": true,
   "xpEarned": 10,
+  "newTotalFitPoints": 160,
   "newTotalXP": 160,
   "newTier": "SILVER",
   "message": "Claimed 10 XP for Daily Sign-In"

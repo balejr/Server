@@ -1241,6 +1241,7 @@ Routes to correct payment gateway based on user's subscription.
 
 ```json
 {
+  "totalFitPoints": 1247,
   "totalXP": 1247,
   "currentTier": "GOLD",
   "level": 8,
@@ -1287,6 +1288,7 @@ Routes to correct payment gateway based on user's subscription.
 {
   "success": true,
   "xpEarned": 10,
+  "newTotalFitPoints": 1257,
   "newTotalXP": 1257,
   "tierUp": false
 }
