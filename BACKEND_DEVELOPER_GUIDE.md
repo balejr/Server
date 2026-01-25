@@ -1227,37 +1227,57 @@ Routes to correct payment gateway based on user's subscription.
 | POST   | `/progress/:rewardKey` | Access | Update progress on a specific reward            |
 | POST   | `/recalculate`         | Access | Recalculate weekly/monthly rewards from history |
 
+**Rewards V2 Endpoints (table-based):**
+- `GET /v2/definitions` / `POST /v2/definitions`
+- `GET /v2/progress` / `POST /v2/progress/:rewardKey`
+- `GET /v2/history`
+- `GET /v2/tier`
+- `GET /v2/usage` / `POST /v2/usage/increment`
+- `GET /v2/streaks`
+- `GET /v2/daily-awards` / `POST /v2/daily-awards`
+- `POST /v2/ai/reconcile` (returns 501 until implemented)
+
 **GET /rewards/user Response:**
 
 ```json
 {
-  "success": true,
   "totalXP": 1247,
-  "currentTier": "Gold",
-  "nextTier": "Exclusive",
-  "xpToNextTier": 247,
-  "rewardProgress": [
-    {
+  "currentTier": "GOLD",
+  "level": 8,
+  "levelProgress": {
+    "level": 8,
+    "xpIntoLevel": 47,
+    "xpToNextLevel": 153,
+    "progressPercent": 23,
+    "tier": "GOLD",
+    "tierName": "Gold"
+  },
+  "rewardProgress": {
+    "daily_signin": {
+      "rewardId": 1,
+      "completed": true,
+      "claimed": true,
+      "canClaim": false,
+      "progress": 100,
+      "currentCount": 1,
+      "requiredCount": 1,
+      "xp": 10,
+      "name": "Daily Sign-In",
+      "description": "Sign in today",
       "category": "daily",
-      "rewards": [
-        {
-          "id": "daily_signin",
-          "name": "Daily Sign-In",
-          "xp": 10,
-          "progress": 100,
-          "claimable": true
-        },
-        {
-          "id": "log_water",
-          "name": "Log Water Intake",
-          "xp": 5,
-          "progress": 80,
-          "claimable": false
-        }
-      ]
+      "isDaily": true
+    }
+  },
+  "completedRewards": [
+    {
+      "id": "daily_signin",
+      "name": "Daily Sign-In",
+      "xp": 10,
+      "category": "daily",
+      "completedAt": "2026-01-10T..."
     }
   ],
-  "completedCount": 89
+  "lastUpdated": "2026-01-11T..."
 }
 ```
 

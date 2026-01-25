@@ -5,7 +5,13 @@
  * and reward claiming functionality.
  */
 
-const { api, getState, setState, cleanup } = require("../helpers/testUtils");
+const {
+  api,
+  getState,
+  setState,
+  clearState,
+  cleanupTestUser,
+} = require("../helpers");
 
 describe("Rewards API", () => {
   // =========================================================================
@@ -13,6 +19,7 @@ describe("Rewards API", () => {
   // =========================================================================
 
   beforeAll(async () => {
+    clearState();
     // Create a fresh test user
     const timestamp = Date.now();
     const testUser = {
@@ -31,9 +38,11 @@ describe("Rewards API", () => {
 
     // Sign up
     const { response: signupRes } = await api.post("/auth/signup", testUser);
-    if (signupRes.status !== 201) {
+    if (signupRes.status !== 200 && signupRes.status !== 201) {
       throw new Error(`Signup failed: ${JSON.stringify(signupRes.data)}`);
     }
+
+    const userId = signupRes.data.userId || signupRes.data.user?.id;
 
     // Login
     const { response: loginRes } = await api.post("/auth/signin", {
@@ -48,7 +57,7 @@ describe("Rewards API", () => {
     setState({
       accessToken: loginRes.data.accessToken,
       refreshToken: loginRes.data.refreshToken,
-      userId: loginRes.data.user.id,
+      userId: loginRes.data.user?.id || userId,
       email: testUser.email,
     });
 
@@ -56,7 +65,10 @@ describe("Rewards API", () => {
   });
 
   afterAll(async () => {
-    await cleanup();
+    const state = getState();
+    if (state.userId) {
+      await cleanupTestUser(state.userId);
+    }
   });
 
   // =========================================================================
@@ -75,6 +87,7 @@ describe("Rewards API", () => {
       expect(response.data).toHaveProperty("currentTier");
       expect(response.data).toHaveProperty("rewardProgress");
       expect(response.data).toHaveProperty("completedRewards");
+      expect(typeof response.data.rewardProgress).toBe("object");
 
       // New user should start at 0 XP and BRONZE tier
       expect(response.data.totalXP).toBe(0);
@@ -147,15 +160,11 @@ describe("Rewards API", () => {
       });
 
       if (response.status === 200 && response.data.rewardProgress) {
-        for (const category of Object.values(response.data.rewardProgress)) {
-          for (const reward of category) {
-            if (reward.isCompleted && !reward.isClaimed) {
-              completedRewardId = reward.rewardId;
-              break;
-            }
-          }
-          if (completedRewardId) break;
-        }
+        const rewards = Object.values(response.data.rewardProgress);
+        const claimable = rewards.find(
+          (reward) => reward.completed && !reward.claimed && reward.canClaim
+        );
+        completedRewardId = claimable?.rewardId || null;
       }
     });
 
@@ -253,6 +262,22 @@ describe("Rewards API", () => {
 
     test("requires authentication", async () => {
       const { response } = await api.get("/rewards/history");
+      expect(response.status).toBe(401);
+    });
+  });
+
+  // =========================================================================
+  // REWARDS V2 (AUTH REQUIREMENTS)
+  // =========================================================================
+
+  describe("Rewards V2", () => {
+    test("requires authentication for definitions", async () => {
+      const { response } = await api.get("/rewards/v2/definitions");
+      expect(response.status).toBe(401);
+    });
+
+    test("requires authentication for usage", async () => {
+      const { response } = await api.get("/rewards/v2/usage");
       expect(response.status).toBe(401);
     });
   });

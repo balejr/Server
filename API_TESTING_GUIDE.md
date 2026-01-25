@@ -2166,15 +2166,20 @@ Retrieve the user's current XP, tier, and reward progress.
     "xpToNextTier": 350
   },
   "rewardProgress": {
-    "daily": [
-      { "id": "daily_signin", "rewardId": 1, "name": "Daily Sign-In", "xp": 10, "requiredCount": 1, "currentProgress": 1, "isCompleted": true, "isClaimed": false }
-    ],
-    "weekly": [
-      { "id": "weekly_5_workouts", "rewardId": 5, "name": "Workout Warrior", "xp": 50, "requiredCount": 5, "currentProgress": 3, "isCompleted": false, "isClaimed": false }
-    ],
-    "milestone": [
-      { "id": "first_workout", "rewardId": 9, "name": "First Steps", "xp": 25, "requiredCount": 1, "currentProgress": 1, "isCompleted": true, "isClaimed": true }
-    ]
+    "daily_signin": {
+      "rewardId": 1,
+      "completed": true,
+      "claimed": true,
+      "canClaim": false,
+      "progress": 100,
+      "currentCount": 1,
+      "requiredCount": 1,
+      "xp": 10,
+      "name": "Daily Sign-In",
+      "description": "Sign in today",
+      "category": "daily",
+      "isDaily": true
+    }
   },
   "completedRewards": [
     { "id": "first_workout", "name": "First Steps", "xp": 25, "category": "milestone", "claimedAt": "2026-01-10T..." }
@@ -2288,6 +2293,27 @@ Recalculates all weekly and monthly rewards based on user's activity history. Ca
 | `weekly_powerup` | Complete 100% of weekly goals | All 3 workouts |
 | `perfect_month` | Consecutive days with any activity | 30 days |
 | `challenge_complete` | Hydration streak (water logged daily) | 7 days |
+
+---
+
+### Rewards V2 (Table-Based)
+
+These endpoints expose the underlying rewards tables directly.
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| GET | `/api/rewards/v2/definitions` | List reward definitions |
+| POST | `/api/rewards/v2/definitions` | Upsert reward definition |
+| GET | `/api/rewards/v2/progress` | List user reward progress |
+| POST | `/api/rewards/v2/progress/:rewardKey` | Increment progress |
+| GET | `/api/rewards/v2/history` | List reward history |
+| GET | `/api/rewards/v2/tier` | Get user tier/XP |
+| GET | `/api/rewards/v2/usage` | Get usage counters |
+| POST | `/api/rewards/v2/usage/increment` | Increment usage counters |
+| GET | `/api/rewards/v2/streaks` | Get streaks |
+| GET | `/api/rewards/v2/daily-awards` | Get daily awards |
+| POST | `/api/rewards/v2/daily-awards` | Create daily award |
+| POST | `/api/rewards/v2/ai/reconcile` | AI reconcile (currently 501) |
 
 ---
 
