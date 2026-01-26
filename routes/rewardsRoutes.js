@@ -1105,16 +1105,16 @@ router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
       pool.request()
         .input("userId", userId)
         .query(`
-          SELECT TOP 50 ExerciseName, Completed, WorkoutRoutineDate, Sets, Reps, Weight
+          SELECT TOP 50 ExerciseID, Completed, Date, Sets, Reps, Weight
           FROM dbo.ExerciseExistence
-          WHERE UserID = @userId AND WorkoutRoutineDate >= DATEADD(DAY, -30, GETDATE())
-          ORDER BY WorkoutRoutineDate DESC
+          WHERE UserID = @userId AND Date >= DATEADD(DAY, -30, GETDATE())
+          ORDER BY Date DESC
         `),
       // Recent daily logs
       pool.request()
         .input("userId", userId)
         .query(`
-          SELECT TOP 30 EffectiveDate, Steps, WaterIntake, SleepHours, CaloriesIn, CaloriesOut
+          SELECT TOP 30 EffectiveDate, Steps, WaterIntake, Sleep, CaloriesBurned
           FROM dbo.DailyLogs
           WHERE UserID = @userId AND EffectiveDate >= DATEADD(DAY, -30, GETDATE())
           ORDER BY EffectiveDate DESC
@@ -1131,7 +1131,7 @@ router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
       pool.request()
         .input("userId", userId)
         .query(`
-          SELECT rd.RewardKey, rd.RewardName, rd.FitPointsValue, urp.CurrentProgress, urp.IsCompleted, urp.IsClaimed
+          SELECT rd.RewardKey, rd.Name as RewardName, rd.XPValue as FitPointsValue, urp.CurrentProgress, urp.IsCompleted, urp.IsClaimed
           FROM dbo.RewardDefinitions rd
           LEFT JOIN dbo.UserRewardProgress urp ON rd.RewardID = urp.RewardID AND urp.UserID = @userId
           WHERE rd.IsActive = 1
@@ -1159,15 +1159,15 @@ User Activity Summary (last 30 days):
 
 WORKOUTS:
 - Total workout sessions: ${workouts.filter(w => w.Completed).length}
-- Unique workout days: ${new Set(workouts.filter(w => w.Completed).map(w => new Date(w.WorkoutRoutineDate).toDateString())).size}
-- Recent exercises: ${workouts.slice(0, 10).map(w => w.ExerciseName).join(", ") || "None"}
+- Unique workout days: ${new Set(workouts.filter(w => w.Completed).map(w => new Date(w.Date).toDateString())).size}
+- Recent exercises: ${workouts.slice(0, 10).map(w => w.ExerciseID).join(", ") || "None"}
 
 DAILY LOGS:
 - Days logged: ${dailyLogs.length}
 - Average steps: ${dailyLogs.length > 0 ? Math.round(dailyLogs.reduce((s, d) => s + (d.Steps || 0), 0) / dailyLogs.length) : 0}
 - Days with 10k+ steps: ${dailyLogs.filter(d => d.Steps >= 10000).length}
 - Water logging days: ${dailyLogs.filter(d => d.WaterIntake > 0).length}
-- Sleep logging days: ${dailyLogs.filter(d => d.SleepHours > 0).length}
+- Sleep logging days: ${dailyLogs.filter(d => d.Sleep > 0).length}
 
 CURRENT STREAKS:
 ${streaks.map(s => `- ${s.StreakType}: ${s.CurrentStreak} days (best: ${s.LongestStreak})`).join("\n") || "- No streaks recorded"}
@@ -1227,7 +1227,7 @@ Return JSON matching the schema.`;
 
         const rewardResult = await transaction.request()
           .input("rewardKey", update.rewardKey)
-          .query(`SELECT RewardID, FitPointsValue FROM dbo.RewardDefinitions WHERE RewardKey = @rewardKey`);
+          .query(`SELECT RewardID, XPValue as FitPointsValue FROM dbo.RewardDefinitions WHERE RewardKey = @rewardKey`);
 
         if (rewardResult.recordset.length > 0) {
           const { RewardID, FitPointsValue } = rewardResult.recordset[0];
@@ -1309,7 +1309,7 @@ Return JSON matching the schema.`;
           .input("fp", totalFPAwarded)
           .input("reason", "AI Reconcile Award")
           .query(`
-            INSERT INTO dbo.UserRewardHistory (UserID, FitPointsEarned, Reason, EarnedAt)
+            INSERT INTO dbo.UserRewardHistory (UserID, XPEarned, Reason, EarnedAt)
             VALUES (@userId, @fp, @reason, GETDATE())
           `);
       }
