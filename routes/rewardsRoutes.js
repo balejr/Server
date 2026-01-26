@@ -11,6 +11,7 @@ const {
 } = require("../services/xpEventService");
 const { getUserBadges, checkAllBadges } = require("../services/badgeService");
 const { getPRHistory, getCurrentPRs, getRecentPRs } = require("../services/prService");
+const challengeGenerator = require("../services/challengeGenerator");
 const logger = require("../utils/logger");
 
 const router = express.Router();
@@ -1056,6 +1057,366 @@ router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
   // For now, return explicit 501 so the client can safely ignore until deployed.
   logger.warn("Rewards V2 AI reconcile not implemented yet", { userId });
   res.status(501).json({ success: false, message: "AI reconcile not implemented yet" });
+});
+
+// ============================================
+// AI CHALLENGE ENDPOINTS
+// ============================================
+
+/**
+ * @swagger
+ * /rewards/challenges:
+ *   get:
+ *     summary: Get active AI-generated challenges
+ *     description: Returns user's active challenges, optionally filtered by category
+ *     tags: [Rewards]
+ *     parameters:
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [daily, weekly, monthly, universal]
+ *     responses:
+ *       200:
+ *         description: Active challenges
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/challenges", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { category } = req.query;
+
+  try {
+    const challenges = await challengeGenerator.getActiveChallenges(userId, category);
+
+    // Group by category if no filter
+    let grouped = {};
+    if (!category) {
+      grouped = {
+        daily: challenges.filter(c => c.category === "daily"),
+        weekly: challenges.filter(c => c.category === "weekly"),
+        monthly: challenges.filter(c => c.category === "monthly"),
+        universal: challenges.filter(c => c.category === "universal"),
+      };
+    }
+
+    res.status(200).json({
+      challenges: category ? challenges : undefined,
+      grouped: !category ? grouped : undefined,
+      total: challenges.length,
+    });
+  } catch (error) {
+    logger.error("Get Challenges Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get challenges" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/generate-challenges:
+ *   post:
+ *     summary: Generate AI-powered personalized challenges
+ *     description: Ensures user has 3 challenges per category, generating new ones as needed
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: Challenge generation result
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/generate-challenges", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const result = await challengeGenerator.ensureChallengesExist(userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Challenges generated",
+      ...result,
+    });
+  } catch (error) {
+    logger.error("Generate Challenges Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to generate challenges" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/challenges/{challengeId}:
+ *   delete:
+ *     summary: Delete a challenge with feedback
+ *     description: Soft-deletes a challenge and records user feedback for AI improvement
+ *     tags: [Rewards]
+ *     parameters:
+ *       - in: path
+ *         name: challengeId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - feedbackType
+ *             properties:
+ *               feedbackType:
+ *                 type: string
+ *                 enum: [too_hard, too_easy, not_relevant, takes_too_long, already_doing]
+ *               feedbackText:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Challenge deleted with replacement generated
+ *       400:
+ *         description: Invalid request
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: Challenge not found
+ */
+router.delete("/challenges/:challengeId", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const challengeId = parseInt(req.params.challengeId);
+  const { feedbackType, feedbackText } = req.body;
+
+  if (isNaN(challengeId)) {
+    return res.status(400).json({ message: "Invalid challenge ID" });
+  }
+
+  const validFeedbackTypes = ["too_hard", "too_easy", "not_relevant", "takes_too_long", "already_doing"];
+  if (!feedbackType || !validFeedbackTypes.includes(feedbackType)) {
+    return res.status(400).json({
+      message: "Invalid feedback type",
+      validTypes: validFeedbackTypes,
+    });
+  }
+
+  try {
+    const result = await challengeGenerator.deleteChallenge(
+      userId,
+      challengeId,
+      feedbackType,
+      feedbackText
+    );
+
+    if (!result.success) {
+      return res.status(404).json({ message: result.message });
+    }
+
+    res.status(200).json(result);
+  } catch (error) {
+    logger.error("Delete Challenge Error", { error: error.message, userId, challengeId });
+    res.status(500).json({ message: "Failed to delete challenge" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/challenges/{challengeId}/complete:
+ *   post:
+ *     summary: Mark a challenge as completed
+ *     description: Awards FitPoints and generates a harder replacement challenge
+ *     tags: [Rewards]
+ *     parameters:
+ *       - in: path
+ *         name: challengeId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Challenge completed, FitPoints awarded
+ *       400:
+ *         description: Invalid request
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: Challenge not found
+ */
+router.post("/challenges/:challengeId/complete", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const challengeId = parseInt(req.params.challengeId);
+
+  if (isNaN(challengeId)) {
+    return res.status(400).json({ message: "Invalid challenge ID" });
+  }
+
+  try {
+    const result = await challengeGenerator.completeChallenge(userId, challengeId);
+
+    if (!result.success) {
+      return res.status(404).json({ message: result.message });
+    }
+
+    res.status(200).json(result);
+  } catch (error) {
+    logger.error("Complete Challenge Error", { error: error.message, userId, challengeId });
+    res.status(500).json({ message: "Failed to complete challenge" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/challenges/{challengeId}/progress:
+ *   post:
+ *     summary: Update challenge progress
+ *     description: Increment progress on a challenge (for manual tracking)
+ *     tags: [Rewards]
+ *     parameters:
+ *       - in: path
+ *         name: challengeId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               increment:
+ *                 type: integer
+ *                 default: 1
+ *     responses:
+ *       200:
+ *         description: Progress updated
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/challenges/:challengeId/progress", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const challengeId = parseInt(req.params.challengeId);
+  const { increment = 1 } = req.body;
+
+  if (isNaN(challengeId)) {
+    return res.status(400).json({ message: "Invalid challenge ID" });
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get current challenge
+    const result = await pool.request()
+      .input("userId", userId)
+      .input("challengeId", challengeId)
+      .query(`
+        SELECT GeneratedChallengeID, CurrentProgress, RequiredCount, IsCompleted
+        FROM dbo.GeneratedChallenges
+        WHERE GeneratedChallengeID = @challengeId
+          AND UserID = @userId
+          AND IsActive = 1
+          AND IsDeleted = 0
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ message: "Challenge not found" });
+    }
+
+    const challenge = result.recordset[0];
+
+    if (challenge.IsCompleted) {
+      return res.status(200).json({
+        success: true,
+        alreadyCompleted: true,
+        currentProgress: challenge.CurrentProgress,
+        requiredCount: challenge.RequiredCount,
+      });
+    }
+
+    // Update progress
+    const newProgress = Math.min(challenge.CurrentProgress + increment, challenge.RequiredCount);
+    const isNowComplete = newProgress >= challenge.RequiredCount;
+
+    await pool.request()
+      .input("challengeId", challengeId)
+      .input("newProgress", newProgress)
+      .query(`
+        UPDATE dbo.GeneratedChallenges
+        SET CurrentProgress = @newProgress
+        WHERE GeneratedChallengeID = @challengeId
+      `);
+
+    // If completed, trigger full completion
+    if (isNowComplete) {
+      const completionResult = await challengeGenerator.completeChallenge(userId, challengeId);
+      return res.status(200).json(completionResult);
+    }
+
+    res.status(200).json({
+      success: true,
+      currentProgress: newProgress,
+      requiredCount: challenge.RequiredCount,
+      progressPercent: Math.round((newProgress / challenge.RequiredCount) * 100),
+    });
+  } catch (error) {
+    logger.error("Update Challenge Progress Error", { error: error.message, userId, challengeId });
+    res.status(500).json({ message: "Failed to update challenge progress" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/tier-benefits:
+ *   get:
+ *     summary: Get tier benefits information
+ *     description: Returns benefits for all tiers with user's current tier highlighted
+ *     tags: [Rewards]
+ *     responses:
+ *       200:
+ *         description: Tier benefits data
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.get("/tier-benefits", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const pool = getPool();
+
+    // Get user's current tier and level
+    const result = await pool.request()
+      .input("userId", userId)
+      .query(`
+        SELECT TotalFitPoints, CurrentTier, CurrentLevel
+        FROM dbo.UserRewards
+        WHERE UserID = @userId
+      `);
+
+    const user = result.recordset[0] || { TotalFitPoints: 0, CurrentTier: "BRONZE", CurrentLevel: 1 };
+    const levelProgress = levelCalculator.getLevelProgress(user.TotalFitPoints || 0);
+
+    // Build tier benefits with unlock status
+    const tierOrder = ["BRONZE", "SILVER", "GOLD", "EXCLUSIVE", "CHAMPION"];
+    const tierMinLevels = {
+      BRONZE: 1,
+      SILVER: 6,
+      GOLD: 11,
+      EXCLUSIVE: 16,
+      CHAMPION: 21,
+    };
+
+    const tiers = tierOrder.map(tierName => ({
+      name: tierName,
+      displayName: levelCalculator.getTierNameFromLevel(tierMinLevels[tierName]),
+      minLevel: tierMinLevels[tierName],
+      benefits: challengeGenerator.TIER_BENEFITS[tierName] || [],
+      isUnlocked: levelProgress.level >= tierMinLevels[tierName],
+      isCurrent: levelProgress.tier === tierName,
+    }));
+
+    res.status(200).json({
+      currentTier: levelProgress.tier,
+      currentLevel: levelProgress.level,
+      totalFitPoints: user.TotalFitPoints || 0,
+      tiers,
+    });
+  } catch (error) {
+    logger.error("Get Tier Benefits Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to get tier benefits" });
+  }
 });
 
 module.exports = router;
