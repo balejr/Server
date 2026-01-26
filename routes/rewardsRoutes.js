@@ -1334,7 +1334,8 @@ Return JSON matching the schema.`;
     res.status(500).json({
       success: false,
       message: "AI reconcile failed",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: error.message, // Temporarily show error for debugging
+      errorType: error.name,
     });
   }
 });
