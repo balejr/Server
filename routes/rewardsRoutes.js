@@ -13,6 +13,43 @@ const { getUserBadges, checkAllBadges } = require("../services/badgeService");
 const { getPRHistory, getCurrentPRs, getRecentPRs } = require("../services/prService");
 const challengeGenerator = require("../services/challengeGenerator");
 const logger = require("../utils/logger");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// Gemini AI Configuration
+const GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
+
+// AI Reconcile System Prompt
+const REWARDS_RECONCILE_PROMPT = `You are the FitNext Rewards AI. Analyze user activity and evaluate reward/challenge progress.
+
+Rules:
+• Only evaluate based on actual logged activity data provided
+• Return valid JSON matching the schema exactly
+• Be conservative - only mark rewards complete if data clearly supports it
+• Calculate streaks accurately from consecutive days
+• For partial progress, estimate percentage based on requirement
+
+Return a JSON object with:
+{
+  "rewardsToUpdate": [
+    {
+      "rewardKey": "string (e.g., 'weekly_goal', 'step_streak_7')",
+      "newProgress": number (0-100 percentage),
+      "isCompleted": boolean,
+      "reason": "string explanation"
+    }
+  ],
+  "challengesToUpdate": [
+    {
+      "challengeId": number,
+      "newProgress": number,
+      "isCompleted": boolean,
+      "reason": "string explanation"
+    }
+  ],
+  "fpToAward": number (total FitPoints to add),
+  "summary": "string (brief explanation of changes)"
+}`;
 
 const router = express.Router();
 
@@ -1041,22 +1078,264 @@ router.post("/v2/daily-awards", authenticateToken, async (req, res) => {
  * AI reconcile
  * - POST /rewards/v2/ai/reconcile
  *
- * This is where Gemini Pro 2.5 should:
- * - monitor progress of tasks
- * - mark tasks in-progress/completed
- * - award XP for completed tasks
- * - generate/assign new tasks (insert/upsert RewardDefinitions + create progress rows)
- * - update streaks and daily awards logs
- *
- * IMPORTANT: You must implement the Gemini call inside this handler based on your backend's existing AI integration.
+ * Uses Gemini AI to:
+ * - Analyze user activity (workouts, daily logs, streaks)
+ * - Evaluate reward and challenge progress
+ * - Award FitPoints for completed tasks
+ * - Update progress in database
  */
 router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
+  const pool = getPool();
 
-  // Implement server-side Gemini integration here.
-  // For now, return explicit 501 so the client can safely ignore until deployed.
-  logger.warn("Rewards V2 AI reconcile not implemented yet", { userId });
-  res.status(501).json({ success: false, message: "AI reconcile not implemented yet" });
+  try {
+    // Check if Gemini is configured
+    if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
+      logger.info("AI reconcile skipped - Gemini not configured", { userId });
+      return res.status(200).json({
+        success: true,
+        skipped: true,
+        message: "AI reconcile not configured",
+      });
+    }
+
+    // 1. Gather user context (last 30 days of activity)
+    const [workoutsResult, dailyLogsResult, streaksResult, progressResult, challengesResult] = await Promise.all([
+      // Recent workouts
+      pool.request()
+        .input("userId", userId)
+        .query(`
+          SELECT TOP 50 ExerciseName, Completed, WorkoutRoutineDate, Sets, Reps, Weight
+          FROM dbo.ExerciseExistence
+          WHERE UserID = @userId AND WorkoutRoutineDate >= DATEADD(DAY, -30, GETDATE())
+          ORDER BY WorkoutRoutineDate DESC
+        `),
+      // Recent daily logs
+      pool.request()
+        .input("userId", userId)
+        .query(`
+          SELECT TOP 30 EffectiveDate, Steps, WaterIntake, SleepHours, CaloriesIn, CaloriesOut
+          FROM dbo.DailyLogs
+          WHERE UserID = @userId AND EffectiveDate >= DATEADD(DAY, -30, GETDATE())
+          ORDER BY EffectiveDate DESC
+        `),
+      // Current streaks
+      pool.request()
+        .input("userId", userId)
+        .query(`
+          SELECT StreakType, CurrentStreak, LongestStreak, LastActivityDate
+          FROM dbo.UserStreaks
+          WHERE UserID = @userId
+        `),
+      // Current reward progress
+      pool.request()
+        .input("userId", userId)
+        .query(`
+          SELECT rd.RewardKey, rd.RewardName, rd.FitPointsValue, urp.CurrentProgress, urp.IsCompleted, urp.IsClaimed
+          FROM dbo.RewardDefinitions rd
+          LEFT JOIN dbo.UserRewardProgress urp ON rd.RewardID = urp.RewardID AND urp.UserID = @userId
+          WHERE rd.IsActive = 1
+        `),
+      // Active challenges
+      pool.request()
+        .input("userId", userId)
+        .query(`
+          SELECT ChallengeID, Title, Description, Category, Difficulty, TargetValue, CurrentProgress, IsCompleted, FPReward
+          FROM dbo.UserChallenges
+          WHERE UserID = @userId AND IsCompleted = 0 AND ExpiresAt > GETDATE()
+        `),
+    ]);
+
+    const workouts = workoutsResult.recordset || [];
+    const dailyLogs = dailyLogsResult.recordset || [];
+    const streaks = streaksResult.recordset || [];
+    const rewardProgress = progressResult.recordset || [];
+    const activeChallenges = challengesResult.recordset || [];
+
+    // 2. Build context prompt for Gemini
+    const contextPrompt = `
+User Activity Summary (last 30 days):
+
+WORKOUTS:
+- Total workout sessions: ${workouts.filter(w => w.Completed).length}
+- Unique workout days: ${new Set(workouts.filter(w => w.Completed).map(w => new Date(w.WorkoutRoutineDate).toDateString())).size}
+- Recent exercises: ${workouts.slice(0, 10).map(w => w.ExerciseName).join(", ") || "None"}
+
+DAILY LOGS:
+- Days logged: ${dailyLogs.length}
+- Average steps: ${dailyLogs.length > 0 ? Math.round(dailyLogs.reduce((s, d) => s + (d.Steps || 0), 0) / dailyLogs.length) : 0}
+- Days with 10k+ steps: ${dailyLogs.filter(d => d.Steps >= 10000).length}
+- Water logging days: ${dailyLogs.filter(d => d.WaterIntake > 0).length}
+- Sleep logging days: ${dailyLogs.filter(d => d.SleepHours > 0).length}
+
+CURRENT STREAKS:
+${streaks.map(s => `- ${s.StreakType}: ${s.CurrentStreak} days (best: ${s.LongestStreak})`).join("\n") || "- No streaks recorded"}
+
+REWARD PROGRESS:
+${rewardProgress.map(r => `- ${r.RewardKey}: ${r.CurrentProgress || 0}% ${r.IsCompleted ? "(COMPLETED)" : ""} ${r.IsClaimed ? "(CLAIMED)" : ""}`).join("\n") || "- No reward progress"}
+
+ACTIVE CHALLENGES:
+${activeChallenges.map(c => `- [${c.ChallengeID}] ${c.Title} (${c.Category}/${c.Difficulty}): ${c.CurrentProgress}/${c.TargetValue} - ${c.FPReward} FP`).join("\n") || "- No active challenges"}
+
+Based on this activity data, evaluate which rewards should be updated and calculate appropriate progress percentages.
+Return JSON matching the schema.`;
+
+    // 3. Call Gemini AI
+    const ai = new GoogleGenerativeAI(GOOGLE_API_KEY);
+    const model = ai.getGenerativeModel({
+      model: MODEL_NAME,
+      generationConfig: { temperature: 0.2 },
+      systemInstruction: REWARDS_RECONCILE_PROMPT,
+    });
+
+    const response = await model.generateContent(contextPrompt);
+    const responseText = response.response?.text() || (typeof response.text === "function" ? response.text() : "");
+
+    // 4. Parse response (handle markdown-wrapped JSON)
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseErr) {
+      const raw = String(responseText || "");
+      const first = raw.indexOf("{");
+      const last = raw.lastIndexOf("}");
+      if (first >= 0 && last > first) {
+        result = JSON.parse(raw.slice(first, last + 1));
+      } else {
+        throw new Error("Failed to parse AI response as JSON");
+      }
+    }
+
+    logger.info("AI Reconcile parsed result", {
+      userId,
+      rewardsToUpdate: result.rewardsToUpdate?.length || 0,
+      challengesToUpdate: result.challengesToUpdate?.length || 0,
+      fpToAward: result.fpToAward || 0,
+    });
+
+    // 5. Apply updates in transaction
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      let totalFPAwarded = 0;
+
+      // Update rewards
+      for (const update of result.rewardsToUpdate || []) {
+        if (!update.rewardKey) continue;
+
+        const rewardResult = await transaction.request()
+          .input("rewardKey", update.rewardKey)
+          .query(`SELECT RewardID, FitPointsValue FROM dbo.RewardDefinitions WHERE RewardKey = @rewardKey`);
+
+        if (rewardResult.recordset.length > 0) {
+          const { RewardID, FitPointsValue } = rewardResult.recordset[0];
+
+          // Upsert progress
+          await transaction.request()
+            .input("userId", userId)
+            .input("rewardId", RewardID)
+            .input("progress", Math.min(update.newProgress || 0, 100))
+            .input("isCompleted", update.isCompleted ? 1 : 0)
+            .query(`
+              MERGE dbo.UserRewardProgress AS target
+              USING (SELECT @userId AS UserID, @rewardId AS RewardID) AS source
+              ON target.UserID = source.UserID AND target.RewardID = source.RewardID
+              WHEN MATCHED THEN
+                UPDATE SET CurrentProgress = @progress, IsCompleted = @isCompleted, UpdatedAt = GETDATE()
+              WHEN NOT MATCHED THEN
+                INSERT (UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CreatedAt, UpdatedAt)
+                VALUES (@userId, @rewardId, @progress, @isCompleted, 0, GETDATE(), GETDATE());
+            `);
+
+          // Award FP if newly completed and not yet claimed
+          if (update.isCompleted) {
+            const claimCheck = await transaction.request()
+              .input("userId", userId)
+              .input("rewardId", RewardID)
+              .query(`SELECT IsClaimed FROM dbo.UserRewardProgress WHERE UserID = @userId AND RewardID = @rewardId`);
+
+            if (claimCheck.recordset[0]?.IsClaimed === false) {
+              totalFPAwarded += FitPointsValue || 0;
+            }
+          }
+        }
+      }
+
+      // Update challenges
+      for (const update of result.challengesToUpdate || []) {
+        if (!update.challengeId) continue;
+
+        await transaction.request()
+          .input("challengeId", update.challengeId)
+          .input("userId", userId)
+          .input("progress", update.newProgress || 0)
+          .input("isCompleted", update.isCompleted ? 1 : 0)
+          .query(`
+            UPDATE dbo.UserChallenges
+            SET CurrentProgress = @progress,
+                IsCompleted = @isCompleted,
+                CompletedAt = CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END
+            WHERE ChallengeID = @challengeId AND UserID = @userId
+          `);
+
+        // Award FP for completed challenges
+        if (update.isCompleted) {
+          const challengeResult = await transaction.request()
+            .input("challengeId", update.challengeId)
+            .query(`SELECT FPReward FROM dbo.UserChallenges WHERE ChallengeID = @challengeId AND IsCompleted = 1`);
+
+          if (challengeResult.recordset.length > 0) {
+            totalFPAwarded += challengeResult.recordset[0].FPReward || 0;
+          }
+        }
+      }
+
+      // Update user's total FP if any awarded
+      if (totalFPAwarded > 0) {
+        await transaction.request()
+          .input("userId", userId)
+          .input("fp", totalFPAwarded)
+          .query(`
+            UPDATE dbo.UserRewards
+            SET TotalFitPoints = TotalFitPoints + @fp, LastUpdated = GETDATE()
+            WHERE UserID = @userId
+          `);
+
+        // Record in history
+        await transaction.request()
+          .input("userId", userId)
+          .input("fp", totalFPAwarded)
+          .input("reason", "AI Reconcile Award")
+          .query(`
+            INSERT INTO dbo.UserRewardHistory (UserID, FitPointsEarned, Reason, EarnedAt)
+            VALUES (@userId, @fp, @reason, GETDATE())
+          `);
+      }
+
+      await transaction.commit();
+
+      res.status(200).json({
+        success: true,
+        updates: result.rewardsToUpdate || [],
+        challengeUpdates: result.challengesToUpdate || [],
+        fpAwarded: totalFPAwarded,
+        summary: result.summary || "Reconciliation complete",
+      });
+
+    } catch (txErr) {
+      await transaction.rollback();
+      throw txErr;
+    }
+
+  } catch (error) {
+    logger.error("AI Reconcile Error", { error: error.message, stack: error.stack, userId });
+    res.status(500).json({
+      success: false,
+      message: "AI reconcile failed",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
 });
 
 // ============================================
