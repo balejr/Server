@@ -1121,6 +1121,44 @@ muscle: 42.3
 
 ---
 
+#### Create Custom Exercise
+
+| Setting       | Value                                                     |
+| ------------- | --------------------------------------------------------- |
+| **Method**    | `POST`                                                    |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/exercises`  |
+| **Headers**   | `Authorization: Bearer <your_access_token>`               |
+| **Body Type** | raw → JSON                                                |
+
+**Body:**
+
+```json
+{
+  "ExerciseName": "Custom Plank Hold",
+  "ExerciseId": "custom_plank_001",
+  "TargetMuscle": "core",
+  "Equipment": "bodyweight",
+  "Instructions": "Hold a straight line from head to heels.",
+  "ImageURL": "https://example.com/plank.gif"
+}
+```
+
+**Expected Response (201 Created):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "MasterExerciseID": 123,
+    "ExerciseId": "custom_plank_001"
+  }
+}
+```
+
+> **Note:** If `ExerciseId` already exists, the server returns 200 with the existing IDs.
+
+---
+
 #### Get Weekly Dashboard Summary
 
 | Setting     | Value                                                                |
