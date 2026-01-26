@@ -1097,10 +1097,7 @@ Routes to correct payment gateway based on user's subscription.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/exercises` | Get exercise database from ExerciseDB API |
-| POST | `/exercises` | Create a custom exercise |
 | GET | `/exerciseexistences` | Get user's logged exercises (paginated) |
-
-**Custom Exercise Fields:** `ExerciseName` (required), `ExerciseId`, `TargetMuscle`, `Equipment`, `Instructions`, `ImageURL`.
 | GET | `/exerciseexistence/user/:exerciseId` | Get logged exercises by exercise ID |
 | GET | `/exerciseexistence/date/:date` | Get logged exercises by date |
 | POST | `/exerciseexistence` | Log new exercise(s) |
