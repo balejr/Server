@@ -145,7 +145,7 @@ Tests use Jest with 30-second timeout. Database operations are mocked in `tests/
 - **UserUsage** - Weekly usage tracking for rate limiting free users
 
 ### Rewards & Level System Tables
-- **UserRewards** - Tracks user XP, tier, level, and reward progress. Includes CurrentLevel, CurrentTier, LevelUpAt
+- **UserRewards** - Tracks user FitPoints, tier, level, and reward progress. Includes TotalFitPoints, CurrentLevel, CurrentTier, LevelUpAt
 - **RewardDefinitions** - Defines available rewards with XP values and categories
 - **RewardCompletions** - Records of completed/claimed rewards per user
 - **PersonalRecords** - User's personal records (PRs) by exercise. Tracks weight/reps with history
@@ -154,6 +154,8 @@ Tests use Jest with 30-second timeout. Database operations are mocked in `tests/
 - **DailyXPAwards** - Prevents duplicate daily XP awards. Unique constraint on (UserID, AwardType, AwardDate)
 - **Achievements** - Badge/achievement definitions with goals and icons
 - **UserAchievements** - User progress toward achievements/badges
+- **GeneratedChallenges** - AI-generated personalized challenges. Tracks title, description, FitPoints value, category (daily/weekly/monthly/universal), difficulty, progress, completion status
+- **ChallengeFeedback** - User feedback when deleting challenges. Records feedbackType (too_hard, too_easy, not_relevant, etc.) for AI improvement
 
 ## Environment Variables
 

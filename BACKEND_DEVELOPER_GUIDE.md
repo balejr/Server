@@ -1237,6 +1237,69 @@ Routes to correct payment gateway based on user's subscription.
 - `GET /v2/daily-awards` / `POST /v2/daily-awards`
 - `POST /v2/ai/reconcile` (returns 501 until implemented)
 
+**AI Challenge Endpoints:**
+
+| Method | Endpoint                          | Auth   | Description                                     |
+| ------ | --------------------------------- | ------ | ----------------------------------------------- |
+| GET    | `/challenges`                     | Access | Get active AI-generated challenges              |
+| POST   | `/generate-challenges`            | Access | Generate personalized challenges via Gemini AI  |
+| DELETE | `/challenges/:challengeId`        | Access | Delete challenge with feedback for AI training  |
+| POST   | `/challenges/:challengeId/complete` | Access | Mark challenge complete, award FitPoints       |
+| POST   | `/challenges/:challengeId/progress` | Access | Update challenge progress incrementally        |
+| GET    | `/tier-benefits`                  | Access | Get tier benefits with unlock status            |
+
+**GET /rewards/challenges Response:**
+
+```json
+{
+  "grouped": {
+    "daily": [
+      {
+        "id": 123,
+        "title": "Morning Stretch",
+        "description": "Complete a 10-minute stretching routine",
+        "fitPoints": 25,
+        "category": "daily",
+        "difficulty": "Easy",
+        "requiredCount": 1,
+        "currentProgress": 0,
+        "expiresAt": "2026-01-26T00:00:00Z"
+      }
+    ],
+    "weekly": [...],
+    "monthly": [...],
+    "universal": [...]
+  },
+  "total": 12
+}
+```
+
+**DELETE /rewards/challenges/:id Request:**
+
+```json
+{
+  "feedbackType": "too_hard",  // Required: too_hard, too_easy, not_relevant, takes_too_long, already_doing
+  "feedbackText": "Optional additional feedback"
+}
+```
+
+**POST /rewards/challenges/:id/complete Response:**
+
+```json
+{
+  "success": true,
+  "message": "Challenge completed!",
+  "fitPointsAwarded": 50,
+  "newTotalFitPoints": 1307,
+  "leveledUp": false,
+  "replacement": {
+    "id": 124,
+    "title": "Advanced Core Workout",
+    "difficulty": "Medium"
+  }
+}
+```
+
 **GET /rewards/user Response:**
 
 ```json

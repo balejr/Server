@@ -281,4 +281,184 @@ describe("Rewards API", () => {
       expect(response.status).toBe(401);
     });
   });
+
+  // =========================================================================
+  // AI CHALLENGE ENDPOINTS
+  // =========================================================================
+
+  describe("AI Challenges", () => {
+    describe("GET /rewards/challenges", () => {
+      test("returns challenges grouped by category", async () => {
+        const state = getState();
+        const { response, duration } = await api.get("/rewards/challenges", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.data).toHaveProperty("grouped");
+        expect(response.data).toHaveProperty("total");
+        expect(response.data.grouped).toHaveProperty("daily");
+        expect(response.data.grouped).toHaveProperty("weekly");
+        expect(response.data.grouped).toHaveProperty("monthly");
+        expect(response.data.grouped).toHaveProperty("universal");
+
+        console.log(
+          `     Challenges retrieved: ${response.data.total} total (${duration}ms)`
+        );
+      });
+
+      test("filters by category when provided", async () => {
+        const state = getState();
+        const { response } = await api.get("/rewards/challenges?category=daily", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.data).toHaveProperty("challenges");
+        expect(response.data).toHaveProperty("total");
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.get("/rewards/challenges");
+        expect(response.status).toBe(401);
+      });
+    });
+
+    describe("POST /rewards/generate-challenges", () => {
+      test("generates challenges for user", async () => {
+        const state = getState();
+        const { response, duration } = await api.post(
+          "/rewards/generate-challenges",
+          {},
+          {
+            Authorization: `Bearer ${state.accessToken}`,
+          }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        expect(response.data).toHaveProperty("message");
+
+        console.log(`     Challenge generation completed (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/rewards/generate-challenges", {});
+        expect(response.status).toBe(401);
+      });
+    });
+
+    describe("POST /rewards/challenges/:id/progress", () => {
+      test("rejects invalid increment values", async () => {
+        const state = getState();
+
+        // Test negative increment
+        const { response: negResponse } = await api.post(
+          "/rewards/challenges/1/progress",
+          { increment: -5 },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(negResponse.status).toBe(400);
+        expect(negResponse.data.message).toContain("Invalid increment");
+
+        // Test zero increment
+        const { response: zeroResponse } = await api.post(
+          "/rewards/challenges/1/progress",
+          { increment: 0 },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(zeroResponse.status).toBe(400);
+
+        // Test too large increment
+        const { response: largeResponse } = await api.post(
+          "/rewards/challenges/1/progress",
+          { increment: 101 },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(largeResponse.status).toBe(400);
+
+        // Test non-numeric increment
+        const { response: stringResponse } = await api.post(
+          "/rewards/challenges/1/progress",
+          { increment: "abc" },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(stringResponse.status).toBe(400);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/rewards/challenges/1/progress", {
+          increment: 1,
+        });
+        expect(response.status).toBe(401);
+      });
+    });
+
+    describe("DELETE /rewards/challenges/:id", () => {
+      test("requires valid feedback type", async () => {
+        const state = getState();
+        const { response } = await api.delete(
+          "/rewards/challenges/999",
+          { feedbackType: "invalid_type" },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(400);
+        expect(response.data.message).toContain("Invalid feedback type");
+        expect(response.data).toHaveProperty("validTypes");
+      });
+
+      test("requires feedbackType in body", async () => {
+        const state = getState();
+        const { response } = await api.delete(
+          "/rewards/challenges/999",
+          {},
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(400);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.delete("/rewards/challenges/1", {
+          feedbackType: "too_hard",
+        });
+        expect(response.status).toBe(401);
+      });
+    });
+
+    describe("GET /rewards/tier-benefits", () => {
+      test("returns tier benefits with unlock status", async () => {
+        const state = getState();
+        const { response, duration } = await api.get("/rewards/tier-benefits", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.data).toHaveProperty("currentTier");
+        expect(response.data).toHaveProperty("currentLevel");
+        expect(response.data).toHaveProperty("totalFitPoints");
+        expect(response.data).toHaveProperty("tiers");
+        expect(Array.isArray(response.data.tiers)).toBe(true);
+
+        if (response.data.tiers.length > 0) {
+          const tier = response.data.tiers[0];
+          expect(tier).toHaveProperty("name");
+          expect(tier).toHaveProperty("minLevel");
+          expect(tier).toHaveProperty("benefits");
+          expect(tier).toHaveProperty("isUnlocked");
+          expect(tier).toHaveProperty("isCurrent");
+        }
+
+        console.log(
+          `     Tier benefits retrieved: ${response.data.tiers.length} tiers (${duration}ms)`
+        );
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.get("/rewards/tier-benefits");
+        expect(response.status).toBe(401);
+      });
+    });
+  });
 });

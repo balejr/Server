@@ -1289,7 +1289,15 @@ router.post("/challenges/:challengeId/complete", authenticateToken, async (req, 
 router.post("/challenges/:challengeId/progress", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const challengeId = parseInt(req.params.challengeId);
-  const { increment = 1 } = req.body;
+  const rawIncrement = req.body.increment;
+
+  // Validate increment: must be a positive integer, default to 1
+  const increment = rawIncrement !== undefined ? parseInt(rawIncrement, 10) : 1;
+  if (isNaN(increment) || increment < 1 || increment > 100) {
+    return res.status(400).json({
+      message: "Invalid increment value. Must be a positive integer between 1 and 100."
+    });
+  }
 
   if (isNaN(challengeId)) {
     return res.status(400).json({ message: "Invalid challenge ID" });

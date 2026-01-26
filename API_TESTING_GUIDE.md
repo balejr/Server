@@ -2443,6 +2443,224 @@ Get all achievement badges with user's progress.
 }
 ```
 
+---
+
+### AI-Generated Challenges
+
+#### Get Active Challenges
+
+Get user's active AI-generated challenges, grouped by category.
+
+| Setting     | Value                                                         |
+| ----------- | ------------------------------------------------------------- |
+| **Method**  | `GET`                                                         |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/challenges`  |
+| **Headers** | `Authorization: Bearer <your_access_token>`                   |
+
+**Query Parameters:**
+| Parameter  | Type   | Description                                         |
+| ---------- | ------ | --------------------------------------------------- |
+| `category` | string | Optional: `daily`, `weekly`, `monthly`, `universal` |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "grouped": {
+    "daily": [
+      {
+        "id": 123,
+        "title": "Morning Stretch Routine",
+        "description": "Complete a 10-minute stretching session",
+        "fitPoints": 25,
+        "category": "daily",
+        "difficulty": "Easy",
+        "requiredCount": 1,
+        "currentProgress": 0,
+        "expiresAt": "2026-01-26T00:00:00Z"
+      }
+    ],
+    "weekly": [],
+    "monthly": [],
+    "universal": []
+  },
+  "total": 3
+}
+```
+
+---
+
+#### Generate Challenges
+
+Generate personalized AI challenges for the user (ensures 3 challenges per category).
+
+| Setting     | Value                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| **Method**  | `POST`                                                                |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/generate-challenges` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                           |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "Challenges generated",
+  "generated": {
+    "daily": 2,
+    "weekly": 3,
+    "monthly": 1
+  },
+  "total": 6
+}
+```
+
+---
+
+#### Complete Challenge
+
+Mark a challenge as completed and receive FitPoints.
+
+| Setting     | Value                                                                     |
+| ----------- | ------------------------------------------------------------------------- |
+| **Method**  | `POST`                                                                    |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/challenges/123/complete` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                               |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "Challenge completed!",
+  "fitPointsAwarded": 50,
+  "newTotalFitPoints": 1307,
+  "leveledUp": false,
+  "replacement": {
+    "id": 124,
+    "title": "Advanced Core Workout",
+    "description": "Complete 50 crunches and 1 minute plank",
+    "difficulty": "Medium",
+    "fitPoints": 75
+  }
+}
+```
+
+---
+
+#### Delete Challenge with Feedback
+
+Remove a challenge and provide feedback for AI training.
+
+| Setting     | Value                                                               |
+| ----------- | ------------------------------------------------------------------- |
+| **Method**  | `DELETE`                                                            |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/challenges/123`    |
+| **Headers** | `Authorization: Bearer <your_access_token>`, `Content-Type: application/json` |
+
+**Request Body:**
+
+```json
+{
+  "feedbackType": "too_hard",
+  "feedbackText": "I don't have weights at home"
+}
+```
+
+**Valid feedbackType values:**
+- `too_hard` - Challenge is too difficult
+- `too_easy` - Challenge is too easy
+- `not_relevant` - Challenge doesn't match goals
+- `takes_too_long` - Challenge requires too much time
+- `already_doing` - User already does this activity
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "Challenge deleted",
+  "replacement": {
+    "id": 125,
+    "title": "Bodyweight Squats",
+    "difficulty": "Easy"
+  }
+}
+```
+
+---
+
+#### Update Challenge Progress
+
+Manually increment progress on a challenge.
+
+| Setting     | Value                                                                     |
+| ----------- | ------------------------------------------------------------------------- |
+| **Method**  | `POST`                                                                    |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/challenges/123/progress` |
+| **Headers** | `Authorization: Bearer <your_access_token>`, `Content-Type: application/json` |
+
+**Request Body:**
+
+```json
+{
+  "increment": 1
+}
+```
+
+**Note:** `increment` must be a positive integer between 1 and 100.
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "currentProgress": 2,
+  "requiredCount": 5,
+  "progressPercent": 40
+}
+```
+
+---
+
+#### Get Tier Benefits
+
+Get tier benefits information with unlock status.
+
+| Setting     | Value                                                           |
+| ----------- | --------------------------------------------------------------- |
+| **Method**  | `GET`                                                           |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/rewards/tier-benefits` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                     |
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "currentTier": "SILVER",
+  "currentLevel": 7,
+  "totalFitPoints": 650,
+  "tiers": [
+    {
+      "name": "BRONZE",
+      "displayName": "Beginner",
+      "minLevel": 1,
+      "benefits": ["Basic challenges", "Daily rewards"],
+      "isUnlocked": true,
+      "isCurrent": false
+    },
+    {
+      "name": "SILVER",
+      "displayName": "Intermediate",
+      "minLevel": 6,
+      "benefits": ["Harder challenges", "Bonus FitPoints", "Weekly challenges"],
+      "isUnlocked": true,
+      "isCurrent": true
+    }
+  ]
+}
+```
+
 **Available Badges:**
 | Badge | Requirement | XP Reward |
 |-------|-------------|-----------|
