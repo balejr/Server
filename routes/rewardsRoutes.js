@@ -1140,9 +1140,10 @@ router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
       pool.request()
         .input("userId", userId)
         .query(`
-          SELECT ChallengeID, Title, Description, Category, Difficulty, TargetValue, CurrentProgress, IsCompleted, FPReward
-          FROM dbo.UserChallenges
-          WHERE UserID = @userId AND IsCompleted = 0 AND ExpiresAt > GETDATE()
+          SELECT GeneratedChallengeID as ChallengeID, ChallengeTitle as Title, ChallengeDescription as Description,
+                 Category, Difficulty, RequiredCount as TargetValue, CurrentProgress, IsCompleted, FitPointsValue as FPReward
+          FROM dbo.GeneratedChallenges
+          WHERE UserID = @userId AND IsCompleted = 0 AND IsDeleted = 0 AND (ExpiresAt IS NULL OR ExpiresAt > GETDATE())
         `),
     ]);
 
@@ -1272,18 +1273,18 @@ Return JSON matching the schema.`;
           .input("progress", update.newProgress || 0)
           .input("isCompleted", update.isCompleted ? 1 : 0)
           .query(`
-            UPDATE dbo.UserChallenges
+            UPDATE dbo.GeneratedChallenges
             SET CurrentProgress = @progress,
                 IsCompleted = @isCompleted,
                 CompletedAt = CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END
-            WHERE ChallengeID = @challengeId AND UserID = @userId
+            WHERE GeneratedChallengeID = @challengeId AND UserID = @userId
           `);
 
         // Award FP for completed challenges
         if (update.isCompleted) {
           const challengeResult = await transaction.request()
             .input("challengeId", update.challengeId)
-            .query(`SELECT FPReward FROM dbo.UserChallenges WHERE ChallengeID = @challengeId AND IsCompleted = 1`);
+            .query(`SELECT FitPointsValue as FPReward FROM dbo.GeneratedChallenges WHERE GeneratedChallengeID = @challengeId AND IsCompleted = 1`);
 
           if (challengeResult.recordset.length > 0) {
             totalFPAwarded += challengeResult.recordset[0].FPReward || 0;
