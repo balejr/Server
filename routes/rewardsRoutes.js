@@ -1243,10 +1243,11 @@ Return JSON matching the schema.`;
               USING (SELECT @userId AS UserID, @rewardId AS RewardID) AS source
               ON target.UserID = source.UserID AND target.RewardID = source.RewardID
               WHEN MATCHED THEN
-                UPDATE SET CurrentProgress = @progress, IsCompleted = @isCompleted, UpdatedAt = GETDATE()
+                UPDATE SET CurrentProgress = @progress, IsCompleted = @isCompleted,
+                           CompletedAt = CASE WHEN @isCompleted = 1 AND CompletedAt IS NULL THEN GETDATE() ELSE CompletedAt END
               WHEN NOT MATCHED THEN
-                INSERT (UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CreatedAt, UpdatedAt)
-                VALUES (@userId, @rewardId, @progress, @isCompleted, 0, GETDATE(), GETDATE());
+                INSERT (UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt)
+                VALUES (@userId, @rewardId, @progress, @isCompleted, 0, CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END);
             `);
 
           // Award FP if newly completed and not yet claimed

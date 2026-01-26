@@ -1235,7 +1235,46 @@ Routes to correct payment gateway based on user's subscription.
 - `GET /v2/usage` / `POST /v2/usage/increment`
 - `GET /v2/streaks`
 - `GET /v2/daily-awards` / `POST /v2/daily-awards`
-- `POST /v2/ai/reconcile` (returns 501 until implemented)
+- `POST /v2/ai/reconcile` - Gemini AI-powered reward reconciliation
+
+**POST /rewards/v2/ai/reconcile**
+
+Uses Gemini AI to analyze user activity (workouts, daily logs, streaks) and automatically:
+- Evaluate and update reward progress
+- Evaluate and update challenge progress
+- Award FitPoints for completed tasks
+
+**Request:** No body required (uses auth token to identify user)
+
+**Response:**
+```json
+{
+  "success": true,
+  "updates": [
+    {
+      "rewardKey": "weekly_goal",
+      "newProgress": 100,
+      "isCompleted": true,
+      "reason": "User completed 3 workouts in the last 7 days"
+    }
+  ],
+  "challengeUpdates": [
+    {
+      "challengeId": 123,
+      "newProgress": 75,
+      "isCompleted": false,
+      "reason": "3 of 4 required exercises completed"
+    }
+  ],
+  "fpAwarded": 50,
+  "summary": "Updated 2 rewards, 1 challenge. Awarded 50 FP."
+}
+```
+
+**Notes:**
+- Returns `{ success: true, skipped: true }` if Gemini API key not configured
+- Gracefully handles missing tables/data
+- All updates performed in a transaction
 
 **AI Challenge Endpoints:**
 
