@@ -39,6 +39,7 @@ RULES:
 - Push 10-20% beyond user's recent performance
 - Match difficulty to user's tier
 - Avoid patterns user has declined
+- NEVER suggest anything similar to items listed in ACTIVE - these are challenges user already has
 - Return ONLY valid JSON array
 
 AVOID (already covered by static rewards - generate SPECIFIC versions instead):
@@ -93,6 +94,8 @@ async function getUserProgressContext(userId) {
     weeklyResult,
     completedResult,
     feedbackResult,
+    activeChallengesResult,
+    activeRewardsResult,
   ] = await Promise.all([
     // User profile and tier
     pool.request()
@@ -152,6 +155,32 @@ async function getUserProgressContext(userId) {
         GROUP BY FeedbackType
         ORDER BY Count DESC
       `),
+
+    // Currently active AI-generated challenges (not completed, not expired)
+    pool.request()
+      .input("userId", userId)
+      .query(`
+        SELECT ChallengeTitle, Difficulty, RequiredCount, CurrentProgress
+        FROM dbo.GeneratedChallenges
+        WHERE UserID = @userId
+          AND IsActive = 1
+          AND IsCompleted = 0
+          AND IsDeleted = 0
+          AND (ExpiresAt IS NULL OR ExpiresAt > SYSDATETIMEOFFSET())
+      `),
+
+    // Currently in-progress static rewards (started but not completed)
+    pool.request()
+      .input("userId", userId)
+      .query(`
+        SELECT rd.Name, rd.Description, rd.Category, urp.CurrentProgress, rd.RequiredCount
+        FROM dbo.UserRewardProgress urp
+        JOIN dbo.RewardDefinitions rd ON urp.RewardID = rd.RewardID
+        WHERE urp.UserID = @userId
+          AND urp.IsCompleted = 0
+          AND urp.CurrentProgress > 0
+          AND rd.IsActive = 1
+      `),
   ]);
 
   // Also get workout count for the week
@@ -179,6 +208,12 @@ async function getUserProgressContext(userId) {
     feedbackPatterns[row.FeedbackType] = row.Count;
   });
 
+  // Format active AI challenges (currently in progress)
+  const activeChallenges = activeChallengesResult.recordset.map(c => c.ChallengeTitle);
+
+  // Format active static rewards (in progress but not completed)
+  const activeRewards = activeRewardsResult.recordset.map(r => r.Name);
+
   // Get level info
   const totalFitPoints = profile.TotalFitPoints || 0;
   const levelProgress = levelCalculator.getLevelProgress(totalFitPoints);
@@ -205,6 +240,10 @@ async function getUserProgressContext(userId) {
     // History
     completedChallenges: completed,
     feedbackPatterns,
+
+    // Currently active (to avoid duplicates)
+    activeChallenges,
+    activeRewards,
   };
 }
 
@@ -218,22 +257,30 @@ async function getUserProgressContext(userId) {
 function buildCompactPrompt(context, count) {
   // Format feedback to avoid
   const avoidPatterns = Object.entries(context.feedbackPatterns)
-    .filter(([type, cnt]) => cnt >= 2) // Only avoid if declined 2+ times
+    .filter(([, cnt]) => cnt >= 2) // Only avoid if declined 2+ times
     .map(([type]) => type.replace(/_/g, " "))
     .join(", ") || "none";
 
   // Preferred difficulty based on tier
   const preferredDifficulty = TIER_DIFFICULTY_PREFERENCE[context.tier] || "Medium";
 
+  // Combine active challenges and rewards to avoid duplicates
+  const activeItems = [
+    ...context.activeChallenges,
+    ...context.activeRewards,
+  ].slice(0, 10); // Limit to 10 to keep prompt size reasonable
+  const activeList = activeItems.length > 0 ? activeItems.join(", ") : "none";
+
   return `Generate ${count} progressive challenges for this user:
 
 RECENT: ${context.yesterdaySteps} steps yesterday, ${context.workoutsThisWeek} workouts last week, avg ${context.avgSteps} daily steps
 COMPLETED: ${context.completedChallenges.slice(0, 3).join(", ") || "None recently"}
+ACTIVE (DO NOT DUPLICATE): ${activeList}
 AVOID: ${avoidPatterns}
 TIER: ${context.tier} (${preferredDifficulty} difficulty preferred)
 GOAL: ${context.fitnessGoal}
 
-Rules: Push 10-20% beyond recent performance. Return JSON array only.
+Rules: Push 10-20% beyond recent performance. DO NOT suggest anything similar to ACTIVE items. Return JSON array only.
 [{"title":"...","description":"...","difficulty":"Easy|Medium|Hard","requiredCount":N,"fitPoints":15|30|50}]`;
 }
 
@@ -246,7 +293,23 @@ Rules: Push 10-20% beyond recent performance. Return JSON array only.
  * @returns {Array} Fallback suggestions
  */
 function generateFallbackSuggestions(context, count) {
-  const preferredDifficulty = TIER_DIFFICULTY_PREFERENCE[context.tier] || "Medium";
+  // Combine active challenges and rewards for duplicate checking
+  const activeItems = [
+    ...(context.activeChallenges || []),
+    ...(context.activeRewards || []),
+  ].map(item => item.toLowerCase());
+
+  // Helper to check if a title is similar to active items
+  const isSimilarToActive = (title) => {
+    const lowerTitle = title.toLowerCase();
+    return activeItems.some(active => {
+      // Check for exact match or significant overlap
+      const activeWords = active.split(/\s+/);
+      const titleWords = lowerTitle.split(/\s+/);
+      const commonWords = activeWords.filter(w => titleWords.includes(w) && w.length > 3);
+      return active === lowerTitle || commonWords.length >= 2;
+    });
+  };
 
   // Progressive suggestions based on yesterday's performance
   const suggestions = [];
@@ -254,51 +317,98 @@ function generateFallbackSuggestions(context, count) {
   // Step-based suggestion (10-20% increase)
   if (context.yesterdaySteps > 0) {
     const targetSteps = Math.round(context.yesterdaySteps * 1.15 / 1000) * 1000; // Round to nearest 1000
-    suggestions.push({
+    const stepChallenge = {
       title: `Hit ${targetSteps.toLocaleString()} Steps Today`,
       description: `Beat yesterday's ${context.yesterdaySteps.toLocaleString()} steps by aiming for ${targetSteps.toLocaleString()}`,
       difficulty: targetSteps >= 12000 ? "Hard" : targetSteps >= 8000 ? "Medium" : "Easy",
       requiredCount: 1,
       fitPoints: FITPOINTS_BY_DIFFICULTY[targetSteps >= 12000 ? "Hard" : targetSteps >= 8000 ? "Medium" : "Easy"],
-    });
+    };
+    if (!isSimilarToActive(stepChallenge.title)) {
+      suggestions.push(stepChallenge);
+    }
   } else {
-    suggestions.push({
+    const basicStepChallenge = {
       title: "Take 5,000 Steps Today",
       description: "Start building your step streak with a manageable goal",
       difficulty: "Easy",
       requiredCount: 1,
       fitPoints: 15,
-    });
+    };
+    if (!isSimilarToActive(basicStepChallenge.title)) {
+      suggestions.push(basicStepChallenge);
+    }
   }
 
   // Workout-based suggestion
   const targetWorkouts = Math.max(context.workoutsThisWeek + 1, 3);
-  suggestions.push({
+  const workoutChallenge = {
     title: `Complete ${targetWorkouts} Workouts This Week`,
     description: `You've done ${context.workoutsThisWeek} so far - keep the momentum going!`,
     difficulty: targetWorkouts >= 5 ? "Hard" : targetWorkouts >= 3 ? "Medium" : "Easy",
     requiredCount: targetWorkouts,
     fitPoints: FITPOINTS_BY_DIFFICULTY[targetWorkouts >= 5 ? "Hard" : targetWorkouts >= 3 ? "Medium" : "Easy"],
-  });
+  };
+  if (!isSimilarToActive(workoutChallenge.title)) {
+    suggestions.push(workoutChallenge);
+  }
 
   // Consistency suggestion (specific, not generic "log stats")
-  suggestions.push({
+  const consistencyChallenge = {
     title: "Hit 8k Steps 5 Days This Week",
     description: "Build consistency by reaching 8,000 steps on 5 different days",
     difficulty: "Medium",
     requiredCount: 5,
     fitPoints: 30,
-  });
+  };
+  if (!isSimilarToActive(consistencyChallenge.title)) {
+    suggestions.push(consistencyChallenge);
+  }
 
   // Harder suggestion for higher tiers
   if (context.tier === "GOLD" || context.tier === "EXCLUSIVE" || context.tier === "CHAMPION") {
-    suggestions.push({
+    const streakChallenge = {
       title: "7-Day Step Streak",
       description: "Hit 10,000 steps for 7 consecutive days",
       difficulty: "Hard",
       requiredCount: 7,
       fitPoints: 50,
-    });
+    };
+    if (!isSimilarToActive(streakChallenge.title)) {
+      suggestions.push(streakChallenge);
+    }
+  }
+
+  // Additional fallback suggestions if we filtered too many out
+  const additionalSuggestions = [
+    {
+      title: "Morning Movement: 3 Workouts Before Noon",
+      description: "Complete 3 workouts before 12 PM this week",
+      difficulty: "Medium",
+      requiredCount: 3,
+      fitPoints: 30,
+    },
+    {
+      title: "Hydration Hero: 100oz Water 5 Days",
+      description: "Drink at least 100oz of water on 5 different days",
+      difficulty: "Medium",
+      requiredCount: 5,
+      fitPoints: 30,
+    },
+    {
+      title: "Active Rest Day",
+      description: "Hit 7,000 steps on a non-workout day",
+      difficulty: "Easy",
+      requiredCount: 1,
+      fitPoints: 15,
+    },
+  ];
+
+  for (const s of additionalSuggestions) {
+    if (suggestions.length >= count + 2) break; // Keep a buffer
+    if (!isSimilarToActive(s.title)) {
+      suggestions.push(s);
+    }
   }
 
   // Shuffle and return requested count
