@@ -1289,6 +1289,9 @@ Accepts a suggestion and stores it as an active challenge. The challenge's categ
 
 This allows AI challenges to be merged into the unified reward category accordions on the frontend.
 
+**Duplicate Prevention (Added 2026-01-27):**
+Before creating a new challenge, `acceptSuggestion()` in `challengeSuggestionService.js` checks for existing active challenges with the same title for the user. If a duplicate exists (same title, IsActive=1, not expired), the existing challenge is returned instead of creating a new one. This prevents duplicate challenges from appearing when users rapidly undo→accept or due to frontend cache/state desync.
+
 **Auto-Tracking:**
 AI challenges automatically track progress for certain activities:
 - **Workout challenges** (e.g., "Complete 3 workouts this week"): Progress updates automatically when workouts are logged via `POST /data/exerciseexistences`

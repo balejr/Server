@@ -439,6 +439,36 @@ function getCategoryByExpiry(expiresAt) {
 async function acceptSuggestion(userId, suggestion) {
   const pool = getPool();
 
+  // Check for existing active challenge with same title to prevent duplicates
+  const existingCheck = await pool.request()
+    .input('userId', userId)
+    .input('title', suggestion.title)
+    .query(`
+      SELECT
+        GeneratedChallengeID as id,
+        ChallengeTitle as title,
+        ChallengeDescription as description,
+        FitPointsValue as fitPoints,
+        Category as category,
+        Difficulty as difficulty,
+        RequiredCount as requiredCount,
+        CurrentProgress as currentProgress,
+        ExpiresAt as expiresAt,
+        IsActive as isActive,
+        CreatedAt as createdAt
+      FROM dbo.GeneratedChallenges
+      WHERE UserID = @userId
+        AND ChallengeTitle = @title
+        AND IsActive = 1
+        AND (ExpiresAt IS NULL OR ExpiresAt > SYSDATETIMEOFFSET())
+    `);
+
+  if (existingCheck.recordset.length > 0) {
+    // Return existing challenge instead of creating duplicate
+    logger.info("Duplicate challenge prevented", { userId, title: suggestion.title });
+    return existingCheck.recordset[0];
+  }
+
   // Calculate expiration based on difficulty/type
   let expiresAt = null;
   const now = new Date();
