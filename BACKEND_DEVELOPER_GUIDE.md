@@ -1026,7 +1026,7 @@ Routes to correct payment gateway based on user's subscription.
 | `configRoutes.js`  | `/api/config`  | 1         | Mobile app runtime configuration               |
 | `workoutRoutes.js` | `/api/workout` | 5         | AI workout plans                               |
 | `usageRoutes.js`   | `/api/usage`   | 3         | Usage tracking                                 |
-| `rewardsRoutes.js` | `/api/rewards` | 5         | XP rewards and tier progression                |
+| `rewardsRoutes.js` | `/api/rewards` | 20+       | XP rewards, challenges, AI suggestions         |
 
 ### Auth Routes (`/api/auth`)
 
@@ -1227,6 +1227,80 @@ Routes to correct payment gateway based on user's subscription.
 | POST   | `/progress/:rewardKey` | Access | Update progress on a specific reward            |
 | POST   | `/recalculate`         | Access | Recalculate weekly/monthly rewards from history |
 
+**Challenge Suggestion Endpoints (NEW):**
+
+| Method | Endpoint                    | Auth   | Description                                     |
+| ------ | --------------------------- | ------ | ----------------------------------------------- |
+| POST   | `/challenges/suggestions`   | Access | Get 1-3 AI-generated progressive suggestions    |
+| POST   | `/challenges/accept`        | Access | Accept a suggestion → store as active challenge |
+| POST   | `/challenges/decline`       | Access | Decline with optional feedback for AI learning  |
+| GET    | `/challenges`               | Access | Get user's active challenges                    |
+| POST   | `/challenges/:id/complete`  | Access | Mark challenge completed, award FitPoints       |
+| POST   | `/challenges/:id/progress`  | Access | Update challenge progress                       |
+| DELETE | `/challenges/:id`           | Access | Delete challenge with feedback                  |
+
+**POST /rewards/challenges/suggestions**
+
+Generates 1-3 personalized, progressive challenge suggestions using AI. Suggestions are ephemeral (not stored until accepted).
+
+**Request:**
+```json
+{ "count": 3 }  // Optional, default 3, max 5
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "suggestions": [
+    {
+      "title": "Hit 11,500 Steps Today",
+      "description": "Beat yesterday's 10,234 steps by aiming for 11,500",
+      "difficulty": "Medium",
+      "requiredCount": 1,
+      "fitPoints": 30
+    }
+  ],
+  "fromAI": true,
+  "context": {
+    "tier": "SILVER",
+    "level": 8,
+    "yesterdaySteps": 10234,
+    "workoutsThisWeek": 3
+  },
+  "generationTimeMs": 2100
+}
+```
+
+**POST /rewards/challenges/accept**
+
+Accepts a suggestion and stores it as an active challenge.
+
+**Request:**
+```json
+{
+  "suggestion": {
+    "title": "Hit 11,500 Steps Today",
+    "description": "Beat yesterday's steps",
+    "difficulty": "Medium",
+    "requiredCount": 1,
+    "fitPoints": 30
+  }
+}
+```
+
+**POST /rewards/challenges/decline**
+
+Declines a suggestion with optional feedback for AI learning.
+
+**Request:**
+```json
+{
+  "suggestion": { "title": "...", "difficulty": "Hard" },
+  "feedbackType": "too_hard"  // Optional: too_hard, too_easy, not_interested, takes_too_long, already_doing
+}
+```
+
 **Rewards V2 Endpoints (table-based):**
 - `GET /v2/definitions` / `POST /v2/definitions`
 - `GET /v2/progress` / `POST /v2/progress/:rewardKey`
@@ -1235,46 +1309,23 @@ Routes to correct payment gateway based on user's subscription.
 - `GET /v2/usage` / `POST /v2/usage/increment`
 - `GET /v2/streaks`
 - `GET /v2/daily-awards` / `POST /v2/daily-awards`
-- `POST /v2/ai/reconcile` - Gemini AI-powered reward reconciliation
+- `POST /v2/ai/reconcile` - **DEPRECATED** (now uses math-based calculation)
 
-**POST /rewards/v2/ai/reconcile**
+**POST /rewards/v2/ai/reconcile** (DEPRECATED)
 
-Uses Gemini AI to analyze user activity (workouts, daily logs, streaks) and automatically:
-- Evaluate and update reward progress
-- Evaluate and update challenge progress
-- Award FitPoints for completed tasks
-
-**Request:** No body required (uses auth token to identify user)
+> **Note:** This endpoint is deprecated. Use `POST /challenges/suggestions` for AI features.
+> Progress tracking now uses math-based calculation via `rewardCalculator.checkAndUpdateRewards()`.
 
 **Response:**
 ```json
 {
   "success": true,
-  "updates": [
-    {
-      "rewardKey": "weekly_goal",
-      "newProgress": 100,
-      "isCompleted": true,
-      "reason": "User completed 3 workouts in the last 7 days"
-    }
-  ],
-  "challengeUpdates": [
-    {
-      "challengeId": 123,
-      "newProgress": 75,
-      "isCompleted": false,
-      "reason": "3 of 4 required exercises completed"
-    }
-  ],
-  "fpAwarded": 50,
-  "summary": "Updated 2 rewards, 1 challenge. Awarded 50 FP."
+  "deprecated": true,
+  "message": "AI reconcile is deprecated. Using math-based calculation.",
+  "updates": { ... },
+  "migrateToEndpoint": "POST /rewards/challenges/suggestions"
 }
 ```
-
-**Notes:**
-- Returns `{ success: true, skipped: true }` if Gemini API key not configured
-- Gracefully handles missing tables/data
-- All updates performed in a transaction
 
 **AI Challenge Endpoints:**
 

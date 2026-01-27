@@ -12,6 +12,7 @@ const {
 const { getUserBadges, checkAllBadges } = require("../services/badgeService");
 const { getPRHistory, getCurrentPRs, getRecentPRs } = require("../services/prService");
 const challengeGenerator = require("../services/challengeGenerator");
+const challengeSuggestionService = require("../services/challengeSuggestionService");
 const logger = require("../utils/logger");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -1075,292 +1076,36 @@ router.post("/v2/daily-awards", authenticateToken, async (req, res) => {
 });
 
 /**
- * AI reconcile
+ * AI reconcile (DEPRECATED)
  * - POST /rewards/v2/ai/reconcile
  *
- * Uses Gemini AI to:
- * - Analyze user activity (workouts, daily logs, streaks)
- * - Evaluate reward and challenge progress
- * - Award FitPoints for completed tasks
- * - Update progress in database
+ * DEPRECATED: This endpoint now uses math-based calculation instead of AI.
+ * Use POST /rewards/challenges/suggestions for AI-powered challenge suggestions.
+ *
+ * Calls rewardCalculator.checkAndUpdateRewards() for progress tracking.
  */
 router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
 
-  // Check if Gemini is configured FIRST (before any DB operations)
-  const apiKeyValid = GOOGLE_API_KEY && GOOGLE_API_KEY !== "undefined" && String(GOOGLE_API_KEY).trim() !== "";
-  if (!apiKeyValid) {
-    logger.info("AI reconcile skipped - Gemini not configured", { userId });
-    return res.status(200).json({
-      success: true,
-      skipped: true,
-      message: "AI reconcile not configured (set GEMINI_API_KEY in environment)",
-    });
-  }
-
-  const pool = getPool();
+  logger.warn("DEPRECATED: /v2/ai/reconcile called - using math-based calculation instead", { userId });
 
   try {
-    // Extract user context from request payload (sent from mobile app)
-    const userContext = req.body?.context || {};
-    const source = req.body?.source || "unknown";
-    logger.info("AI reconcile started", { userId, source, hasContext: !!req.body?.context });
+    // Use math-based recalculation instead of AI
+    const updates = await rewardCalculator.checkAndUpdateRewards(userId);
 
-    // 1. Gather user context (last 30 days of activity)
-    const [workoutsResult, dailyLogsResult, streaksResult, progressResult, challengesResult] = await Promise.all([
-      // Recent workouts
-      pool.request()
-        .input("userId", userId)
-        .query(`
-          SELECT TOP 50 ExerciseID, Completed, Date, Sets, Reps, Weight
-          FROM dbo.ExerciseExistence
-          WHERE UserID = @userId AND Date >= DATEADD(DAY, -30, GETDATE())
-          ORDER BY Date DESC
-        `),
-      // Recent daily logs
-      pool.request()
-        .input("userId", userId)
-        .query(`
-          SELECT TOP 30 EffectiveDate, Steps, WaterIntake, Sleep, CaloriesBurned
-          FROM dbo.DailyLogs
-          WHERE UserID = @userId AND EffectiveDate >= DATEADD(DAY, -30, GETDATE())
-          ORDER BY EffectiveDate DESC
-        `),
-      // Current streaks
-      pool.request()
-        .input("userId", userId)
-        .query(`
-          SELECT StreakType, CurrentStreak, LongestStreak, LastActivityDate
-          FROM dbo.UserStreaks
-          WHERE UserID = @userId
-        `),
-      // Current reward progress
-      pool.request()
-        .input("userId", userId)
-        .query(`
-          SELECT rd.RewardKey, rd.Name as RewardName, rd.XPValue as FitPointsValue, urp.CurrentProgress, urp.IsCompleted, urp.IsClaimed
-          FROM dbo.RewardDefinitions rd
-          LEFT JOIN dbo.UserRewardProgress urp ON rd.RewardID = urp.RewardID AND urp.UserID = @userId
-          WHERE rd.IsActive = 1
-        `),
-      // Active challenges
-      pool.request()
-        .input("userId", userId)
-        .query(`
-          SELECT GeneratedChallengeID as ChallengeID, ChallengeTitle as Title, ChallengeDescription as Description,
-                 Category, Difficulty, RequiredCount as TargetValue, CurrentProgress, IsCompleted, FitPointsValue as FPReward
-          FROM dbo.GeneratedChallenges
-          WHERE UserID = @userId AND IsCompleted = 0 AND IsDeleted = 0 AND (ExpiresAt IS NULL OR ExpiresAt > GETDATE())
-        `),
-    ]);
-
-    const workouts = workoutsResult.recordset || [];
-    const dailyLogs = dailyLogsResult.recordset || [];
-    const streaks = streaksResult.recordset || [];
-    const rewardProgress = progressResult.recordset || [];
-    const activeChallenges = challengesResult.recordset || [];
-
-    // 2. Build context prompt for Gemini (including mobile app context if provided)
-    const mobileContext = userContext.recentActivity || {};
-    const contextPrompt = `
-User Activity Summary (last 30 days):
-
-USER PROFILE:
-- Current Level: ${userContext.currentLevel || "Unknown"}
-- Current Tier: ${userContext.currentTier || "Unknown"}
-- Total FitPoints: ${userContext.totalFP || 0}
-- Request Source: ${source}
-
-WORKOUTS:
-- Total workout sessions: ${workouts.filter(w => w.Completed).length}
-- Unique workout days: ${new Set(workouts.filter(w => w.Completed).map(w => new Date(w.Date).toDateString())).size}
-- Recent exercises: ${workouts.slice(0, 10).map(w => w.ExerciseID).join(", ") || "None"}
-${mobileContext.workoutDays ? `- Mobile reported workout days (last 7): ${mobileContext.workoutDays}` : ""}
-
-DAILY LOGS:
-- Days logged: ${dailyLogs.length}
-- Average steps: ${dailyLogs.length > 0 ? Math.round(dailyLogs.reduce((s, d) => s + (d.Steps || 0), 0) / dailyLogs.length) : 0}
-- Days with 10k+ steps: ${dailyLogs.filter(d => d.Steps >= 10000).length}
-- Water logging days: ${dailyLogs.filter(d => d.WaterIntake > 0).length}
-- Sleep logging days: ${dailyLogs.filter(d => d.Sleep > 0).length}
-${mobileContext.waterLogDays ? `- Mobile reported water log days (last 7): ${mobileContext.waterLogDays}` : ""}
-${mobileContext.sleepLogDays ? `- Mobile reported sleep log days (last 7): ${mobileContext.sleepLogDays}` : ""}
-
-CURRENT STREAKS:
-- Workout streak (from mobile): ${userContext.currentStreak || 0} days
-- Login streak (from mobile): ${userContext.loginStreak || 0} days
-${streaks.map(s => `- ${s.StreakType}: ${s.CurrentStreak} days (best: ${s.LongestStreak})`).join("\n") || "- No additional streaks recorded"}
-
-REWARD PROGRESS:
-${rewardProgress.map(r => `- ${r.RewardKey}: ${r.CurrentProgress || 0}% ${r.IsCompleted ? "(COMPLETED)" : ""} ${r.IsClaimed ? "(CLAIMED)" : ""}`).join("\n") || "- No reward progress"}
-
-ACTIVE CHALLENGES:
-${activeChallenges.map(c => `- [${c.ChallengeID}] ${c.Title} (${c.Category}/${c.Difficulty}): ${c.CurrentProgress}/${c.TargetValue} - ${c.FPReward} FP`).join("\n") || "- No active challenges"}
-
-PERSONALIZATION NOTES:
-- Prioritize rewards the user is close to completing
-- Consider their tier (${userContext.currentTier || "BRONZE"}) when evaluating challenge difficulty
-- Award progress fairly based on actual logged activity
-
-Based on this activity data, evaluate which rewards should be updated and calculate appropriate progress percentages.
-Return JSON matching the schema.`;
-
-    // 3. Call Gemini AI
-    const ai = new GoogleGenerativeAI(GOOGLE_API_KEY);
-    const model = ai.getGenerativeModel({
-      model: MODEL_NAME,
-      generationConfig: { temperature: 0.2 },
-      systemInstruction: REWARDS_RECONCILE_PROMPT,
+    res.status(200).json({
+      success: true,
+      deprecated: true,
+      message: "AI reconcile is deprecated. Using math-based calculation. Use /challenges/suggestions for AI features.",
+      updates,
+      migrateToEndpoint: "POST /rewards/challenges/suggestions",
     });
-
-    const response = await model.generateContent(contextPrompt);
-    const responseText = response.response?.text() || (typeof response.text === "function" ? response.text() : "");
-
-    // 4. Parse response (handle markdown-wrapped JSON)
-    let result;
-    try {
-      result = JSON.parse(responseText);
-    } catch (parseErr) {
-      const raw = String(responseText || "");
-      const first = raw.indexOf("{");
-      const last = raw.lastIndexOf("}");
-      if (first >= 0 && last > first) {
-        result = JSON.parse(raw.slice(first, last + 1));
-      } else {
-        throw new Error("Failed to parse AI response as JSON");
-      }
-    }
-
-    logger.info("AI Reconcile parsed result", {
-      userId,
-      rewardsToUpdate: result.rewardsToUpdate?.length || 0,
-      challengesToUpdate: result.challengesToUpdate?.length || 0,
-      fpToAward: result.fpToAward || 0,
-    });
-
-    // 5. Apply updates in transaction
-    const transaction = new sql.Transaction(pool);
-    await transaction.begin();
-
-    try {
-      let totalFPAwarded = 0;
-
-      // Update rewards
-      for (const update of result.rewardsToUpdate || []) {
-        if (!update.rewardKey) continue;
-
-        const rewardResult = await transaction.request()
-          .input("rewardKey", update.rewardKey)
-          .query(`SELECT RewardID, XPValue as FitPointsValue FROM dbo.RewardDefinitions WHERE RewardKey = @rewardKey`);
-
-        if (rewardResult.recordset.length > 0) {
-          const { RewardID, FitPointsValue } = rewardResult.recordset[0];
-
-          // Upsert progress
-          await transaction.request()
-            .input("userId", userId)
-            .input("rewardId", RewardID)
-            .input("progress", Math.min(update.newProgress || 0, 100))
-            .input("isCompleted", update.isCompleted ? 1 : 0)
-            .query(`
-              MERGE dbo.UserRewardProgress AS target
-              USING (SELECT @userId AS UserID, @rewardId AS RewardID) AS source
-              ON target.UserID = source.UserID AND target.RewardID = source.RewardID
-              WHEN MATCHED THEN
-                UPDATE SET CurrentProgress = @progress, IsCompleted = @isCompleted,
-                           CompletedAt = CASE WHEN @isCompleted = 1 AND CompletedAt IS NULL THEN GETDATE() ELSE CompletedAt END
-              WHEN NOT MATCHED THEN
-                INSERT (UserID, RewardID, CurrentProgress, IsCompleted, IsClaimed, CompletedAt)
-                VALUES (@userId, @rewardId, @progress, @isCompleted, 0, CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END);
-            `);
-
-          // Award FP if newly completed and not yet claimed
-          if (update.isCompleted) {
-            const claimCheck = await transaction.request()
-              .input("userId", userId)
-              .input("rewardId", RewardID)
-              .query(`SELECT IsClaimed FROM dbo.UserRewardProgress WHERE UserID = @userId AND RewardID = @rewardId`);
-
-            if (claimCheck.recordset[0]?.IsClaimed === false) {
-              totalFPAwarded += FitPointsValue || 0;
-            }
-          }
-        }
-      }
-
-      // Update challenges
-      for (const update of result.challengesToUpdate || []) {
-        if (!update.challengeId) continue;
-
-        await transaction.request()
-          .input("challengeId", update.challengeId)
-          .input("userId", userId)
-          .input("progress", update.newProgress || 0)
-          .input("isCompleted", update.isCompleted ? 1 : 0)
-          .query(`
-            UPDATE dbo.GeneratedChallenges
-            SET CurrentProgress = @progress,
-                IsCompleted = @isCompleted,
-                CompletedAt = CASE WHEN @isCompleted = 1 THEN GETDATE() ELSE NULL END
-            WHERE GeneratedChallengeID = @challengeId AND UserID = @userId
-          `);
-
-        // Award FP for completed challenges
-        if (update.isCompleted) {
-          const challengeResult = await transaction.request()
-            .input("challengeId", update.challengeId)
-            .query(`SELECT FitPointsValue as FPReward FROM dbo.GeneratedChallenges WHERE GeneratedChallengeID = @challengeId AND IsCompleted = 1`);
-
-          if (challengeResult.recordset.length > 0) {
-            totalFPAwarded += challengeResult.recordset[0].FPReward || 0;
-          }
-        }
-      }
-
-      // Update user's total FP if any awarded
-      if (totalFPAwarded > 0) {
-        await transaction.request()
-          .input("userId", userId)
-          .input("fp", totalFPAwarded)
-          .query(`
-            UPDATE dbo.UserRewards
-            SET TotalFitPoints = TotalFitPoints + @fp, LastUpdated = GETDATE()
-            WHERE UserID = @userId
-          `);
-
-        // Record in history
-        await transaction.request()
-          .input("userId", userId)
-          .input("fp", totalFPAwarded)
-          .input("reason", "AI Reconcile Award")
-          .query(`
-            INSERT INTO dbo.UserRewardHistory (UserID, XPEarned, Reason, EarnedAt)
-            VALUES (@userId, @fp, @reason, GETDATE())
-          `);
-      }
-
-      await transaction.commit();
-
-      res.status(200).json({
-        success: true,
-        updates: result.rewardsToUpdate || [],
-        challengeUpdates: result.challengesToUpdate || [],
-        fpAwarded: totalFPAwarded,
-        summary: result.summary || "Reconciliation complete",
-      });
-
-    } catch (txErr) {
-      await transaction.rollback();
-      throw txErr;
-    }
-
   } catch (error) {
-    logger.error("AI Reconcile Error", { error: error.message, stack: error.stack, userId });
+    logger.error("Reconcile Error", { error: error.message, userId });
     res.status(500).json({
       success: false,
-      message: "AI reconcile failed",
-      error: error.message, // Temporarily show error for debugging
-      errorType: error.name,
+      message: "Reconcile failed",
+      error: error.message,
     });
   }
 });
@@ -1668,6 +1413,244 @@ router.post("/challenges/:challengeId/progress", authenticateToken, async (req, 
   } catch (error) {
     logger.error("Update Challenge Progress Error", { error: error.message, userId, challengeId });
     res.status(500).json({ message: "Failed to update challenge progress" });
+  }
+});
+
+// ============================================
+// CHALLENGE SUGGESTION ENDPOINTS (NEW)
+// ============================================
+
+/**
+ * @swagger
+ * /rewards/challenges/suggestions:
+ *   post:
+ *     summary: Get AI-generated challenge suggestions
+ *     description: Returns 1-3 personalized, progressive challenge suggestions that users can Accept or Decline. Suggestions are ephemeral (not stored until accepted).
+ *     tags: [Rewards]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               count:
+ *                 type: integer
+ *                 default: 3
+ *                 minimum: 1
+ *                 maximum: 5
+ *                 description: Number of suggestions to generate
+ *     responses:
+ *       200:
+ *         description: Challenge suggestions generated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 suggestions:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       title:
+ *                         type: string
+ *                       description:
+ *                         type: string
+ *                       difficulty:
+ *                         type: string
+ *                         enum: [Easy, Medium, Hard]
+ *                       requiredCount:
+ *                         type: integer
+ *                       fitPoints:
+ *                         type: integer
+ *                 fromAI:
+ *                   type: boolean
+ *                 context:
+ *                   type: object
+ *                 generationTimeMs:
+ *                   type: integer
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/challenges/suggestions", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const count = Math.max(1, Math.min(5, parseInt(req.body.count) || 3));
+
+  try {
+    const result = await challengeSuggestionService.generateProgressiveSuggestions(userId, count);
+
+    res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    logger.error("Get Challenge Suggestions Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to generate challenge suggestions" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/challenges/accept:
+ *   post:
+ *     summary: Accept a challenge suggestion
+ *     description: Accepts a suggestion and stores it as an active challenge in GeneratedChallenges table
+ *     tags: [Rewards]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - suggestion
+ *             properties:
+ *               suggestion:
+ *                 type: object
+ *                 required:
+ *                   - title
+ *                   - description
+ *                   - difficulty
+ *                   - requiredCount
+ *                   - fitPoints
+ *                 properties:
+ *                   title:
+ *                     type: string
+ *                   description:
+ *                     type: string
+ *                   difficulty:
+ *                     type: string
+ *                     enum: [Easy, Medium, Hard]
+ *                   requiredCount:
+ *                     type: integer
+ *                   fitPoints:
+ *                     type: integer
+ *     responses:
+ *       200:
+ *         description: Challenge accepted and stored
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 challenge:
+ *                   type: object
+ *                   description: The stored challenge with its ID
+ *       400:
+ *         description: Invalid request - missing suggestion
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/challenges/accept", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { suggestion } = req.body;
+
+  if (!suggestion || !suggestion.title || !suggestion.difficulty) {
+    return res.status(400).json({
+      message: "Invalid request. Must provide suggestion with title, description, difficulty, requiredCount, and fitPoints",
+    });
+  }
+
+  try {
+    const challenge = await challengeSuggestionService.acceptSuggestion(userId, suggestion);
+
+    res.status(200).json({
+      success: true,
+      challenge,
+      message: "Challenge accepted and added to your active challenges",
+    });
+  } catch (error) {
+    logger.error("Accept Challenge Suggestion Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to accept challenge suggestion" });
+  }
+});
+
+/**
+ * @swagger
+ * /rewards/challenges/decline:
+ *   post:
+ *     summary: Decline a challenge suggestion with optional feedback
+ *     description: Records feedback for AI learning. The suggestion is NOT stored as a challenge.
+ *     tags: [Rewards]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - suggestion
+ *             properties:
+ *               suggestion:
+ *                 type: object
+ *                 required:
+ *                   - title
+ *                   - difficulty
+ *                 properties:
+ *                   title:
+ *                     type: string
+ *                   difficulty:
+ *                     type: string
+ *               feedbackType:
+ *                 type: string
+ *                 enum: [too_hard, too_easy, not_interested, takes_too_long, already_doing]
+ *                 description: Optional - reason for declining. If not provided, no feedback is recorded.
+ *     responses:
+ *       200:
+ *         description: Suggestion declined (feedback recorded if provided)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 feedbackRecorded:
+ *                   type: boolean
+ *       400:
+ *         description: Invalid feedback type
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ */
+router.post("/challenges/decline", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { suggestion, feedbackType } = req.body;
+
+  if (!suggestion || !suggestion.title) {
+    return res.status(400).json({
+      message: "Invalid request. Must provide suggestion with at least title and difficulty",
+    });
+  }
+
+  try {
+    // If no feedbackType provided, just acknowledge the decline without recording feedback
+    if (!feedbackType) {
+      logger.info("Suggestion declined without feedback", { userId, title: suggestion.title });
+      return res.status(200).json({
+        success: true,
+        feedbackRecorded: false,
+        message: "Suggestion declined",
+      });
+    }
+
+    // Record feedback for AI learning
+    const result = await challengeSuggestionService.declineSuggestion(userId, suggestion, feedbackType);
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    res.status(200).json({
+      success: true,
+      feedbackRecorded: true,
+      feedbackType,
+      message: "Suggestion declined and feedback recorded for better future suggestions",
+    });
+  } catch (error) {
+    logger.error("Decline Challenge Suggestion Error", { error: error.message, userId });
+    res.status(500).json({ message: "Failed to decline challenge suggestion" });
   }
 });
 
