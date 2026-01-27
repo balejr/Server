@@ -1002,7 +1002,7 @@ router.get("/v2/streaks", authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const r = await pool.request().input("userId", userId).query(`
-      SELECT UserId, StreakType, CurrentStreak, LongsStreak, LastActivityDate
+      SELECT UserId, StreakType, CurrentStreak, LongestStreak, LastActivityDate
       FROM dbo.UserStreaks
       WHERE UserId=@userId
     `);
@@ -1086,18 +1086,25 @@ router.post("/v2/daily-awards", authenticateToken, async (req, res) => {
  */
 router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
   const userId = req.user.userId;
+
+  // Check if Gemini is configured FIRST (before any DB operations)
+  const apiKeyValid = GOOGLE_API_KEY && GOOGLE_API_KEY !== "undefined" && String(GOOGLE_API_KEY).trim() !== "";
+  if (!apiKeyValid) {
+    logger.info("AI reconcile skipped - Gemini not configured", { userId });
+    return res.status(200).json({
+      success: true,
+      skipped: true,
+      message: "AI reconcile not configured (set GEMINI_API_KEY in environment)",
+    });
+  }
+
   const pool = getPool();
 
   try {
-    // Check if Gemini is configured
-    if (!GOOGLE_API_KEY || GOOGLE_API_KEY === "undefined") {
-      logger.info("AI reconcile skipped - Gemini not configured", { userId });
-      return res.status(200).json({
-        success: true,
-        skipped: true,
-        message: "AI reconcile not configured",
-      });
-    }
+    // Extract user context from request payload (sent from mobile app)
+    const userContext = req.body?.context || {};
+    const source = req.body?.source || "unknown";
+    logger.info("AI reconcile started", { userId, source, hasContext: !!req.body?.context });
 
     // 1. Gather user context (last 30 days of activity)
     const [workoutsResult, dailyLogsResult, streaksResult, progressResult, challengesResult] = await Promise.all([
@@ -1153,14 +1160,22 @@ router.post("/v2/ai/reconcile", authenticateToken, async (req, res) => {
     const rewardProgress = progressResult.recordset || [];
     const activeChallenges = challengesResult.recordset || [];
 
-    // 2. Build context prompt for Gemini
+    // 2. Build context prompt for Gemini (including mobile app context if provided)
+    const mobileContext = userContext.recentActivity || {};
     const contextPrompt = `
 User Activity Summary (last 30 days):
+
+USER PROFILE:
+- Current Level: ${userContext.currentLevel || "Unknown"}
+- Current Tier: ${userContext.currentTier || "Unknown"}
+- Total FitPoints: ${userContext.totalFP || 0}
+- Request Source: ${source}
 
 WORKOUTS:
 - Total workout sessions: ${workouts.filter(w => w.Completed).length}
 - Unique workout days: ${new Set(workouts.filter(w => w.Completed).map(w => new Date(w.Date).toDateString())).size}
 - Recent exercises: ${workouts.slice(0, 10).map(w => w.ExerciseID).join(", ") || "None"}
+${mobileContext.workoutDays ? `- Mobile reported workout days (last 7): ${mobileContext.workoutDays}` : ""}
 
 DAILY LOGS:
 - Days logged: ${dailyLogs.length}
@@ -1168,15 +1183,24 @@ DAILY LOGS:
 - Days with 10k+ steps: ${dailyLogs.filter(d => d.Steps >= 10000).length}
 - Water logging days: ${dailyLogs.filter(d => d.WaterIntake > 0).length}
 - Sleep logging days: ${dailyLogs.filter(d => d.Sleep > 0).length}
+${mobileContext.waterLogDays ? `- Mobile reported water log days (last 7): ${mobileContext.waterLogDays}` : ""}
+${mobileContext.sleepLogDays ? `- Mobile reported sleep log days (last 7): ${mobileContext.sleepLogDays}` : ""}
 
 CURRENT STREAKS:
-${streaks.map(s => `- ${s.StreakType}: ${s.CurrentStreak} days (best: ${s.LongestStreak})`).join("\n") || "- No streaks recorded"}
+- Workout streak (from mobile): ${userContext.currentStreak || 0} days
+- Login streak (from mobile): ${userContext.loginStreak || 0} days
+${streaks.map(s => `- ${s.StreakType}: ${s.CurrentStreak} days (best: ${s.LongestStreak})`).join("\n") || "- No additional streaks recorded"}
 
 REWARD PROGRESS:
 ${rewardProgress.map(r => `- ${r.RewardKey}: ${r.CurrentProgress || 0}% ${r.IsCompleted ? "(COMPLETED)" : ""} ${r.IsClaimed ? "(CLAIMED)" : ""}`).join("\n") || "- No reward progress"}
 
 ACTIVE CHALLENGES:
 ${activeChallenges.map(c => `- [${c.ChallengeID}] ${c.Title} (${c.Category}/${c.Difficulty}): ${c.CurrentProgress}/${c.TargetValue} - ${c.FPReward} FP`).join("\n") || "- No active challenges"}
+
+PERSONALIZATION NOTES:
+- Prioritize rewards the user is close to completing
+- Consider their tier (${userContext.currentTier || "BRONZE"}) when evaluating challenge difficulty
+- Award progress fairly based on actual logged activity
 
 Based on this activity data, evaluate which rewards should be updated and calculate appropriate progress percentages.
 Return JSON matching the schema.`;
