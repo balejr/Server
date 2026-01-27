@@ -18,6 +18,7 @@ const {
 } = require("../middleware/validators");
 const logger = require("../utils/logger");
 const xpEventService = require("../services/xpEventService");
+const challengeSuggestionService = require("../services/challengeSuggestionService");
 const prService = require("../services/prService");
 const router = express.Router();
 
@@ -896,6 +897,7 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
 
     // Award workout completion XP if any exercises were completed
     let workoutXPResult = null;
+    let challengeTrackingResult = null;
     const hasCompletedExercises = exerciseList.some(item => item.completed);
     if (hasCompletedExercises) {
       try {
@@ -908,12 +910,26 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       } catch (xpError) {
         logger.warn("Workout XP award failed", { userId, error: xpError.message });
       }
+
+      // Auto-track workout completion for AI challenges
+      try {
+        challengeTrackingResult = await challengeSuggestionService.trackWorkoutCompletion(userId);
+        if (challengeTrackingResult.updatedCount > 0) {
+          logger.info("AI challenges auto-tracked for workout", {
+            userId,
+            updatedChallenges: challengeTrackingResult.challenges,
+          });
+        }
+      } catch (trackError) {
+        logger.warn("Challenge tracking failed", { userId, error: trackError.message });
+      }
     }
 
     res.status(200).json({
       message: "Exercise existence(s) added successfully",
       ids: insertedIds,
       xpAwarded: workoutXPResult,
+      challengesUpdated: challengeTrackingResult,
     });
   } catch (err) {
     logger.error("ExerciseExistence POST Error", { error: err.message });

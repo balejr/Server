@@ -32,7 +32,7 @@ const TIER_DIFFICULTY_PREFERENCE = {
   CHAMPION: "Hard",
 };
 
-// Compact system instruction (~150 tokens)
+// Compact system instruction (~200 tokens)
 const SUGGESTION_SYSTEM_PROMPT = `You are FitPoints Challenge AI. Generate progressive fitness challenges.
 
 RULES:
@@ -40,6 +40,13 @@ RULES:
 - Match difficulty to user's tier
 - Avoid patterns user has declined
 - Return ONLY valid JSON array
+
+AVOID (already covered by static rewards - generate SPECIFIC versions instead):
+- "Log water" / "Track hydration" → use specific amounts like "Drink 150oz this week"
+- "Complete a workout" → use specific counts like "Complete 5 workouts this week"
+- "Sign in" / "Open the app" → use streaks like "7-day login streak"
+- "Log sleep" / "Track sleep" → use quality goals like "Get 7+ hours 5 nights this week"
+- "Log your stats" → use specific metrics like "Hit 10k steps 4 days this week"
 
 OUTPUT: [{"title":"...","description":"...","difficulty":"Easy|Medium|Hard","requiredCount":N,"fitPoints":15|30|50}]`;
 
@@ -151,11 +158,11 @@ async function getUserProgressContext(userId) {
   const workoutResult = await pool.request()
     .input("userId", userId)
     .query(`
-      SELECT COUNT(DISTINCT CAST(WorkoutRoutineDate AS DATE)) as workoutDays
+      SELECT COUNT(DISTINCT CAST(Date AS DATE)) as workoutDays
       FROM dbo.ExerciseExistence
       WHERE UserID = @userId
         AND Completed = 1
-        AND WorkoutRoutineDate >= DATEADD(DAY, -7, GETDATE())
+        AND Date >= DATEADD(DAY, -7, GETDATE())
     `);
 
   const profile = profileResult.recordset[0] || {};
@@ -274,13 +281,13 @@ function generateFallbackSuggestions(context, count) {
     fitPoints: FITPOINTS_BY_DIFFICULTY[targetWorkouts >= 5 ? "Hard" : targetWorkouts >= 3 ? "Medium" : "Easy"],
   });
 
-  // Consistency suggestion
+  // Consistency suggestion (specific, not generic "log stats")
   suggestions.push({
-    title: "Log Your Daily Stats",
-    description: "Track water, sleep, and steps consistently for better insights",
-    difficulty: "Easy",
-    requiredCount: 1,
-    fitPoints: 15,
+    title: "Hit 8k Steps 5 Days This Week",
+    description: "Build consistency by reaching 8,000 steps on 5 different days",
+    difficulty: "Medium",
+    requiredCount: 5,
+    fitPoints: 30,
   });
 
   // Harder suggestion for higher tiers
@@ -409,6 +416,20 @@ async function generateProgressiveSuggestions(userId, count = 3) {
 }
 
 /**
+ * Determine challenge category based on expiry timeframe
+ *
+ * @param {Date|null} expiresAt - Challenge expiration date
+ * @returns {string} Category: 'daily', 'weekly', or 'monthly'
+ */
+function getCategoryByExpiry(expiresAt) {
+  if (!expiresAt) return "monthly"; // No expiry = monthly
+  const hoursUntilExpiry = (new Date(expiresAt) - new Date()) / (1000 * 60 * 60);
+  if (hoursUntilExpiry <= 24) return "daily";
+  if (hoursUntilExpiry <= 168) return "weekly"; // 7 days
+  return "monthly";
+}
+
+/**
  * Accept a suggestion - store it as an active challenge
  *
  * @param {number} userId - User ID
@@ -431,12 +452,15 @@ async function acceptSuggestion(userId, suggestion) {
     expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days for larger goals
   }
 
+  // Set category based on expiry timeframe (daily/weekly/monthly)
+  const category = getCategoryByExpiry(expiresAt);
+
   const result = await pool.request()
     .input("userId", userId)
     .input("title", suggestion.title)
     .input("description", suggestion.description)
     .input("fitPoints", suggestion.fitPoints || FITPOINTS_BY_DIFFICULTY[suggestion.difficulty] || 30)
-    .input("category", "suggested") // Mark as user-accepted suggestion
+    .input("category", category) // Category based on expiry timeframe
     .input("difficulty", suggestion.difficulty)
     .input("requiredCount", suggestion.requiredCount)
     .input("expiresAt", expiresAt)
@@ -514,10 +538,114 @@ async function declineSuggestion(userId, suggestion, feedbackType) {
   };
 }
 
+/**
+ * Auto-track workout completion for AI challenges
+ *
+ * Called when a user completes a workout. Finds and updates any active
+ * workout-related AI challenges (e.g., "Complete 3 workouts this week").
+ *
+ * @param {number} userId - User ID
+ * @returns {Promise<Object>} Updated challenges info
+ */
+async function trackWorkoutCompletion(userId) {
+  const pool = getPool();
+
+  // Patterns that indicate workout-related challenges
+  const workoutPatterns = [
+    "%workout%",
+    "%exercise%",
+    "%training%",
+    "%session%",
+    "%routine%",
+  ];
+
+  try {
+    // Find active challenges that match workout patterns
+    const patternConditions = workoutPatterns
+      .map((_, i) => `ChallengeTitle LIKE @pattern${i} OR ChallengeDescription LIKE @pattern${i}`)
+      .join(" OR ");
+
+    const request = pool.request().input("userId", userId);
+    workoutPatterns.forEach((pattern, i) => {
+      request.input(`pattern${i}`, pattern);
+    });
+
+    const result = await request.query(`
+      SELECT
+        GeneratedChallengeID as id,
+        ChallengeTitle as title,
+        CurrentProgress as currentProgress,
+        RequiredCount as requiredCount,
+        FitPointsValue as fitPoints,
+        IsCompleted as isCompleted
+      FROM dbo.GeneratedChallenges
+      WHERE UserID = @userId
+        AND IsActive = 1
+        AND IsDeleted = 0
+        AND IsCompleted = 0
+        AND (ExpiresAt IS NULL OR ExpiresAt > SYSDATETIMEOFFSET())
+        AND (${patternConditions})
+    `);
+
+    const updatedChallenges = [];
+
+    for (const challenge of result.recordset) {
+      const newProgress = challenge.currentProgress + 1;
+      const isNowCompleted = newProgress >= challenge.requiredCount;
+
+      // Update progress
+      await pool.request()
+        .input("challengeId", challenge.id)
+        .input("newProgress", newProgress)
+        .input("isCompleted", isNowCompleted ? 1 : 0)
+        .query(`
+          UPDATE dbo.GeneratedChallenges
+          SET CurrentProgress = @newProgress,
+              IsCompleted = @isCompleted,
+              CompletedAt = CASE WHEN @isCompleted = 1 THEN SYSDATETIMEOFFSET() ELSE NULL END
+          WHERE GeneratedChallengeID = @challengeId
+        `);
+
+      updatedChallenges.push({
+        id: challenge.id,
+        title: challenge.title,
+        previousProgress: challenge.currentProgress,
+        newProgress,
+        requiredCount: challenge.requiredCount,
+        isCompleted: isNowCompleted,
+        fitPoints: isNowCompleted ? challenge.fitPoints : 0,
+      });
+
+      logger.info("Auto-tracked workout for challenge", {
+        userId,
+        challengeId: challenge.id,
+        title: challenge.title,
+        progress: `${newProgress}/${challenge.requiredCount}`,
+        completed: isNowCompleted,
+      });
+    }
+
+    return {
+      success: true,
+      updatedCount: updatedChallenges.length,
+      challenges: updatedChallenges,
+    };
+  } catch (error) {
+    logger.error("trackWorkoutCompletion error:", error.message);
+    return {
+      success: false,
+      error: error.message,
+      updatedCount: 0,
+      challenges: [],
+    };
+  }
+}
+
 module.exports = {
   getUserProgressContext,
   generateProgressiveSuggestions,
   acceptSuggestion,
   declineSuggestion,
+  trackWorkoutCompletion,
   FITPOINTS_BY_DIFFICULTY,
 };

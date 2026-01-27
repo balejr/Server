@@ -46,7 +46,7 @@ async function awardXP(userId, xpAmount, reason, rewardId = null, pool = null) {
       .request()
       .input("userId", userId)
       .query(`
-        SELECT ur.TotalXP, ur.CurrentLevel, us.CurrentStreak
+        SELECT ur.TotalFitPoints, ur.CurrentLevel, us.CurrentStreak
         FROM dbo.UserRewards ur
         LEFT JOIN dbo.UserStreaks us ON ur.UserID = us.UserID AND us.StreakType = 'workout'
         WHERE ur.UserID = @userId
@@ -61,11 +61,11 @@ async function awardXP(userId, xpAmount, reason, rewardId = null, pool = null) {
         .request()
         .input("userId", userId)
         .query(`
-          INSERT INTO dbo.UserRewards (UserID, TotalXP, CurrentLevel, CurrentTier)
+          INSERT INTO dbo.UserRewards (UserID, TotalFitPoints, CurrentLevel, CurrentTier)
           VALUES (@userId, 0, 1, 'BRONZE')
         `);
     } else {
-      currentXP = userResult.recordset[0].TotalXP || 0;
+      currentXP = userResult.recordset[0].TotalFitPoints || 0;
       streakDays = userResult.recordset[0].CurrentStreak || 0;
     }
 
@@ -88,7 +88,7 @@ async function awardXP(userId, xpAmount, reason, rewardId = null, pool = null) {
       .input("levelUpAt", levelUpResult.leveledUp ? new Date() : null)
       .query(`
         UPDATE dbo.UserRewards
-        SET TotalXP = @newXP,
+        SET TotalFitPoints = @newXP,
             CurrentLevel = @newLevel,
             CurrentTier = @newTier,
             LevelUpAt = CASE WHEN @levelUpAt IS NOT NULL THEN @levelUpAt ELSE LevelUpAt END,

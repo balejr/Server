@@ -220,7 +220,7 @@ const config = {
 | `UserStreaks`       | StreakID (PK), UserID, StreakType, CurrentStreak, LongestStreak, LastActivityDate              | Streak tracking           |
 | `DailyXPAwards`     | AwardID (PK), UserID, AwardType, AwardDate, XPAwarded, AwardedAt                               | Prevent double XP awards  |
 
-**Reward Categories:** `daily`, `weekly`, `monthly`, `universal`, `streak`, `special`
+**Reward Categories:** `daily`, `weekly`, `monthly`, `streak`, `special` (Note: `universal` category deprecated - items moved to `daily` or badges)
 
 **Level System (1-21+):**
 
@@ -1282,7 +1282,17 @@ Generates 1-3 personalized, progressive challenge suggestions using AI. Suggesti
 
 **POST /rewards/challenges/accept**
 
-Accepts a suggestion and stores it as an active challenge.
+Accepts a suggestion and stores it as an active challenge. The challenge's category is automatically assigned based on expiry timeframe:
+- `daily` - Expires within 24 hours (requiredCount <= 1)
+- `weekly` - Expires within 7 days (requiredCount 2-7)
+- `monthly` - Expires in 30+ days (requiredCount > 7)
+
+This allows AI challenges to be merged into the unified reward category accordions on the frontend.
+
+**Auto-Tracking:**
+AI challenges automatically track progress for certain activities:
+- **Workout challenges** (e.g., "Complete 3 workouts this week"): Progress updates automatically when workouts are logged via `POST /data/exerciseexistences`
+- The `trackWorkoutCompletion()` function in `challengeSuggestionService.js` handles this
 
 **Request:**
 ```json

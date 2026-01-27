@@ -21,11 +21,11 @@ async function checkWeeklyGoal(userId, pool) {
     const result = await pool.request()
       .input("userId", userId)
       .query(`
-        SELECT COUNT(DISTINCT CAST(WorkoutRoutineDate AS DATE)) as workout_days
+        SELECT COUNT(DISTINCT CAST([Date] AS DATE)) as workout_days
         FROM dbo.ExerciseExistence
         WHERE UserID = @userId
           AND Completed = 1
-          AND WorkoutRoutineDate >= DATEADD(DAY, -7, GETDATE())
+          AND [Date] >= DATEADD(DAY, -7, GETDATE())
       `);
 
     const workoutDays = result.recordset[0]?.workout_days || 0;
@@ -124,7 +124,7 @@ async function checkPerfectMonth(userId, pool) {
           WHERE UserID = @userId
           UNION
           -- Days with completed workouts
-          SELECT DISTINCT CAST(WorkoutRoutineDate AS DATE)
+          SELECT DISTINCT CAST([Date] AS DATE)
           FROM dbo.ExerciseExistence
           WHERE UserID = @userId AND Completed = 1
         ),
