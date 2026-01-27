@@ -247,6 +247,30 @@ const config = {
 | Daily combo      | 5    | Workout + water + sleep    |
 | Streak bonus     | +10% | Applied after 7-day streak |
 
+**XP Award Tracking (`services/xpEventService.js`):**
+
+All XP events are recorded in `DailyXPAwards` table to prevent duplicate awards and enable daily status tracking:
+- `wasAwardedToday(userId, awardType)` - Checks if user already received award today
+- `recordDailyAward(userId, awardType, xpAmount)` - Records award with unique constraint on (UserID, AwardType, AwardDate). Returns `true` if insert succeeded, `false` if unique constraint was violated.
+
+**Race Condition Prevention:** The unique constraint `UQ_DailyXP_UserTypeDate` is the authoritative check for concurrent requests. When two requests race:
+1. Both pass `wasAwardedToday()` check (no record exists yet)
+2. First `recordDailyAward()` INSERT succeeds, returns `true` → proceeds to award XP
+3. Second `recordDailyAward()` INSERT fails (unique constraint), returns `false` → returns early without awarding XP
+
+This ensures only the first concurrent request awards XP, preventing duplicate XP exploits.
+
+The `GET /rewards/user` endpoint maps these AwardTypes to rewardKeys for the frontend:
+| AwardType        | RewardKey        |
+| ---------------- | ---------------- |
+| `water_log`      | `log_water`      |
+| `sleep_log`      | `log_sleep`      |
+| `step_goal`      | `step_goal`      |
+| `form_review`    | `form_ai_review` |
+| `daily_combo`    | `daily_combo`    |
+| `workout_complete` | `complete_workout` |
+| `custom_routine` | `complete_workout` |
+
 **Achievement Badges:**
 
 | Badge Key          | Name             | Requirement                      | XP Reward |

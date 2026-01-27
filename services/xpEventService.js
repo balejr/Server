@@ -167,11 +167,13 @@ async function recordDailyAward(userId, awardType, xpAmount, pool) {
         INSERT INTO dbo.DailyXPAwards (UserID, AwardType, AwardDate, XPAwarded)
         VALUES (@userId, @awardType, CAST(GETDATE() AS DATE), @xpAmount)
       `);
+    return true; // Insert succeeded - this request owns the award
   } catch (error) {
-    // Unique constraint violation means already awarded - that's OK
-    if (!error.message.includes("UQ_DailyXP_UserTypeDate")) {
-      throw error;
+    // Unique constraint violation means already awarded by another request
+    if (error.message.includes("UQ_DailyXP_UserTypeDate")) {
+      return false; // Another concurrent request already claimed this award
     }
+    throw error;
   }
 }
 
@@ -292,6 +294,18 @@ async function awardWorkoutComplete(userId, isCustomRoutine = false) {
     : XP_VALUES.WORKOUT_COMPLETE;
 
   try {
+    // Check if already awarded today
+    if (await wasAwardedToday(userId, awardType, pool)) {
+      return { awarded: false, reason: "Already awarded today" };
+    }
+
+    // Record the daily award - this is the authoritative check for concurrent requests
+    const inserted = await recordDailyAward(userId, awardType, xpAmount, pool);
+    if (!inserted) {
+      // Another concurrent request already claimed this award
+      return { awarded: false, reason: "Already awarded today" };
+    }
+
     // Update workout streak
     await updateStreak(userId, "workout", pool);
 
@@ -307,10 +321,10 @@ async function awardWorkoutComplete(userId, isCustomRoutine = false) {
     // Check for daily combo after workout
     await checkDailyCombo(userId, pool);
 
-    return result;
+    return { awarded: true, ...result };
   } catch (error) {
     logger.error("awardWorkoutComplete error:", error.message);
-    throw error;
+    return { awarded: false, error: error.message };
   }
 }
 
@@ -325,7 +339,11 @@ async function awardWaterLog(userId) {
       return { awarded: false, reason: "Already awarded today" };
     }
 
-    await recordDailyAward(userId, "water_log", XP_VALUES.WATER_LOG, pool);
+    // Record the daily award - this is the authoritative check for concurrent requests
+    const inserted = await recordDailyAward(userId, "water_log", XP_VALUES.WATER_LOG, pool);
+    if (!inserted) {
+      return { awarded: false, reason: "Already awarded today" };
+    }
 
     // Update water streak
     await updateStreak(userId, "water", pool);
@@ -359,7 +377,11 @@ async function awardSleepLog(userId) {
       return { awarded: false, reason: "Already awarded today" };
     }
 
-    await recordDailyAward(userId, "sleep_log", XP_VALUES.SLEEP_LOG, pool);
+    // Record the daily award - this is the authoritative check for concurrent requests
+    const inserted = await recordDailyAward(userId, "sleep_log", XP_VALUES.SLEEP_LOG, pool);
+    if (!inserted) {
+      return { awarded: false, reason: "Already awarded today" };
+    }
 
     // Update sleep streak
     await updateStreak(userId, "sleep", pool);
@@ -397,7 +419,11 @@ async function awardStepGoal(userId, steps) {
       return { awarded: false, reason: "Already awarded today" };
     }
 
-    await recordDailyAward(userId, "step_goal", XP_VALUES.STEP_GOAL, pool);
+    // Record the daily award - this is the authoritative check for concurrent requests
+    const inserted = await recordDailyAward(userId, "step_goal", XP_VALUES.STEP_GOAL, pool);
+    if (!inserted) {
+      return { awarded: false, reason: "Already awarded today" };
+    }
 
     const result = await awardXP(
       userId,
@@ -426,7 +452,11 @@ async function awardFormReview(userId) {
       return { awarded: false, reason: "Already awarded today" };
     }
 
-    await recordDailyAward(userId, "form_review", XP_VALUES.FORM_REVIEW, pool);
+    // Record the daily award - this is the authoritative check for concurrent requests
+    const inserted = await recordDailyAward(userId, "form_review", XP_VALUES.FORM_REVIEW, pool);
+    if (!inserted) {
+      return { awarded: false, reason: "Already awarded today" };
+    }
 
     const result = await awardXP(
       userId,
@@ -508,7 +538,12 @@ async function checkDailyCombo(userId, pool) {
     );
 
     if (hasWorkout && hasWater && hasSleep) {
-      await recordDailyAward(userId, "daily_combo", XP_VALUES.DAILY_COMBO, pool);
+      // Record the daily award - this is the authoritative check for concurrent requests
+      const inserted = await recordDailyAward(userId, "daily_combo", XP_VALUES.DAILY_COMBO, pool);
+      if (!inserted) {
+        // Already awarded by another request
+        return { awarded: false, reason: "Already awarded today" };
+      }
 
       const result = await awardXP(
         userId,
