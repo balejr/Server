@@ -28,6 +28,7 @@ let createdExerciseExistenceId;
 let createdWorkoutRoutineId;
 let createdMesocycleId;
 let createdMicrocycleId;
+let createdCustomExerciseId;
 
 // Today's date for test data
 const today = new Date().toISOString().split("T")[0];
@@ -276,6 +277,155 @@ describe("Data Routes API", () => {
 
       test("requires authentication", async () => {
         const { response } = await api.delete("/data/dailylog/1");
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
+  // EXERCISES (CUSTOM)
+  // =========================================================================
+
+  describe("Custom Exercises", () => {
+    describe("POST /data/exercises", () => {
+      test("creates a custom exercise", async () => {
+        const state = getState();
+        const payload = {
+          ExerciseName: "Test Custom Exercise",
+          ExerciseId: `custom_test_${Date.now()}`,
+          TargetMuscle: "core",
+          Equipment: "bodyweight",
+          Instructions: "Keep form strict and controlled.",
+          ImageURL: "https://example.com/custom.gif",
+        };
+
+        const { response, duration } = await api.post(
+          "/data/exercises",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect([200, 201]).toContain(response.status);
+        expect(response.data.success).toBe(true);
+        expect(response.data.data).toHaveProperty("MasterExerciseID");
+        expect(response.data.data).toHaveProperty("ExerciseId");
+
+        createdCustomExerciseId = response.data.data.ExerciseId;
+        console.log(`     Custom exercise saved (${duration}ms)`);
+      });
+
+      test("is idempotent for existing ExerciseId", async () => {
+        if (!createdCustomExerciseId) {
+          console.log("     [SKIP] No custom exercise created");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.post(
+          "/data/exercises",
+          {
+            ExerciseName: "Test Custom Exercise",
+            ExerciseId: createdCustomExerciseId,
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        expect(response.data.data.ExerciseId).toBe(createdCustomExerciseId);
+      });
+
+      test("rejects missing ExerciseName", async () => {
+        const state = getState();
+        const { response } = await api.post(
+          "/data/exercises",
+          { ExerciseId: `custom_missing_${Date.now()}` },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(400);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/data/exercises", {
+          ExerciseName: "No Auth Exercise",
+        });
+
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
+  // PRE ASSESSMENT
+  // =========================================================================
+
+  describe("Pre Assessment", () => {
+    describe("POST /data/preworkoutassessment", () => {
+      test("creates pre assessment with valid data", async () => {
+        const state = getState();
+        const payload = {
+          WorkoutPlanID: "plan-123",
+          Feeling: "Energized",
+          WaterIntake: "2L",
+          SleepQuality: 4,
+          SleepHours: "7.5",
+          RecoveryStatus: "Ready",
+          CreatedAt: new Date().toISOString(),
+        };
+
+        const { response, duration } = await api.post(
+          "/data/preworkoutassessment",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        console.log(`     Pre assessment saved (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/data/preworkoutassessment", {
+          Feeling: "Good",
+        });
+
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
+  // POST ASSESSMENT
+  // =========================================================================
+
+  describe("Post Assessment", () => {
+    describe("POST /data/postassessment", () => {
+      test("creates post assessment with valid data", async () => {
+        const state = getState();
+        const payload = {
+          FeelingAfterWorkout: "Great session",
+          Assessperformance: "Felt strong and stable",
+          NextSessionPlans: "Increase reps next time",
+          LastUpdateDate: new Date().toISOString(),
+        };
+
+        const { response, duration } = await api.post(
+          "/data/postassessment",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        console.log(`     Post assessment saved (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.post("/data/postassessment", {
+          FeelingAfterWorkout: "Good",
+        });
+
         expect(response.status).toBe(401);
       });
     });

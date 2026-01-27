@@ -1083,12 +1083,21 @@ Routes to correct payment gateway based on user's subscription.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/exercises` | Get exercise database from ExerciseDB API |
+| POST | `/exercises` | Create custom exercise in dbo.Exercise |
 | GET | `/exerciseexistences` | Get user's logged exercises (paginated) |
 | GET | `/exerciseexistence/user/:exerciseId` | Get logged exercises by exercise ID |
 | GET | `/exerciseexistence/date/:date` | Get logged exercises by date |
 | POST | `/exerciseexistence` | Log new exercise(s) |
 | PATCH | `/exerciseexistence/:id` | Update logged exercise |
 | DELETE | `/exerciseexistence/:id` | Delete logged exercise |
+
+**Custom Exercise (POST `/exercises`)**
+
+**Body Fields:** `ExerciseName` (required), `ExerciseId` (optional), `TargetMuscle`, `Equipment`, `Instructions`, `ImageURL`.
+
+**Notes:**
+- If `ExerciseId` is omitted, the server generates a `custom_<userId>_<timestamp>_<uuid>` ID.
+- Requests are idempotent by `ExerciseId` (existing record returns `200`).
 
 **Exercise History:**
 | Method | Endpoint | Description |

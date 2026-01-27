@@ -1082,6 +1082,46 @@ muscle: 42.3
 
 ---
 
+### Custom Exercises
+
+#### Create Custom Exercise
+
+| Setting       | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| **Method**    | `POST`                                                      |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/exercises`    |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                |
+| **Body Type** | raw → JSON                                                  |
+
+**Body:**
+
+```json
+{
+  "ExerciseName": "Custom Sit-Up",
+  "ExerciseId": "custom_12345",
+  "TargetMuscle": "core",
+  "Equipment": "bodyweight",
+  "Instructions": "Keep your core engaged.",
+  "ImageURL": "https://example.com/custom.gif"
+}
+```
+
+**Expected Response (201 Created):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "MasterExerciseID": 1001,
+    "ExerciseId": "custom_12345"
+  }
+}
+```
+
+> **Note:** If `ExerciseId` already exists, the API returns `200 OK` with the existing record.
+
+---
+
 ### Exercise Instances
 
 #### Create Exercise Instance
