@@ -16,6 +16,21 @@ const challengeSuggestionService = require("../services/challengeSuggestionServi
 const logger = require("../utils/logger");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// Tier progression helpers
+const TIER_ORDER = ["BRONZE", "SILVER", "GOLD", "EXCLUSIVE", "CHAMPION"];
+const TIER_MIN_XP = { BRONZE: 0, SILVER: 500, GOLD: 1500, EXCLUSIVE: 3000, CHAMPION: 5000 };
+
+function getNextTier(currentTier) {
+  const idx = TIER_ORDER.indexOf(currentTier);
+  return idx >= 0 && idx < TIER_ORDER.length - 1 ? TIER_ORDER[idx + 1] : null;
+}
+
+function getXPToNextTier(currentTier, currentXP) {
+  const nextTier = getNextTier(currentTier);
+  if (!nextTier) return 0;
+  return Math.max(0, TIER_MIN_XP[nextTier] - currentXP);
+}
+
 // Gemini AI Configuration
 const GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
 const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "gemini-2.5-pro";
@@ -53,21 +68,6 @@ Return a JSON object with:
 }`;
 
 const router = express.Router();
-
-// Tier thresholds (legacy)
-const TIERS = {
-  BRONZE: { minXP: 0, maxXP: 100 },
-  SILVER: { minXP: 100, maxXP: 500 },
-  GOLD: { minXP: 500, maxXP: 1000 },
-  EXCLUSIVE: { minXP: 1000, maxXP: Infinity },
-};
-
-function calculateTier(totalXP) {
-  if (totalXP >= TIERS.EXCLUSIVE.minXP) return "EXCLUSIVE";
-  if (totalXP >= TIERS.GOLD.minXP) return "GOLD";
-  if (totalXP >= TIERS.SILVER.minXP) return "SILVER";
-  return "BRONZE";
-}
 
 function getWeekStartDateUTC(d = new Date()) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -152,6 +152,8 @@ router.get("/user", authenticateToken, async (req, res) => {
             WHEN 'step_goal' THEN 'step_goal'
             WHEN 'form_review' THEN 'form_ai_review'
             WHEN 'daily_combo' THEN 'daily_combo'
+            WHEN 'workout_complete' THEN 'complete_workout'
+            WHEN 'custom_routine' THEN 'complete_workout'
             ELSE AwardType
           END as rewardKey,
           1 as completed
@@ -171,6 +173,7 @@ router.get("/user", authenticateToken, async (req, res) => {
       "step_goal",
       "form_ai_review",
       "daily_combo",
+      "complete_workout",
     ];
 
     const rewardProgress = {};
@@ -251,16 +254,10 @@ router.get("/user", authenticateToken, async (req, res) => {
         tierName: levelProgress.tierName,
       },
       tierProgress: {
-        current: userRewards.CurrentTier,
+        current: levelProgress.tier,
         currentXP: totalFitPoints,
-        nextTier:
-          userRewards.CurrentTier === "EXCLUSIVE"
-            ? null
-            : calculateTier(totalFitPoints + 1),
-        xpToNextTier:
-          userRewards.CurrentTier === "EXCLUSIVE"
-            ? 0
-            : TIERS[calculateTier(totalFitPoints + 100)].minXP - totalFitPoints,
+        nextTier: getNextTier(levelProgress.tier),
+        xpToNextTier: getXPToNextTier(levelProgress.tier, totalFitPoints),
       },
       rewardProgress,
       completedRewards: completedResult.recordset.map((r) => ({
@@ -1484,7 +1481,7 @@ router.post("/challenges/suggestions", authenticateToken, async (req, res) => {
       ...result,
     });
   } catch (error) {
-    logger.error("Get Challenge Suggestions Error", { error: error.message, userId });
+    logger.error("Get Challenge Suggestions Error", { error: error.message, stack: error.stack, userId });
     res.status(500).json({ message: "Failed to generate challenge suggestions" });
   }
 });
