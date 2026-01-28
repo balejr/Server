@@ -1528,7 +1528,7 @@ router.post("/challenges/suggestions", authenticateToken, async (req, res) => {
     const result = await challengeSuggestionService.generateProgressiveSuggestions(userId, count);
 
     // Record usage after successful generation
-    const generatedCount = result.suggestions?.length || count;
+    const generatedCount = result.suggestions?.length ?? count;
     await challengeSuggestionService.recordSuggestionGeneration(userId, generatedCount);
 
     // Get updated rate limit info
