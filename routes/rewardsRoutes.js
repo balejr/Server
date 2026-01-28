@@ -1422,7 +1422,11 @@ router.post("/challenges/:challengeId/progress", authenticateToken, async (req, 
  * /rewards/challenges/suggestions:
  *   post:
  *     summary: Get AI-generated challenge suggestions
- *     description: Returns 1-3 personalized, progressive challenge suggestions that users can Accept or Decline. Suggestions are ephemeral (not stored until accepted).
+ *     description: |
+ *       Returns 1-3 personalized, progressive challenge suggestions that users can Accept or Decline.
+ *       Suggestions are ephemeral (not stored until accepted).
+ *
+ *       **Rate Limits:** 10 suggestions/hour, 20 suggestions/day
  *     tags: [Rewards]
  *     requestBody:
  *       content:
@@ -1466,6 +1470,30 @@ router.post("/challenges/:challengeId/progress", authenticateToken, async (req, 
  *                   type: object
  *                 generationTimeMs:
  *                   type: integer
+ *                 rateLimit:
+ *                   type: object
+ *                   properties:
+ *                     hourlyRemaining:
+ *                       type: integer
+ *                     dailyRemaining:
+ *                       type: integer
+ *       429:
+ *         description: Rate limit exceeded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   example: SUGGESTION_RATE_LIMIT_EXCEEDED
+ *                 message:
+ *                   type: string
+ *                 rateLimit:
+ *                   type: object
  *       401:
  *         $ref: '#/components/responses/UnauthorizedError'
  */
@@ -1474,11 +1502,47 @@ router.post("/challenges/suggestions", authenticateToken, async (req, res) => {
   const count = Math.max(1, Math.min(5, parseInt(req.body.count) || 3));
 
   try {
+    // Check rate limits before generating
+    const rateLimit = await challengeSuggestionService.checkSuggestionRateLimit(userId, count);
+
+    if (!rateLimit.allowed) {
+      const isHourly = rateLimit.reason === 'hourly_limit';
+      return res.status(429).json({
+        success: false,
+        error: 'SUGGESTION_RATE_LIMIT_EXCEEDED',
+        message: isHourly
+          ? `Hourly limit reached (${rateLimit.hourlyLimit}/hour). Try again later.`
+          : `Daily limit reached (${rateLimit.dailyLimit}/day). Try again tomorrow.`,
+        rateLimit: {
+          hourlyUsed: rateLimit.hourlyUsed,
+          dailyUsed: rateLimit.dailyUsed,
+          hourlyRemaining: rateLimit.hourlyRemaining,
+          dailyRemaining: rateLimit.dailyRemaining,
+          hourlyLimit: rateLimit.hourlyLimit,
+          dailyLimit: rateLimit.dailyLimit,
+        },
+      });
+    }
+
+    // Generate suggestions
     const result = await challengeSuggestionService.generateProgressiveSuggestions(userId, count);
+
+    // Record usage after successful generation
+    const generatedCount = result.suggestions?.length || count;
+    await challengeSuggestionService.recordSuggestionGeneration(userId, generatedCount);
+
+    // Get updated rate limit info
+    const updatedRateLimit = await challengeSuggestionService.checkSuggestionRateLimit(userId, 0);
 
     res.status(200).json({
       success: true,
       ...result,
+      rateLimit: {
+        hourlyRemaining: updatedRateLimit.hourlyRemaining,
+        dailyRemaining: updatedRateLimit.dailyRemaining,
+        hourlyLimit: updatedRateLimit.hourlyLimit,
+        dailyLimit: updatedRateLimit.dailyLimit,
+      },
     });
   } catch (error) {
     logger.error("Get Challenge Suggestions Error", { error: error.message, stack: error.stack, userId });

@@ -156,6 +156,7 @@ Tests use Jest with 30-second timeout. Database operations are mocked in `tests/
 - **UserAchievements** - User progress toward achievements/badges
 - **GeneratedChallenges** - AI-generated personalized challenges. Tracks title, description, FitPoints value, category (daily/weekly/monthly/universal), difficulty, progress, completion status
 - **ChallengeFeedback** - User feedback when deleting challenges. Records feedbackType (too_hard, too_easy, not_relevant, etc.) for AI improvement
+- **ChallengeSuggestionUsage** - Rate limiting for AI challenge suggestions. Tracks generation timestamps for 10/hour, 20/day limits
 
 ## Environment Variables
 

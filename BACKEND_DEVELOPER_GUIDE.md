@@ -677,10 +677,21 @@ const { safeFields, rejectedFields } = filterFields('DailyLogs', req.body);
 
 ### Usage Limits
 
+**Chatbot/Workout AI:**
+
 | User Type | General Inquiries | Workout Plans | Notes               |
 | --------- | ----------------- | ------------- | ------------------- |
 | Free      | 5/week            | 3/week        | Resets every Monday |
 | Premium   | 100/week          | 100/week      | Shared pool         |
+
+**Challenge Suggestions (All Users):**
+
+| Limit Type | Value | Rolling Window | Notes |
+| ---------- | ----- | -------------- | ----- |
+| Hourly     | 10    | Last 60 min    | Smooth UX for exploration |
+| Daily      | 20    | Last 24 hours  | Prevents API abuse |
+
+Tracked in `ChallengeSuggestionUsage` table with timestamps. Response includes `rateLimit` object with remaining counts.
 
 ### Pagination Defaults
 

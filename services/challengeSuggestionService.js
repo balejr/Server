@@ -23,6 +23,12 @@ const FITPOINTS_BY_DIFFICULTY = {
   Hard: 50,
 };
 
+// Rate limits for suggestion generation
+const SUGGESTION_RATE_LIMITS = {
+  HOURLY: 10,  // Max 10 suggestions per hour
+  DAILY: 20,   // Max 20 suggestions per day (24 hours)
+};
+
 // Preferred difficulty by tier
 const TIER_DIFFICULTY_PREFERENCE = {
   BRONZE: "Easy",
@@ -781,11 +787,101 @@ async function trackWorkoutCompletion(userId) {
   }
 }
 
+/**
+ * Check if user has exceeded suggestion generation rate limits
+ *
+ * @param {number} userId - User ID
+ * @param {number} requestedCount - Number of suggestions being requested
+ * @returns {Promise<Object>} Rate limit status
+ */
+async function checkSuggestionRateLimit(userId, requestedCount = 3) {
+  const pool = getPool();
+
+  try {
+    const result = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT
+          ISNULL(SUM(CASE WHEN GeneratedAt >= DATEADD(HOUR, -1, SYSDATETIME()) THEN SuggestionCount ELSE 0 END), 0) AS HourlyUsed,
+          ISNULL(SUM(CASE WHEN GeneratedAt >= DATEADD(HOUR, -24, SYSDATETIME()) THEN SuggestionCount ELSE 0 END), 0) AS DailyUsed
+        FROM dbo.ChallengeSuggestionUsage
+        WHERE UserID = @userId
+      `);
+
+    const { HourlyUsed, DailyUsed } = result.recordset[0];
+    const hourlyRemaining = Math.max(0, SUGGESTION_RATE_LIMITS.HOURLY - HourlyUsed);
+    const dailyRemaining = Math.max(0, SUGGESTION_RATE_LIMITS.DAILY - DailyUsed);
+
+    // Check if this request would exceed limits
+    const wouldExceedHourly = (HourlyUsed + requestedCount) > SUGGESTION_RATE_LIMITS.HOURLY;
+    const wouldExceedDaily = (DailyUsed + requestedCount) > SUGGESTION_RATE_LIMITS.DAILY;
+
+    return {
+      allowed: !wouldExceedHourly && !wouldExceedDaily,
+      hourlyUsed: HourlyUsed,
+      dailyUsed: DailyUsed,
+      hourlyRemaining,
+      dailyRemaining,
+      hourlyLimit: SUGGESTION_RATE_LIMITS.HOURLY,
+      dailyLimit: SUGGESTION_RATE_LIMITS.DAILY,
+      reason: wouldExceedHourly ? 'hourly_limit' : (wouldExceedDaily ? 'daily_limit' : null),
+    };
+  } catch (error) {
+    // If table doesn't exist yet, allow the request (graceful degradation)
+    if (error.message.includes('Invalid object name')) {
+      logger.warn('ChallengeSuggestionUsage table not found - rate limiting disabled');
+      return {
+        allowed: true,
+        hourlyUsed: 0,
+        dailyUsed: 0,
+        hourlyRemaining: SUGGESTION_RATE_LIMITS.HOURLY,
+        dailyRemaining: SUGGESTION_RATE_LIMITS.DAILY,
+        hourlyLimit: SUGGESTION_RATE_LIMITS.HOURLY,
+        dailyLimit: SUGGESTION_RATE_LIMITS.DAILY,
+        reason: null,
+      };
+    }
+    logger.error('checkSuggestionRateLimit error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Record a suggestion generation for rate limiting
+ *
+ * @param {number} userId - User ID
+ * @param {number} count - Number of suggestions generated
+ */
+async function recordSuggestionGeneration(userId, count) {
+  const pool = getPool();
+
+  try {
+    await pool.request()
+      .input('userId', userId)
+      .input('count', count)
+      .query(`
+        INSERT INTO dbo.ChallengeSuggestionUsage (UserID, SuggestionCount)
+        VALUES (@userId, @count)
+      `);
+  } catch (error) {
+    // If table doesn't exist, log warning but don't fail
+    if (error.message.includes('Invalid object name')) {
+      logger.warn('ChallengeSuggestionUsage table not found - skipping usage recording');
+      return;
+    }
+    logger.error('recordSuggestionGeneration error:', error.message);
+    // Don't throw - recording failure shouldn't break suggestion generation
+  }
+}
+
 module.exports = {
   getUserProgressContext,
   generateProgressiveSuggestions,
   acceptSuggestion,
   declineSuggestion,
   trackWorkoutCompletion,
+  checkSuggestionRateLimit,
+  recordSuggestionGeneration,
   FITPOINTS_BY_DIFFICULTY,
+  SUGGESTION_RATE_LIMITS,
 };
