@@ -1528,7 +1528,9 @@ router.post("/challenges/suggestions", authenticateToken, async (req, res) => {
     const result = await challengeSuggestionService.generateProgressiveSuggestions(userId, count);
 
     // Record usage after successful generation
-    const generatedCount = result.suggestions?.length ?? count;
+    // Use Math.max(1, ...) to ensure each API call costs at least 1 toward rate limit
+    // (prevents circumvention) while not inflating beyond actual suggestions received
+    const generatedCount = Math.max(1, result.suggestions?.length ?? 0);
     await challengeSuggestionService.recordSuggestionGeneration(userId, generatedCount);
 
     // Get updated rate limit info
