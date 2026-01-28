@@ -1976,6 +1976,11 @@ Start a new subscription payment flow.
 
 **Billing Intervals:** `monthly`, `semi_annual`, `annual`
 
+**Configuration Note:**
+
+- If `STRIPE_SECRET_KEY` is missing/blank, the API returns `500 Configuration Error` with a `STRIPE_SECRET_KEY` message.
+- Ensure `STRIPE_PRICE_ID_*` env vars are set before testing.
+
 ---
 
 ### Confirm Payment
