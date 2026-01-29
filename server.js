@@ -58,6 +58,7 @@ const routes = [
   { path: "/api/usage", file: "./routes/usageRoutes", sub: "router" },
   { path: "/api/workout", file: "./routes/workoutRoutes", sub: "router" },
   { path: "/api/rewards", file: "./routes/rewardsRoutes" },
+  { path: "/api/favorites", file: "./routes/favoritesRoutes" },
 ];
 
 routes.forEach(r => {
