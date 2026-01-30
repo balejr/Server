@@ -432,6 +432,36 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // PAYMENTS
+  // =========================================================================
+
+  describe("Payments", () => {
+    describe("POST /data/payments/initialize", () => {
+      test("fails fast when Stripe secret key is missing", async () => {
+        const stripeKey = String(process.env.STRIPE_SECRET_KEY || "").trim();
+        if (stripeKey) {
+          console.log("     [SKIP] STRIPE_SECRET_KEY is configured");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.post(
+          "/data/payments/initialize",
+          {
+            plan: "premium",
+            billingInterval: "monthly",
+            paymentMethod: "card",
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(500);
+        expect(response.data.message).toMatch(/STRIPE_SECRET_KEY/i);
+      });
+    });
+  });
+
+  // =========================================================================
   // DASHBOARD
   // =========================================================================
 

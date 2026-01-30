@@ -2577,11 +2577,15 @@ router.get("/exercises/history", authenticateToken, async (req, res) => {
 
 // module.exports = router;
 
+const getStripeSecretKey = () =>
+  String(process.env.STRIPE_SECRET_KEY || "").trim();
+
 // Safe initialization that won't crash the app
 let stripe = null;
 try {
-  if (process.env.STRIPE_SECRET_KEY) {
-    stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+  const stripeSecretKey = getStripeSecretKey();
+  if (stripeSecretKey) {
+    stripe = require("stripe")(stripeSecretKey);
     logger.info("Stripe initialized");
   } else {
     logger.warn("STRIPE_SECRET_KEY not set - Stripe features disabled");
@@ -2777,6 +2781,38 @@ function sendErrorResponse(res, statusCode, error, message, details = null) {
   return res.status(statusCode).json(response);
 }
 
+function ensureStripeConfigured(res) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "STRIPE_SECRET_KEY missing on server"
+    );
+  }
+
+  if (!stripeSecretKey.startsWith("sk_")) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "STRIPE_SECRET_KEY invalid on server"
+    );
+  }
+
+  if (!stripe) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "Stripe not initialized - check STRIPE_SECRET_KEY configuration"
+    );
+  }
+
+  return true;
+}
+
 // ========== PAYMENT ENDPOINTS ==========
 /**
  * @swagger
@@ -2802,14 +2838,8 @@ router.post("/payments/initialize", authenticateToken, async (req, res) => {
   logger.info("Payment initialization request received", { timestamp });
 
   try {
-    // Validate environment variables
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return sendErrorResponse(
-        res,
-        500,
-        "Configuration Error",
-        "STRIPE_SECRET_KEY missing on server"
-      );
+    if (!ensureStripeConfigured(res)) {
+      return;
     }
 
     // Map billing intervals to Stripe Price IDs
@@ -3844,13 +3874,8 @@ router.post("/payments/confirm", authenticateToken, async (req, res) => {
   console.log(`[${timestamp}] 📥 Payment confirmation request received`);
 
   try {
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return sendErrorResponse(
-        res,
-        500,
-        "Configuration Error",
-        "STRIPE_SECRET_KEY missing on server"
-      );
+    if (!ensureStripeConfigured(res)) {
+      return;
     }
 
     const { paymentIntentId, subscriptionId } = req.body || {};
@@ -4336,8 +4361,13 @@ async function updateSubscriptionInDatabase(
   billingInterval = null,
   cancellationScheduled = null
 ) {
-  if (!process.env.STRIPE_SECRET_KEY) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
     throw new Error("STRIPE_SECRET_KEY missing on server");
+  }
+
+  if (!stripeSecretKey.startsWith("sk_")) {
+    throw new Error("STRIPE_SECRET_KEY invalid on server");
   }
 
   if (!stripe) {
@@ -5598,7 +5628,7 @@ router.post(
 
       // If subscriptionId is provided but dates are missing, refresh from Stripe
       if (subscriptionId && (!validatedPeriodStart || !validatedPeriodEnd)) {
-        if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+        if (!getStripeSecretKey() || !stripe) {
           console.warn(
             "⚠️ Stripe not initialized, cannot refresh subscription from Stripe"
           );
@@ -5874,7 +5904,7 @@ router.get(
 
       if (shouldFetchFromStripe) {
         try {
-          if (stripe && process.env.STRIPE_SECRET_KEY) {
+          if (stripe && getStripeSecretKey()) {
             console.log(
               `📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`
             );
@@ -6935,8 +6965,8 @@ router.post(
       // Route to appropriate gateway
       if (gatewayInfo.gateway === "stripe") {
         // Stripe plan change logic
-        if (!stripe) {
-          return res.status(500).json({ error: "Stripe not configured" });
+        if (!ensureStripeConfigured(res)) {
+          return;
         }
 
         // Get new price ID
@@ -7123,8 +7153,8 @@ router.post("/subscriptions/pause", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       // Calculate resume date
@@ -7244,8 +7274,8 @@ router.post("/subscriptions/cancel", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       console.log(
@@ -7375,8 +7405,8 @@ router.post("/subscriptions/resume", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       console.log(`🔄 Resuming subscription ${gatewayInfo.subscriptionId}`);
@@ -7544,8 +7574,8 @@ router.post(
       console.log(`✅ Gateway info retrieved:`, JSON.stringify(gatewayInfo));
 
       if (gatewayInfo.gateway === "stripe") {
-        if (!stripe) {
-          return res.status(500).json({ error: "Stripe not configured" });
+        if (!ensureStripeConfigured(res)) {
+          return;
         }
 
         // Get new price ID
@@ -7613,7 +7643,7 @@ router.post(
           requestBody.toString(),
           {
             headers: {
-              Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+              Authorization: `Bearer ${getStripeSecretKey()}`,
               "Content-Type": "application/x-www-form-urlencoded",
             },
           }

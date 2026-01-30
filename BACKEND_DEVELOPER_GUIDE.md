@@ -1178,13 +1178,14 @@ Routes to correct payment gateway based on user's subscription.
     },
     "public": {
       "nutritionixAppId": "nutritionix-app-id",
-      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx"
+      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx",
+      "appleMerchantId": "merchant.com.example.app"
     }
   }
 }
 ```
 
-> **Note:** `nutritionixAppId` and `stripePublishableKey` return `null` when unset.
+> **Note:** `nutritionixAppId`, `stripePublishableKey`, and `appleMerchantId` return `null` when unset.
 
 ### Workout Routes (`/api/workout`)
 
@@ -1346,6 +1347,8 @@ STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxxx
 STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxxx
 STRIPE_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxx
 EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxxx
+APPLE_MERCHANT_ID=merchant.com.example.app
+EXPO_PUBLIC_APPLE_MERCHANT_ID=merchant.com.example.app
 
 # ===================
 # Azure Storage (Required for profile images)

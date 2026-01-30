@@ -31,6 +31,10 @@ describe("Config API", () => {
         publicConfig.stripePublishableKey === null ||
           typeof publicConfig.stripePublishableKey === "string"
       ).toBe(true);
+      expect(
+        publicConfig.appleMerchantId === null ||
+          typeof publicConfig.appleMerchantId === "string"
+      ).toBe(true);
 
       console.log(`     Config retrieved (${duration}ms)`);
     });

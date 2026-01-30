@@ -856,13 +856,14 @@ Permanently delete user account and all associated data.
     },
     "public": {
       "nutritionixAppId": "nutritionix-app-id",
-      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx"
+      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx",
+      "appleMerchantId": "merchant.com.example.app"
     }
   }
 }
 ```
 
-> **Note:** `nutritionixAppId` and `stripePublishableKey` return `null` if the server is not configured with those values.
+> **Note:** `nutritionixAppId`, `stripePublishableKey`, and `appleMerchantId` return `null` if the server is not configured with those values.
 
 ### Update Login Preference
 

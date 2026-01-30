@@ -47,6 +47,9 @@ const router = express.Router();
  *                         stripePublishableKey:
  *                           type: string
  *                           nullable: true
+ *                         appleMerchantId:
+ *                           type: string
+ *                           nullable: true
  *       500:
  *         description: Internal server error
  */
@@ -65,6 +68,10 @@ router.get("/mobile", (req, res) => {
       process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
       process.env.STRIPE_PUBLISHABLE_KEY ||
       null;
+    const appleMerchantId =
+      process.env.EXPO_PUBLIC_APPLE_MERCHANT_ID ||
+      process.env.APPLE_MERCHANT_ID ||
+      null;
  
     return res.json({
       success: true,
@@ -77,6 +84,7 @@ router.get("/mobile", (req, res) => {
         public: {
           nutritionixAppId,
           stripePublishableKey,
+          appleMerchantId,
         },
       },
     });
