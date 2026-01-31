@@ -29,6 +29,8 @@ let createdWorkoutRoutineId;
 let createdMesocycleId;
 let createdMicrocycleId;
 let createdCustomExerciseId;
+let createdCustomExerciseName;
+let createdCustomExerciseSuffix;
 
 // Today's date for test data
 const today = new Date().toISOString().split("T")[0];
@@ -290,9 +292,12 @@ describe("Data Routes API", () => {
     describe("POST /data/exercises", () => {
       test("creates a custom exercise", async () => {
         const state = getState();
+        const uniqueSuffix = Date.now();
+        const exerciseName = `Bird Dog ${uniqueSuffix}`;
+        const exerciseId = `custom_bird_dog_${uniqueSuffix}_a`;
         const payload = {
-          ExerciseName: "Test Custom Exercise",
-          ExerciseId: `custom_test_${Date.now()}`,
+          ExerciseName: exerciseName,
+          ExerciseId: exerciseId,
           TargetMuscle: "core",
           Equipment: "bodyweight",
           Instructions: "Keep form strict and controlled.",
@@ -311,6 +316,8 @@ describe("Data Routes API", () => {
         expect(response.data.data).toHaveProperty("ExerciseId");
 
         createdCustomExerciseId = response.data.data.ExerciseId;
+        createdCustomExerciseName = exerciseName;
+        createdCustomExerciseSuffix = uniqueSuffix;
         console.log(`     Custom exercise saved (${duration}ms)`);
       });
 
@@ -326,6 +333,27 @@ describe("Data Routes API", () => {
           {
             ExerciseName: "Test Custom Exercise",
             ExerciseId: createdCustomExerciseId,
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+        expect(response.data.data.ExerciseId).toBe(createdCustomExerciseId);
+      });
+
+      test("dedupes by normalized ExerciseName", async () => {
+        if (!createdCustomExerciseId || !createdCustomExerciseSuffix) {
+          console.log("     [SKIP] No custom exercise created");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.post(
+          "/data/exercises",
+          {
+            ExerciseName: `Bird-Dog ${createdCustomExerciseSuffix} (alt)`,
+            ExerciseId: `custom_bird_dog_${createdCustomExerciseSuffix}_b`,
           },
           { Authorization: `Bearer ${state.accessToken}` }
         );
@@ -432,6 +460,36 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // PAYMENTS
+  // =========================================================================
+
+  describe("Payments", () => {
+    describe("POST /data/payments/initialize", () => {
+      test("fails fast when Stripe secret key is missing", async () => {
+        const stripeKey = String(process.env.STRIPE_SECRET_KEY || "").trim();
+        if (stripeKey) {
+          console.log("     [SKIP] STRIPE_SECRET_KEY is configured");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.post(
+          "/data/payments/initialize",
+          {
+            plan: "premium",
+            billingInterval: "monthly",
+            paymentMethod: "card",
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(500);
+        expect(response.data.message).toMatch(/STRIPE_SECRET_KEY/i);
+      });
+    });
+  });
+
+  // =========================================================================
   // DASHBOARD
   // =========================================================================
 
@@ -518,6 +576,85 @@ describe("Data Routes API", () => {
 
         createdExerciseExistenceId = response.data.ids[0];
         console.log(`     Exercise created: ${createdExerciseExistenceId} (${duration}ms)`);
+      });
+
+      test("reuses canonical exerciseId when names match", async () => {
+        const state = getState();
+        let canonicalExerciseId = createdCustomExerciseId;
+        let nameSuffix = createdCustomExerciseSuffix;
+
+        if (!canonicalExerciseId || !nameSuffix) {
+          const uniqueSuffix = Date.now();
+          const baseName = `Bird Dog ${uniqueSuffix}`;
+          const { response: createResponse } = await api.post(
+            "/data/exercises",
+            {
+              ExerciseName: baseName,
+              ExerciseId: `custom_bird_dog_${uniqueSuffix}_seed`,
+              TargetMuscle: "core",
+              Equipment: "bodyweight",
+              Instructions: "Hold position.",
+            },
+            { Authorization: `Bearer ${state.accessToken}` }
+          );
+
+          canonicalExerciseId = createResponse.data?.data?.ExerciseId;
+          nameSuffix = uniqueSuffix;
+        }
+
+        if (!canonicalExerciseId || !nameSuffix) {
+          console.log("     [SKIP] No canonical exercise id available");
+          return;
+        }
+
+        const sourceExerciseId = `custom_bird_dog_${nameSuffix}_source`;
+        const { response } = await api.post(
+          "/data/exerciseexistence",
+          {
+            exerciseList: [
+              {
+                exercise: {
+                  id: sourceExerciseId,
+                  exerciseName: `Bird-Dog ${nameSuffix} (alt)`,
+                  target: "core",
+                  equipment: "bodyweight",
+                  instructions: ["Hold position"],
+                  gifURL: "",
+                },
+                reps: 5,
+                sets: 2,
+                difficulty: "easy",
+                date: today,
+                note: "Dedupe by name",
+                rir: 1,
+                rpe: 5,
+                status: "completed",
+                completed: true,
+                weight: 0,
+                workoutName: "Test Core Day",
+              },
+            ],
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+
+        const { response: canonicalResponse } = await api.get(
+          `/data/exerciseexistence/user/${canonicalExerciseId}`,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(canonicalResponse.status).toBe(200);
+        expect(Array.isArray(canonicalResponse.data)).toBe(true);
+        expect(canonicalResponse.data.length).toBeGreaterThan(0);
+
+        const { response: sourceResponse } = await api.get(
+          `/data/exerciseexistence/user/${sourceExerciseId}`,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(sourceResponse.status).toBe(200);
+        expect(Array.isArray(sourceResponse.data)).toBe(true);
+        expect(sourceResponse.data.length).toBe(0);
       });
 
       test("rejects empty exercise list", async () => {

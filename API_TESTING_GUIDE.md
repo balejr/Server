@@ -856,13 +856,14 @@ Permanently delete user account and all associated data.
     },
     "public": {
       "nutritionixAppId": "nutritionix-app-id",
-      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx"
+      "stripePublishableKey": "pk_test_xxxxxxxxxxxxxxxxxxxxx",
+      "appleMerchantId": "merchant.com.example.app"
     }
   }
 }
 ```
 
-> **Note:** `nutritionixAppId` and `stripePublishableKey` return `null` if the server is not configured with those values.
+> **Note:** `nutritionixAppId`, `stripePublishableKey`, and `appleMerchantId` return `null` if the server is not configured with those values.
 
 ### Update Login Preference
 
@@ -1186,6 +1187,7 @@ muscle: 42.3
 ```
 
 > **Note:** If `ExerciseId` already exists, the API returns `200 OK` with the existing record.
+> **Note:** Requests are also de-duplicated by normalized `ExerciseName` (lowercased, punctuation/parentheticals removed).
 
 ---
 
@@ -1215,6 +1217,8 @@ muscle: 42.3
   "notes": "Focus on form"
 }
 ```
+
+> **Note:** When logging exercise instances, the server reuses an existing `ExerciseId` if the normalized `exerciseName` matches an existing record to avoid duplicates.
 
 ---
 

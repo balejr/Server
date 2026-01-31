@@ -22,6 +22,15 @@ const challengeSuggestionService = require("../services/challengeSuggestionServi
 const prService = require("../services/prService");
 const router = express.Router();
 
+function normalizeExerciseName(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\(.*?\)/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * @swagger
  * /data/exercises:
@@ -125,6 +134,28 @@ router.post("/exercises", authenticateToken, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "ExerciseName is required" });
+    }
+
+    const normName = normalizeExerciseName(name);
+
+    // 1) DEDUPE BY NAME FIRST
+    const existingByName = await pool
+      .request()
+      .input("normName", mssql.NVarChar(220), normName)
+      .query(`
+        SELECT TOP 1 MasterExerciseID, ExerciseId
+        FROM dbo.Exercise
+        WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
+      `);
+
+    if (existingByName.recordset.length > 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          MasterExerciseID: existingByName.recordset[0].MasterExerciseID,
+          ExerciseId: existingByName.recordset[0].ExerciseId,
+        },
+      });
     }
 
     // If caller provided an exerciseId, use it; otherwise generate a unique custom ID
@@ -741,8 +772,11 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
         workoutName = "",
       } = item;
 
-      const exerciseName = exercise.exerciseName || exercise.name;
-      const sourceExerciseId = exercise.id;
+      const exerciseName = String(
+        exercise.exerciseName || exercise.name || ""
+      ).trim();
+      const sourceExerciseId = String(exercise.id || "").trim();
+      const normName = normalizeExerciseName(exerciseName);
       const targetMuscle = exercise.target || "";
       const instructions = Array.isArray(exercise.instructions)
         ? exercise.instructions.join(" ")
@@ -757,41 +791,56 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       allEquipment.add(equipment);
       today = today || date;
 
-      // Check or insert into dbo.Exercise
-      const checkExercise = await pool
+      // Check by ExerciseId first
+      let checkExercise = await pool
         .request()
-        .input("exerciseId", sourceExerciseId)
+        .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
         .query(
-          `SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
+          `SELECT TOP 1 MasterExerciseID, ExerciseId FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
         );
+
+      // If not found, check by normalized ExerciseName
+      if (checkExercise.recordset.length === 0 && normName) {
+        checkExercise = await pool
+          .request()
+          .input("normName", mssql.NVarChar(220), normName)
+          .query(`
+            SELECT TOP 1 MasterExerciseID, ExerciseId
+            FROM dbo.Exercise
+            WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
+          `);
+      }
 
       logger.debug("gifURL being inserted", { gifURL });
 
+      let canonicalExerciseId = sourceExerciseId;
       let MasterExerciseId;
 
       if (checkExercise.recordset.length > 0) {
         MasterExerciseId = checkExercise.recordset[0].MasterExerciseID;
+        canonicalExerciseId = checkExercise.recordset[0].ExerciseId;
       } else {
         const insertExercise = await pool
           .request()
-          .input("name", exerciseName)
-          .input("exerciseId", sourceExerciseId)
-          .input("targetMuscle", targetMuscle)
-          .input("instructions", instructions)
-          .input("equipment", equipment)
-          .input("imageURL", gifURL).query(`
+          .input("name", mssql.NVarChar(200), exerciseName)
+          .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
+          .input("targetMuscle", mssql.NVarChar(100), targetMuscle)
+          .input("instructions", mssql.NVarChar(mssql.MAX), instructions)
+          .input("equipment", mssql.NVarChar(100), equipment)
+          .input("imageURL", mssql.NVarChar(500), gifURL).query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
-            OUTPUT INSERTED.MasterExerciseID
+            OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
+        canonicalExerciseId = insertExercise.recordset[0].ExerciseId;
       }
 
       // Insert into dbo.ExerciseExistence
       const result = await pool
         .request()
         .input("userId", userId)
-        .input("exerciseId", sourceExerciseId)
+        .input("exerciseId", mssql.NVarChar(128), canonicalExerciseId)
         .input("reps", reps)
         .input("sets", sets)
         .input("difficulty", difficulty)
@@ -2593,11 +2642,15 @@ router.get("/exercises/history", authenticateToken, async (req, res) => {
 
 // module.exports = router;
 
+const getStripeSecretKey = () =>
+  String(process.env.STRIPE_SECRET_KEY || "").trim();
+
 // Safe initialization that won't crash the app
 let stripe = null;
 try {
-  if (process.env.STRIPE_SECRET_KEY) {
-    stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+  const stripeSecretKey = getStripeSecretKey();
+  if (stripeSecretKey) {
+    stripe = require("stripe")(stripeSecretKey);
     logger.info("Stripe initialized");
   } else {
     logger.warn("STRIPE_SECRET_KEY not set - Stripe features disabled");
@@ -2793,6 +2846,38 @@ function sendErrorResponse(res, statusCode, error, message, details = null) {
   return res.status(statusCode).json(response);
 }
 
+function ensureStripeConfigured(res) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "STRIPE_SECRET_KEY missing on server"
+    );
+  }
+
+  if (!stripeSecretKey.startsWith("sk_")) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "STRIPE_SECRET_KEY invalid on server"
+    );
+  }
+
+  if (!stripe) {
+    return sendErrorResponse(
+      res,
+      500,
+      "Configuration Error",
+      "Stripe not initialized - check STRIPE_SECRET_KEY configuration"
+    );
+  }
+
+  return true;
+}
+
 // ========== PAYMENT ENDPOINTS ==========
 /**
  * @swagger
@@ -2818,14 +2903,8 @@ router.post("/payments/initialize", authenticateToken, async (req, res) => {
   logger.info("Payment initialization request received", { timestamp });
 
   try {
-    // Validate environment variables
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return sendErrorResponse(
-        res,
-        500,
-        "Configuration Error",
-        "STRIPE_SECRET_KEY missing on server"
-      );
+    if (!ensureStripeConfigured(res)) {
+      return;
     }
 
     // Map billing intervals to Stripe Price IDs
@@ -3860,13 +3939,8 @@ router.post("/payments/confirm", authenticateToken, async (req, res) => {
   console.log(`[${timestamp}] 📥 Payment confirmation request received`);
 
   try {
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return sendErrorResponse(
-        res,
-        500,
-        "Configuration Error",
-        "STRIPE_SECRET_KEY missing on server"
-      );
+    if (!ensureStripeConfigured(res)) {
+      return;
     }
 
     const { paymentIntentId, subscriptionId } = req.body || {};
@@ -4352,8 +4426,13 @@ async function updateSubscriptionInDatabase(
   billingInterval = null,
   cancellationScheduled = null
 ) {
-  if (!process.env.STRIPE_SECRET_KEY) {
+  const stripeSecretKey = getStripeSecretKey();
+  if (!stripeSecretKey) {
     throw new Error("STRIPE_SECRET_KEY missing on server");
+  }
+
+  if (!stripeSecretKey.startsWith("sk_")) {
+    throw new Error("STRIPE_SECRET_KEY invalid on server");
   }
 
   if (!stripe) {
@@ -5614,7 +5693,7 @@ router.post(
 
       // If subscriptionId is provided but dates are missing, refresh from Stripe
       if (subscriptionId && (!validatedPeriodStart || !validatedPeriodEnd)) {
-        if (!process.env.STRIPE_SECRET_KEY || !stripe) {
+        if (!getStripeSecretKey() || !stripe) {
           console.warn(
             "⚠️ Stripe not initialized, cannot refresh subscription from Stripe"
           );
@@ -5890,7 +5969,7 @@ router.get(
 
       if (shouldFetchFromStripe) {
         try {
-          if (stripe && process.env.STRIPE_SECRET_KEY) {
+          if (stripe && getStripeSecretKey()) {
             console.log(
               `📝 Fetching subscription details from Stripe: ${subscription.subscription_id} (status: ${subscription.status})`
             );
@@ -6951,8 +7030,8 @@ router.post(
       // Route to appropriate gateway
       if (gatewayInfo.gateway === "stripe") {
         // Stripe plan change logic
-        if (!stripe) {
-          return res.status(500).json({ error: "Stripe not configured" });
+        if (!ensureStripeConfigured(res)) {
+          return;
         }
 
         // Get new price ID
@@ -7139,8 +7218,8 @@ router.post("/subscriptions/pause", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       // Calculate resume date
@@ -7260,8 +7339,8 @@ router.post("/subscriptions/cancel", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       console.log(
@@ -7391,8 +7470,8 @@ router.post("/subscriptions/resume", authenticateToken, async (req, res) => {
     const gatewayInfo = await getPaymentGateway(userId);
 
     if (gatewayInfo.gateway === "stripe") {
-      if (!stripe) {
-        return res.status(500).json({ error: "Stripe not configured" });
+      if (!ensureStripeConfigured(res)) {
+        return;
       }
 
       console.log(`🔄 Resuming subscription ${gatewayInfo.subscriptionId}`);
@@ -7560,8 +7639,8 @@ router.post(
       console.log(`✅ Gateway info retrieved:`, JSON.stringify(gatewayInfo));
 
       if (gatewayInfo.gateway === "stripe") {
-        if (!stripe) {
-          return res.status(500).json({ error: "Stripe not configured" });
+        if (!ensureStripeConfigured(res)) {
+          return;
         }
 
         // Get new price ID
@@ -7629,7 +7708,7 @@ router.post(
           requestBody.toString(),
           {
             headers: {
-              Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+              Authorization: `Bearer ${getStripeSecretKey()}`,
               "Content-Type": "application/x-www-form-urlencoded",
             },
           }
