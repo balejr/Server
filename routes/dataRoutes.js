@@ -21,6 +21,15 @@ const xpEventService = require("../services/xpEventService");
 const prService = require("../services/prService");
 const router = express.Router();
 
+function normalizeExerciseName(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\(.*?\)/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * @swagger
  * /data/exercises:
@@ -124,6 +133,28 @@ router.post("/exercises", authenticateToken, async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "ExerciseName is required" });
+    }
+
+    const normName = normalizeExerciseName(name);
+
+    // 1) DEDUPE BY NAME FIRST
+    const existingByName = await pool
+      .request()
+      .input("normName", mssql.NVarChar(220), normName)
+      .query(`
+        SELECT TOP 1 MasterExerciseID, ExerciseId
+        FROM dbo.Exercise
+        WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
+      `);
+
+    if (existingByName.recordset.length > 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          MasterExerciseID: existingByName.recordset[0].MasterExerciseID,
+          ExerciseId: existingByName.recordset[0].ExerciseId,
+        },
+      });
     }
 
     // If caller provided an exerciseId, use it; otherwise generate a unique custom ID
@@ -740,8 +771,11 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
         workoutName = "",
       } = item;
 
-      const exerciseName = exercise.exerciseName || exercise.name;
-      const sourceExerciseId = exercise.id;
+      const exerciseName = String(
+        exercise.exerciseName || exercise.name || ""
+      ).trim();
+      const sourceExerciseId = String(exercise.id || "").trim();
+      const normName = normalizeExerciseName(exerciseName);
       const targetMuscle = exercise.target || "";
       const instructions = Array.isArray(exercise.instructions)
         ? exercise.instructions.join(" ")
@@ -756,41 +790,56 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       allEquipment.add(equipment);
       today = today || date;
 
-      // Check or insert into dbo.Exercise
-      const checkExercise = await pool
+      // Check by ExerciseId first
+      let checkExercise = await pool
         .request()
-        .input("exerciseId", sourceExerciseId)
+        .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
         .query(
-          `SELECT MasterExerciseID FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
+          `SELECT TOP 1 MasterExerciseID, ExerciseId FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
         );
+
+      // If not found, check by normalized ExerciseName
+      if (checkExercise.recordset.length === 0 && normName) {
+        checkExercise = await pool
+          .request()
+          .input("normName", mssql.NVarChar(220), normName)
+          .query(`
+            SELECT TOP 1 MasterExerciseID, ExerciseId
+            FROM dbo.Exercise
+            WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
+          `);
+      }
 
       logger.debug("gifURL being inserted", { gifURL });
 
+      let canonicalExerciseId = sourceExerciseId;
       let MasterExerciseId;
 
       if (checkExercise.recordset.length > 0) {
         MasterExerciseId = checkExercise.recordset[0].MasterExerciseID;
+        canonicalExerciseId = checkExercise.recordset[0].ExerciseId;
       } else {
         const insertExercise = await pool
           .request()
-          .input("name", exerciseName)
-          .input("exerciseId", sourceExerciseId)
-          .input("targetMuscle", targetMuscle)
-          .input("instructions", instructions)
-          .input("equipment", equipment)
-          .input("imageURL", gifURL).query(`
+          .input("name", mssql.NVarChar(200), exerciseName)
+          .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
+          .input("targetMuscle", mssql.NVarChar(100), targetMuscle)
+          .input("instructions", mssql.NVarChar(mssql.MAX), instructions)
+          .input("equipment", mssql.NVarChar(100), equipment)
+          .input("imageURL", mssql.NVarChar(500), gifURL).query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
-            OUTPUT INSERTED.MasterExerciseID
+            OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
           `);
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
+        canonicalExerciseId = insertExercise.recordset[0].ExerciseId;
       }
 
       // Insert into dbo.ExerciseExistence
       const result = await pool
         .request()
         .input("userId", userId)
-        .input("exerciseId", sourceExerciseId)
+        .input("exerciseId", mssql.NVarChar(128), canonicalExerciseId)
         .input("reps", reps)
         .input("sets", sets)
         .input("difficulty", difficulty)

@@ -1120,6 +1120,7 @@ muscle: 42.3
 ```
 
 > **Note:** If `ExerciseId` already exists, the API returns `200 OK` with the existing record.
+> **Note:** Requests are also de-duplicated by normalized `ExerciseName` (lowercased, punctuation/parentheticals removed).
 
 ---
 
@@ -1149,6 +1150,8 @@ muscle: 42.3
   "notes": "Focus on form"
 }
 ```
+
+> **Note:** When logging exercise instances, the server reuses an existing `ExerciseId` if the normalized `exerciseName` matches an existing record to avoid duplicates.
 
 ---
 
