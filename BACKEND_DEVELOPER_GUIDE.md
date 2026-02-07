@@ -1062,6 +1062,13 @@ Routes to correct payment gateway based on user's subscription.
 | GET    | `/profile` | Access     | Get user profile    |
 | PATCH  | `/profile` | Access     | Update user profile |
 | DELETE | `/profile` | Access+MFA | Delete account      |
+| POST   | `/inquiry` | Access     | Send support inquiry email |
+
+**Inquiry (POST `/inquiry`)**
+
+**Body Fields:** `message` (required).
+
+**Notes:** Sends an email to `fitness@hpapogee.com` with subject "FitNxt Customer Inquiry". The sender email is taken from the authenticated user's account and used as the reply-to address.
 
 ### Data Routes (`/api/data`)
 

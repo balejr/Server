@@ -5,6 +5,7 @@ const { getPool } = require("../config/db");
 const { authenticateToken } = require("../middleware/authMiddleware");
 const { requireMFA } = require("../middleware/mfaMiddleware");
 const bcrypt = require("bcrypt");
+const { sendInquiryEmail, isEmailConfigured } = require("../utils/mailer");
 
 const logger = require("../utils/logger");
 
@@ -116,6 +117,87 @@ router.patch("/profile", authenticateToken, async (req, res) => {
   } catch (error) {
     logger.error("Profile Update Error", { error: error.message });
     res.status(500).json({ message: "Failed to update profile" });
+  }
+});
+
+/**
+ * @swagger
+ * /user/inquiry:
+ *   post:
+ *     summary: Send customer inquiry
+ *     description: Send a user inquiry email to fitness@hpapogee.com
+ *     tags: [User]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [message]
+ *             properties:
+ *               message:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Inquiry sent successfully
+ *       400:
+ *         description: Missing inquiry message
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: User email not found
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post("/inquiry", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const message = String(req.body?.message || "").trim();
+
+  if (!message) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Inquiry message is required" });
+  }
+
+  if (!isEmailConfigured()) {
+    return res.status(500).json({
+      success: false,
+      message: "Email service not configured",
+    });
+  }
+
+  try {
+    const pool = getPool();
+    const result = await pool
+      .request()
+      .input("userId", userId)
+      .query(`SELECT Email FROM dbo.UserLogin WHERE UserID = @userId`);
+
+    if (result.recordset.length === 0 || !result.recordset[0].Email) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User email not found" });
+    }
+
+    const userEmail = result.recordset[0].Email;
+    const sendResult = await sendInquiryEmail({
+      userEmail,
+      message,
+    });
+
+    if (!sendResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send inquiry email",
+      });
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Inquiry Email Error", { userId, error: error.message });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to send inquiry email" });
   }
 });
 
