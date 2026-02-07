@@ -11,6 +11,17 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+const isEmailConfigured = () =>
+  Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+
+const escapeHtml = (value) =>
+  String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 async function sendPasswordResetEmail(email, code) {
   const mailOptions = {
     from: `"ApogeeFit Support" <${process.env.EMAIL_USER}>`,
@@ -33,4 +44,31 @@ async function sendPasswordResetEmail(email, code) {
   }
 }
 
-module.exports = { sendPasswordResetEmail };
+async function sendInquiryEmail({ userEmail, message }) {
+  const safeEmail = String(userEmail || "").trim();
+  const safeMessage = String(message || "").trim();
+
+  const mailOptions = {
+    from: `"FitNxt Support" <${process.env.EMAIL_USER}>`,
+    to: "fitness@hpapogee.com",
+    replyTo: safeEmail,
+    subject: "FitNxt Customer Inquiry",
+    text: `From: ${safeEmail}\n\n${safeMessage}`,
+    html: `
+      <h2>FitNxt Customer Inquiry</h2>
+      <p><strong>From:</strong> ${escapeHtml(safeEmail)}</p>
+      <p>${escapeHtml(safeMessage).replace(/\n/g, "<br />")}</p>
+    `,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ Inquiry email sent:", info.response);
+    return { success: true };
+  } catch (error) {
+    console.error("❌ Error sending inquiry email:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = { sendPasswordResetEmail, sendInquiryEmail, isEmailConfigured };
