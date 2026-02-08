@@ -39,6 +39,7 @@ const router = express.Router();
 const upload = require("../middleware/multerUpload");
 const { containerClient } = require("../middleware/blobClient");
 const { exchangeCodeForToken } = require('../services/ouraService');
+const { generateCodeVerifier } = require('../services/garminService');
 
 /**
  * @swagger

@@ -41,3 +41,5 @@ async function exchangeGarminCodeForToken(code, codeVerifier) {
     throw error;
   }
 };
+
+module.exports = { generateCodeVerifier };
