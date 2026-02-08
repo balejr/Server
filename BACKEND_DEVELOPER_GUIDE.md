@@ -1157,6 +1157,7 @@ Routes to correct payment gateway based on user's subscription.
 - If `ExerciseId` is omitted, the server generates a `custom_<userId>_<timestamp>_<uuid>` ID.
 - Requests are idempotent by `ExerciseId` (existing record returns `200`).
 - Requests are also de-duplicated by normalized `ExerciseName` (lowercased, punctuation/parentheticals removed).
+- Exercise fields are bound as `NVARCHAR(MAX)` to avoid truncation for long values.
 
 **Exercise History:**
 | Method | Endpoint | Description |

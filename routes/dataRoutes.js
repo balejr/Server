@@ -141,7 +141,7 @@ router.post("/exercises", authenticateToken, async (req, res) => {
     // 1) DEDUPE BY NAME FIRST
     const existingByName = await pool
       .request()
-      .input("normName", mssql.NVarChar(220), normName)
+      .input("normName", mssql.NVarChar(mssql.MAX), normName)
       .query(`
         SELECT TOP 1 MasterExerciseID, ExerciseId
         FROM dbo.Exercise
@@ -209,12 +209,12 @@ router.post("/exercises", authenticateToken, async (req, res) => {
 
     const inserted = await pool
       .request()
-      .input("name", mssql.NVarChar(200), String(name).trim())
-      .input("exerciseId", mssql.NVarChar(128), String(exerciseId))
-      .input("targetMuscle", mssql.NVarChar(100), String(targetMuscle))
+      .input("name", mssql.NVarChar(mssql.MAX), String(name).trim())
+      .input("exerciseId", mssql.NVarChar(mssql.MAX), String(exerciseId))
+      .input("targetMuscle", mssql.NVarChar(mssql.MAX), String(targetMuscle))
       .input("instructions", mssql.NVarChar(mssql.MAX), String(instructions))
-      .input("equipment", mssql.NVarChar(100), String(equipment))
-      .input("imageURL", mssql.NVarChar(500), String(imageURL))
+      .input("equipment", mssql.NVarChar(mssql.MAX), String(equipment))
+      .input("imageURL", mssql.NVarChar(mssql.MAX), String(imageURL))
       .query(`
         INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
         OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
@@ -794,7 +794,7 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       // Check by ExerciseId first
       let checkExercise = await pool
         .request()
-        .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
+        .input("exerciseId", mssql.NVarChar(mssql.MAX), sourceExerciseId)
         .query(
           `SELECT TOP 1 MasterExerciseID, ExerciseId FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
         );
@@ -803,7 +803,7 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       if (checkExercise.recordset.length === 0 && normName) {
         checkExercise = await pool
           .request()
-          .input("normName", mssql.NVarChar(220), normName)
+          .input("normName", mssql.NVarChar(mssql.MAX), normName)
           .query(`
             SELECT TOP 1 MasterExerciseID, ExerciseId
             FROM dbo.Exercise
@@ -822,12 +822,12 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       } else {
         const insertExercise = await pool
           .request()
-          .input("name", mssql.NVarChar(200), exerciseName)
-          .input("exerciseId", mssql.NVarChar(128), sourceExerciseId)
-          .input("targetMuscle", mssql.NVarChar(100), targetMuscle)
+          .input("name", mssql.NVarChar(mssql.MAX), exerciseName)
+          .input("exerciseId", mssql.NVarChar(mssql.MAX), sourceExerciseId)
+          .input("targetMuscle", mssql.NVarChar(mssql.MAX), targetMuscle)
           .input("instructions", mssql.NVarChar(mssql.MAX), instructions)
-          .input("equipment", mssql.NVarChar(100), equipment)
-          .input("imageURL", mssql.NVarChar(500), gifURL).query(`
+          .input("equipment", mssql.NVarChar(mssql.MAX), equipment)
+          .input("imageURL", mssql.NVarChar(mssql.MAX), gifURL).query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
             OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
@@ -840,7 +840,7 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       const result = await pool
         .request()
         .input("userId", userId)
-        .input("exerciseId", mssql.NVarChar(128), canonicalExerciseId)
+        .input("exerciseId", mssql.NVarChar(mssql.MAX), canonicalExerciseId)
         .input("reps", reps)
         .input("sets", sets)
         .input("difficulty", difficulty)

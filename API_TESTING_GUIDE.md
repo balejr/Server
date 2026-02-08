@@ -1219,6 +1219,7 @@ muscle: 42.3
 
 > **Note:** If `ExerciseId` already exists, the API returns `200 OK` with the existing record.
 > **Note:** Requests are also de-duplicated by normalized `ExerciseName` (lowercased, punctuation/parentheticals removed).
+> **Note:** Exercise fields are bound as `NVARCHAR(MAX)` to avoid truncation for long values.
 
 ---
 
