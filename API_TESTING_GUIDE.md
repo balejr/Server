@@ -807,6 +807,37 @@ Update profile fields without image upload.
 
 ---
 
+### Send User Inquiry
+
+Send a support inquiry email to `fitness@hpapogee.com`.
+
+| Setting     | Value                                                  |
+| ----------- | ------------------------------------------------------ |
+| **Method**  | `POST`                                                 |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/user/inquiry` |
+| **Headers** | `Authorization: Bearer <your_access_token>`            |
+| **Body**    | raw → JSON                                             |
+
+**Body:**
+
+```json
+{
+  "message": "I need help with my subscription."
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true
+}
+```
+
+> **Note:** The sender email is derived from the authenticated user's account and used as the reply-to address.
+
+---
+
 ### Delete User Account
 
 Permanently delete user account and all associated data.
@@ -1188,6 +1219,7 @@ muscle: 42.3
 
 > **Note:** If `ExerciseId` already exists, the API returns `200 OK` with the existing record.
 > **Note:** Requests are also de-duplicated by normalized `ExerciseName` (lowercased, punctuation/parentheticals removed).
+> **Note:** Exercise fields are bound as `NVARCHAR(MAX)` to avoid truncation for long values.
 
 ---
 

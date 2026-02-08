@@ -363,6 +363,34 @@ describe("Data Routes API", () => {
         expect(response.data.data.ExerciseId).toBe(createdCustomExerciseId);
       });
 
+      test("accepts long field values", async () => {
+        const state = getState();
+        const uniqueSuffix = Date.now();
+        const longName = `Long Exercise ${uniqueSuffix} ${"A".repeat(220)}`;
+        const longExerciseId = `custom_long_${uniqueSuffix}_${"b".repeat(150)}`;
+        const longTarget = "t".repeat(150);
+        const longEquipment = "e".repeat(150);
+        const longInstructions = "i".repeat(1000);
+        const longImageUrl = "x".repeat(520);
+
+        const { response } = await api.post(
+          "/data/exercises",
+          {
+            ExerciseName: longName,
+            ExerciseId: longExerciseId,
+            TargetMuscle: longTarget,
+            Equipment: longEquipment,
+            Instructions: longInstructions,
+            ImageURL: longImageUrl,
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect([200, 201]).toContain(response.status);
+        expect(response.data.success).toBe(true);
+        expect(response.data.data).toHaveProperty("ExerciseId");
+      });
+
       test("rejects missing ExerciseName", async () => {
         const state = getState();
         const { response } = await api.post(
