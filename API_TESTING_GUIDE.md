@@ -826,6 +826,21 @@ Send a support inquiry email to `fitness@hpapogee.com`.
 }
 ```
 
+**Optional JSON Attachments:**
+
+```json
+{
+  "message": "I need help with my subscription.",
+  "attachments": [
+    {
+      "filename": "workout.png",
+      "contentType": "image/png",
+      "contentBase64": "<base64-encoded-file>"
+    }
+  ]
+}
+```
+
 **Expected Response (200 OK):**
 
 ```json
@@ -835,6 +850,8 @@ Send a support inquiry email to `fitness@hpapogee.com`.
 ```
 
 > **Note:** The sender email is derived from the authenticated user's account and used as the reply-to address.
+> **Note:** You can also send `multipart/form-data` with `attachments` files (images/videos).
+> **Note:** Max 5 attachments, 10MB each.
 
 ---
 

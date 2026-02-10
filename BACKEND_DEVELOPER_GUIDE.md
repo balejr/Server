@@ -1066,7 +1066,13 @@ Routes to correct payment gateway based on user's subscription.
 
 **Inquiry (POST `/inquiry`)**
 
-**Body Fields:** `message` (required).
+**Body Fields:** `message` (required), `attachments` (optional).
+
+**Attachments:**
+- `multipart/form-data` field `attachments` (images/videos).
+- JSON `attachments` array with `{ filename, contentBase64, contentType }`.
+
+**Limits:** Max 5 attachments, 10MB each. Only `image/*` or `video/*` types are accepted.
 
 **Notes:** Sends an email to `fitness@hpapogee.com` with subject "FitNxt Customer Inquiry". The sender email is taken from the authenticated user's account and used as the reply-to address.
 

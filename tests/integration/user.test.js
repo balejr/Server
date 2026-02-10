@@ -109,5 +109,35 @@ describe("User API", () => {
       expect(response.status).toBe(500);
       expect(response.data.message).toMatch(/Email service not configured/i);
     });
+
+    test("accepts base64 attachments payload", async () => {
+      const emailConfigured =
+        Boolean(process.env.EMAIL_USER) && Boolean(process.env.EMAIL_PASS);
+      const state = getState();
+      const payload = {
+        message: "Test inquiry with attachment",
+        attachments: [
+          {
+            filename: "sample.png",
+            contentType: "image/png",
+            contentBase64: Buffer.from("sample").toString("base64"),
+          },
+        ],
+      };
+
+      const { response } = await api.post(
+        "/user/inquiry",
+        payload,
+        { Authorization: `Bearer ${state.accessToken}` }
+      );
+
+      if (emailConfigured) {
+        expect(response.status).toBe(200);
+        expect(response.data.success).toBe(true);
+      } else {
+        expect(response.status).toBe(500);
+        expect(response.data.message).toMatch(/Email service not configured/i);
+      }
+    });
   });
 });

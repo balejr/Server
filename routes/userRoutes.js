@@ -6,10 +6,54 @@ const { authenticateToken } = require("../middleware/authMiddleware");
 const { requireMFA } = require("../middleware/mfaMiddleware");
 const bcrypt = require("bcrypt");
 const { sendInquiryEmail, isEmailConfigured } = require("../utils/mailer");
+const multer = require("multer");
 
 const logger = require("../utils/logger");
 
 const router = express.Router();
+
+const MAX_INQUIRY_ATTACHMENTS = 5;
+const MAX_INQUIRY_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
+const ALLOWED_ATTACHMENT_PREFIXES = ["image/", "video/"];
+
+const inquiryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_INQUIRY_ATTACHMENT_BYTES,
+    files: MAX_INQUIRY_ATTACHMENTS,
+  },
+  fileFilter: (req, file, cb) => {
+    const mimetype = String(file?.mimetype || "").toLowerCase();
+    const allowed = ALLOWED_ATTACHMENT_PREFIXES.some((prefix) =>
+      mimetype.startsWith(prefix)
+    );
+    if (!allowed) {
+      return cb(new Error("Only image or video attachments are allowed"));
+    }
+    return cb(null, true);
+  },
+}).array("attachments", MAX_INQUIRY_ATTACHMENTS);
+
+const parseJsonAttachments = (rawAttachments) => {
+  if (!rawAttachments) {
+    return [];
+  }
+
+  let parsed = rawAttachments;
+  if (typeof rawAttachments === "string") {
+    try {
+      parsed = JSON.parse(rawAttachments);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed;
+};
 
 /**
  * @swagger
@@ -137,6 +181,30 @@ router.patch("/profile", authenticateToken, async (req, res) => {
  *             properties:
  *               message:
  *                 type: string
+ *               attachments:
+ *                 type: array
+ *                 description: Base64 attachments (optional)
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     filename:
+ *                       type: string
+ *                     contentBase64:
+ *                       type: string
+ *                     contentType:
+ *                       type: string
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [message]
+ *             properties:
+ *               message:
+ *                 type: string
+ *               attachments:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
  *     responses:
  *       200:
  *         description: Inquiry sent successfully
@@ -149,7 +217,24 @@ router.patch("/profile", authenticateToken, async (req, res) => {
  *       500:
  *         $ref: '#/components/responses/ServerError'
  */
-router.post("/inquiry", authenticateToken, async (req, res) => {
+router.post("/inquiry", authenticateToken, (req, res, next) => {
+  inquiryUpload(req, res, (err) => {
+    if (!err) {
+      return next();
+    }
+
+    let message = "Invalid attachments";
+    if (err.code === "LIMIT_FILE_SIZE") {
+      message = `Attachment too large (max ${MAX_INQUIRY_ATTACHMENT_BYTES / (1024 * 1024)}MB)`;
+    } else if (err.code === "LIMIT_FILE_COUNT") {
+      message = `Too many attachments (max ${MAX_INQUIRY_ATTACHMENTS})`;
+    } else if (err.message) {
+      message = err.message;
+    }
+
+    return res.status(400).json({ success: false, message });
+  });
+}, async (req, res) => {
   const userId = req.user.userId;
   const message = String(req.body?.message || "").trim();
 
@@ -167,6 +252,58 @@ router.post("/inquiry", authenticateToken, async (req, res) => {
   }
 
   try {
+    const jsonAttachments = parseJsonAttachments(req.body?.attachments);
+    const fileAttachments = Array.isArray(req.files) ? req.files : [];
+
+    if (
+      jsonAttachments.length + fileAttachments.length >
+      MAX_INQUIRY_ATTACHMENTS
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Too many attachments (max ${MAX_INQUIRY_ATTACHMENTS})`,
+      });
+    }
+
+    let preparedJsonAttachments = [];
+    try {
+      preparedJsonAttachments = jsonAttachments.map((attachment, index) => {
+        const contentBase64 = String(attachment?.contentBase64 || "").trim();
+        const content = Buffer.from(contentBase64, "base64");
+
+        if (!contentBase64 || content.length === 0) {
+          throw new Error("Invalid attachment content");
+        }
+
+        if (content.length > MAX_INQUIRY_ATTACHMENT_BYTES) {
+          throw new Error(
+            `Attachment too large (max ${MAX_INQUIRY_ATTACHMENT_BYTES / (1024 * 1024)}MB)`
+          );
+        }
+
+        const contentType = String(attachment?.contentType || "").toLowerCase();
+        if (
+          contentType &&
+          !ALLOWED_ATTACHMENT_PREFIXES.some((prefix) =>
+            contentType.startsWith(prefix)
+          )
+        ) {
+          throw new Error("Only image or video attachments are allowed");
+        }
+
+        return {
+          filename: String(attachment?.filename || `attachment_${index + 1}`),
+          content,
+          contentType: contentType || "application/octet-stream",
+        };
+      });
+    } catch (attachmentError) {
+      return res.status(400).json({
+        success: false,
+        message: attachmentError.message || "Invalid attachments",
+      });
+    }
+
     const pool = getPool();
     const result = await pool
       .request()
@@ -183,6 +320,7 @@ router.post("/inquiry", authenticateToken, async (req, res) => {
     const sendResult = await sendInquiryEmail({
       userEmail,
       message,
+      attachments: [...fileAttachments, ...preparedJsonAttachments],
     });
 
     if (!sendResult.success) {
