@@ -118,8 +118,8 @@ describe("User API", () => {
         message: "Test inquiry with attachment",
         attachments: [
           {
-            filename: "sample.png",
-            contentType: "image/png",
+            filename: "sample.pdf",
+            contentType: "application/pdf",
             contentBase64: Buffer.from("sample").toString("base64"),
           },
         ],
