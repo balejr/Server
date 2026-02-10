@@ -1072,7 +1072,7 @@ Routes to correct payment gateway based on user's subscription.
 - `multipart/form-data` field `attachments` (images/videos).
 - JSON `attachments` array with `{ filename, contentBase64, contentType }`.
 
-**Limits:** Max 5 attachments, 10MB each. Only `image/*` or `video/*` types are accepted.
+**Limits:** Max 5 attachments, 10MB each. Allowed types: `image/*`, `video/*`, `application/pdf`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `application/vnd.ms-excel`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `text/plain`, `text/csv`.
 
 **Notes:** Sends an email to `fitness@hpapogee.com` with subject "FitNxt Customer Inquiry". The sender email is taken from the authenticated user's account and used as the reply-to address.
 

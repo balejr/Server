@@ -15,6 +15,28 @@ const router = express.Router();
 const MAX_INQUIRY_ATTACHMENTS = 5;
 const MAX_INQUIRY_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
 const ALLOWED_ATTACHMENT_PREFIXES = ["image/", "video/"];
+const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+  "text/csv",
+]);
+
+const isAllowedAttachmentType = (mimetype) => {
+  const normalized = String(mimetype || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (ALLOWED_ATTACHMENT_MIME_TYPES.has(normalized)) {
+    return true;
+  }
+  return ALLOWED_ATTACHMENT_PREFIXES.some((prefix) =>
+    normalized.startsWith(prefix)
+  );
+};
 
 const inquiryUpload = multer({
   storage: multer.memoryStorage(),
@@ -24,11 +46,13 @@ const inquiryUpload = multer({
   },
   fileFilter: (req, file, cb) => {
     const mimetype = String(file?.mimetype || "").toLowerCase();
-    const allowed = ALLOWED_ATTACHMENT_PREFIXES.some((prefix) =>
-      mimetype.startsWith(prefix)
-    );
+    const allowed = isAllowedAttachmentType(mimetype);
     if (!allowed) {
-      return cb(new Error("Only image or video attachments are allowed"));
+      return cb(
+        new Error(
+          "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
+        )
+      );
     }
     return cb(null, true);
   },
@@ -282,13 +306,10 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
         }
 
         const contentType = String(attachment?.contentType || "").toLowerCase();
-        if (
-          contentType &&
-          !ALLOWED_ATTACHMENT_PREFIXES.some((prefix) =>
-            contentType.startsWith(prefix)
-          )
-        ) {
-          throw new Error("Only image or video attachments are allowed");
+      if (contentType && !isAllowedAttachmentType(contentType)) {
+        throw new Error(
+          "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
+        );
         }
 
         return {

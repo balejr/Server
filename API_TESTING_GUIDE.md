@@ -850,8 +850,8 @@ Send a support inquiry email to `fitness@hpapogee.com`.
 ```
 
 > **Note:** The sender email is derived from the authenticated user's account and used as the reply-to address.
-> **Note:** You can also send `multipart/form-data` with `attachments` files (images/videos).
-> **Note:** Max 5 attachments, 10MB each.
+> **Note:** You can also send `multipart/form-data` with `attachments` files.
+> **Note:** Max 5 attachments, 10MB each. Allowed types: images/videos, PDF, Word, Excel, text/CSV.
 
 ---
 
