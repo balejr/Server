@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const path = require("path");
 
 const transporter = nodemailer.createTransport({
   // host: process.env.EMAIL_HOST,      // e.g., "smtp.gmail.com", "smtp.office365.com", etc.
@@ -44,9 +45,31 @@ async function sendPasswordResetEmail(email, code) {
   }
 }
 
-async function sendInquiryEmail({ userEmail, message }) {
+async function sendInquiryEmail({ userEmail, message, attachments = [] }) {
   const safeEmail = String(userEmail || "").trim();
   const safeMessage = String(message || "").trim();
+  const safeAttachments = (attachments || [])
+    .map((attachment, index) => {
+      const content = attachment?.content || attachment?.buffer;
+      if (!content) {
+        return null;
+      }
+
+      const filename = path.basename(
+        String(
+          attachment?.filename ||
+            attachment?.originalname ||
+            `attachment_${index + 1}`
+        )
+      );
+
+      return {
+        filename,
+        content,
+        contentType: attachment?.contentType || attachment?.mimetype,
+      };
+    })
+    .filter(Boolean);
 
   const mailOptions = {
     from: `"FitNxt Support" <${process.env.EMAIL_USER}>`,
@@ -59,6 +82,7 @@ async function sendInquiryEmail({ userEmail, message }) {
       <p><strong>From:</strong> ${escapeHtml(safeEmail)}</p>
       <p>${escapeHtml(safeMessage).replace(/\n/g, "<br />")}</p>
     `,
+    attachments: safeAttachments.length > 0 ? safeAttachments : undefined,
   };
 
   try {
