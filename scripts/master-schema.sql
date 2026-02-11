@@ -635,6 +635,30 @@ BEGIN
 END
 
 -- ============================================
+-- INQUIRY TABLES
+-- ============================================
+
+-- Inquiries: Persisted user inquiry history
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Inquiries')
+BEGIN
+    CREATE TABLE [dbo].[Inquiries] (
+        Id INT IDENTITY(1,1) PRIMARY KEY,
+        UserId INT NOT NULL,
+        Topic NVARCHAR(50) NOT NULL DEFAULT 'general',
+        Subject NVARCHAR(255) NOT NULL DEFAULT 'FitNxt Customer Inquiry',
+        Message NVARCHAR(MAX) NOT NULL,
+        AttachmentCount INT NOT NULL DEFAULT 0,
+        Status NVARCHAR(20) NOT NULL DEFAULT 'sent',
+        CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        UpdatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+
+        CONSTRAINT FK_Inquiries_UserProfile
+            FOREIGN KEY (UserId) REFERENCES [dbo].[UserProfile](UserID)
+    );
+    PRINT 'Created Inquiries table';
+END
+
+-- ============================================
 -- INDEXES FOR PERFORMANCE
 -- ============================================
 
@@ -737,6 +761,14 @@ BEGIN
     CREATE INDEX idx_subscription_transactions_type 
         ON [dbo].[subscription_transactions](transaction_type);
     PRINT 'Created index idx_subscription_transactions_type';
+END
+
+-- Inquiries indexes
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_Inquiries_UserId_CreatedAt')
+BEGIN
+    CREATE INDEX IX_Inquiries_UserId_CreatedAt
+        ON [dbo].[Inquiries](UserId, CreatedAt DESC);
+    PRINT 'Created index IX_Inquiries_UserId_CreatedAt';
 END
 
 -- ============================================
@@ -876,6 +908,7 @@ PRINT '  - OnboardingProfile (onboarding)';
 PRINT '  - PreWorkoutAssessment (readiness)';
 PRINT '  - DeviceData (connected devices)';
 PRINT '  - OuraTokens (Oura integration)';
+PRINT '  - Inquiries (user inquiries)';
 PRINT '  - RewardDefinitions (rewards catalog)';
 PRINT '  - UserRewards (user XP and tier)';
 PRINT '  - UserRewardProgress (reward progress)';

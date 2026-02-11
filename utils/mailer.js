@@ -45,7 +45,7 @@ async function sendPasswordResetEmail(email, code) {
   }
 }
 
-async function sendInquiryEmail({ userEmail, message, attachments = [] }) {
+async function sendInquiryEmail({ userEmail, message, subject, attachments = [] }) {
   const safeEmail = String(userEmail || "").trim();
   const safeMessage = String(message || "").trim();
   const safeAttachments = (attachments || [])
@@ -75,7 +75,7 @@ async function sendInquiryEmail({ userEmail, message, attachments = [] }) {
     from: `"FitNxt Support" <${process.env.EMAIL_USER}>`,
     to: "fitness@hpapogee.com",
     replyTo: safeEmail,
-    subject: "FitNxt Customer Inquiry",
+    subject: subject || "FitNxt Customer Inquiry",
     text: `From: ${safeEmail}\n\n${safeMessage}`,
     html: `
       <h2>FitNxt Customer Inquiry</h2>

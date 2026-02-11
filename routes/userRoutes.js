@@ -12,6 +12,15 @@ const logger = require("../utils/logger");
 
 const router = express.Router();
 
+const INQUIRY_TOPICS = {
+  workout_advice: "Workout Advice",
+  nutrition: "Nutrition",
+  form_check: "Form Check",
+  injury_recovery: "Injury / Recovery",
+  general: "General",
+};
+const VALID_TOPICS = Object.keys(INQUIRY_TOPICS);
+
 const MAX_INQUIRY_ATTACHMENTS = 5;
 const MAX_INQUIRY_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
 const ALLOWED_ATTACHMENT_PREFIXES = ["image/", "video/"];
@@ -261,12 +270,15 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
 }, async (req, res) => {
   const userId = req.user.userId;
   const message = String(req.body?.message || "").trim();
+  const rawTopic = String(req.body?.topic || "general").trim().toLowerCase();
 
   if (!message) {
     return res
       .status(400)
       .json({ success: false, message: "Inquiry message is required" });
   }
+
+  const topic = VALID_TOPICS.includes(rawTopic) ? rawTopic : "general";
 
   if (!isEmailConfigured()) {
     return res.status(500).json({
@@ -337,10 +349,16 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
         .json({ success: false, message: "User email not found" });
     }
 
+    const topicDisplay = INQUIRY_TOPICS[topic];
+    const subject = `FitNxt Customer Inquiry - ${topicDisplay}`;
+    const totalAttachments =
+      fileAttachments.length + preparedJsonAttachments.length;
+
     const userEmail = result.recordset[0].Email;
     const sendResult = await sendInquiryEmail({
       userEmail,
       message,
+      subject,
       attachments: [...fileAttachments, ...preparedJsonAttachments],
     });
 
@@ -351,12 +369,115 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
       });
     }
 
-    return res.status(200).json({ success: true });
+    // Persist the inquiry to the database
+    const insertResult = await pool
+      .request()
+      .input("userId", mssql.Int, userId)
+      .input("topic", mssql.NVarChar(50), topic)
+      .input("subject", mssql.NVarChar(255), subject)
+      .input("message", mssql.NVarChar(mssql.MAX), message)
+      .input("attachmentCount", mssql.Int, totalAttachments)
+      .query(`
+        INSERT INTO dbo.Inquiries (UserId, Topic, Subject, Message, AttachmentCount)
+        OUTPUT INSERTED.Id, INSERTED.Topic, INSERTED.Status, INSERTED.CreatedAt
+        VALUES (@userId, @topic, @subject, @message, @attachmentCount)
+      `);
+
+    const inquiry = insertResult.recordset[0];
+
+    return res.status(200).json({
+      success: true,
+      inquiry: {
+        id: inquiry.Id,
+        topic: inquiry.Topic,
+        status: inquiry.Status,
+        createdAt: inquiry.CreatedAt,
+      },
+    });
   } catch (error) {
     logger.error("Inquiry Email Error", { userId, error: error.message });
     return res
       .status(500)
       .json({ success: false, message: "Failed to send inquiry email" });
+  }
+});
+
+/**
+ * @swagger
+ * /user/inquiries:
+ *   get:
+ *     summary: Get inquiry history
+ *     description: Retrieve the authenticated user's inquiry history (paginated)
+ *     tags: [User]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Inquiry history retrieved
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.get("/inquiries", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+  const offset = (page - 1) * limit;
+
+  try {
+    const pool = getPool();
+
+    const countResult = await pool
+      .request()
+      .input("userId", mssql.Int, userId)
+      .query(`SELECT COUNT(*) AS total FROM dbo.Inquiries WHERE UserId = @userId`);
+
+    const total = countResult.recordset[0].total;
+    const totalPages = Math.ceil(total / limit);
+
+    const result = await pool
+      .request()
+      .input("userId", mssql.Int, userId)
+      .input("limit", mssql.Int, limit)
+      .input("offset", mssql.Int, offset)
+      .query(`
+        SELECT Id, Topic, Subject, Message, AttachmentCount, Status, CreatedAt
+        FROM dbo.Inquiries
+        WHERE UserId = @userId
+        ORDER BY CreatedAt DESC
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+      `);
+
+    const inquiries = result.recordset.map((row) => ({
+      id: row.Id,
+      topic: row.Topic,
+      subject: row.Subject,
+      message: row.Message,
+      attachmentCount: row.AttachmentCount,
+      status: row.Status,
+      createdAt: row.CreatedAt,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      inquiries,
+      pagination: { page, limit, total, totalPages },
+    });
+  } catch (error) {
+    logger.error("Get Inquiries Error", { userId, error: error.message });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to retrieve inquiries" });
   }
 });
 
@@ -415,6 +536,7 @@ router.delete(
         "mesocycles",
         "OnboardingProfile",
         "PreWorkoutAssessment",
+        "Inquiries",
         "DeviceData",
         "OuraTokens",
         "UserLogin",
