@@ -36,6 +36,12 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+  "application/vnd.apple.pages",
+  "application/vnd.apple.numbers",
+  "application/vnd.apple.keynote",
   "text/plain",
   "text/csv",
 ]);
@@ -45,6 +51,7 @@ const isAllowedAttachmentType = (mimetype) => {
   if (!normalized) {
     return false;
   }
+  if (normalized === "image/svg+xml") return false;
   if (ALLOWED_ATTACHMENT_MIME_TYPES.has(normalized)) {
     return true;
   }
@@ -65,7 +72,7 @@ const inquiryUpload = multer({
     if (!allowed) {
       return cb(
         new Error(
-          "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
+          "Only image, video, PDF, document, spreadsheet, presentation, or text attachments are allowed"
         )
       );
     }
@@ -224,6 +231,31 @@ setInterval(() => {
   for (const [uid, entry] of uploadRateLimitMap.entries()) {
     if (now - entry.windowStart > UPLOAD_RATE_WINDOW) {
       uploadRateLimitMap.delete(uid);
+    }
+  }
+}, 60 * 1000);
+
+// --- Inquiry submission rate limiter: 5 req/user/hour ---
+const inquiryRateLimitMap = new Map();
+const INQUIRY_RATE_WINDOW = 60 * 60 * 1000;
+const INQUIRY_RATE_MAX = 5;
+
+const checkInquiryRateLimit = (userId) => {
+  const now = Date.now();
+  let entry = inquiryRateLimitMap.get(userId);
+  if (!entry || now - entry.windowStart > INQUIRY_RATE_WINDOW) {
+    entry = { windowStart: now, count: 0 };
+    inquiryRateLimitMap.set(userId, entry);
+  }
+  entry.count++;
+  return entry.count <= INQUIRY_RATE_MAX;
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, entry] of inquiryRateLimitMap.entries()) {
+    if (now - entry.windowStart > INQUIRY_RATE_WINDOW) {
+      inquiryRateLimitMap.delete(uid);
     }
   }
 }, 60 * 1000);
@@ -428,13 +460,27 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
   });
 }, async (req, res) => {
   const userId = req.user.userId;
+
+  if (!checkInquiryRateLimit(userId)) {
+    return res.status(429).json({
+      success: false,
+      message: "Too many inquiries. Please try again later.",
+    });
+  }
+
   const message = String(req.body?.message || "").trim();
   const rawTopic = String(req.body?.topic || "general").trim().toLowerCase();
 
-  if (!message) {
+  if (!message || message.length === 0) {
     return res
       .status(400)
       .json({ success: false, message: "Inquiry message is required" });
+  }
+  if (message.length > 5000) {
+    return res.status(400).json({
+      success: false,
+      message: "Message is too long (maximum 5,000 characters)",
+    });
   }
 
   const topic = VALID_TOPICS.includes(rawTopic) ? rawTopic : "general";
@@ -485,10 +531,22 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
           message: "Invalid attachment URL",
         });
       }
-      if (attachment.contentType && !isAllowedAttachmentType(attachment.contentType)) {
+      // Verify blob belongs to this user
+      const blobPath = blobUrl.replace(
+        "https://apogeehnp.blob.core.windows.net/inquiry-attachments/inquiries/",
+        ""
+      );
+      const blobUserId = parseInt(blobPath.split("/")[0], 10);
+      if (blobUserId !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: "Attachment does not belong to this user",
+        });
+      }
+      if (!attachment.contentType || !isAllowedAttachmentType(attachment.contentType)) {
         return res.status(400).json({
           success: false,
-          message: "File type not allowed: " + attachment.contentType,
+          message: "File type not allowed or missing: " + (attachment.contentType || "unknown"),
         });
       }
     }
@@ -518,7 +576,7 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
           ).toLowerCase();
           if (contentType && !isAllowedAttachmentType(contentType)) {
             throw new Error(
-              "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
+              "Only image, video, PDF, document, spreadsheet, presentation, or text attachments are allowed"
             );
           }
 
@@ -558,6 +616,24 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
       blobAttachments.length;
 
     const userEmail = result.recordset[0].Email;
+
+    // Insert inquiry FIRST
+    const insertResult = await pool
+      .request()
+      .input("userId", mssql.Int, userId)
+      .input("topic", mssql.NVarChar(50), topic)
+      .input("subject", mssql.NVarChar(255), subject)
+      .input("message", mssql.NVarChar(mssql.MAX), message)
+      .input("attachmentCount", mssql.Int, totalAttachments)
+      .query(`
+        INSERT INTO dbo.Inquiries (UserId, Topic, Subject, Message, AttachmentCount)
+        OUTPUT INSERTED.Id, INSERTED.Topic, INSERTED.Status, INSERTED.CreatedAt
+        VALUES (@userId, @topic, @subject, @message, @attachmentCount)
+      `);
+
+    const inquiry = insertResult.recordset[0];
+
+    // Then send email
     const sendResult = await sendInquiryEmail({
       userEmail,
       message,
@@ -573,27 +649,16 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
     });
 
     if (!sendResult.success) {
+      logger.error("Inquiry email failed but recorded in DB", {
+        inquiryId: inquiry.Id,
+        userId,
+        blobUrls: blobAttachments.map((a) => a.blobUrl),
+      });
       return res.status(500).json({
         success: false,
-        message: "Failed to send inquiry email",
+        message: "Inquiry recorded but email delivery failed. Support has been notified.",
       });
     }
-
-    // Persist the inquiry to the database
-    const insertResult = await pool
-      .request()
-      .input("userId", mssql.Int, userId)
-      .input("topic", mssql.NVarChar(50), topic)
-      .input("subject", mssql.NVarChar(255), subject)
-      .input("message", mssql.NVarChar(mssql.MAX), message)
-      .input("attachmentCount", mssql.Int, totalAttachments)
-      .query(`
-        INSERT INTO dbo.Inquiries (UserId, Topic, Subject, Message, AttachmentCount)
-        OUTPUT INSERTED.Id, INSERTED.Topic, INSERTED.Status, INSERTED.CreatedAt
-        VALUES (@userId, @topic, @subject, @message, @attachmentCount)
-      `);
-
-    const inquiry = insertResult.recordset[0];
 
     return res.status(200).json({
       success: true,
