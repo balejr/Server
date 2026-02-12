@@ -6,6 +6,11 @@ const { authenticateToken } = require("../middleware/authMiddleware");
 const { requireMFA } = require("../middleware/mfaMiddleware");
 const bcrypt = require("bcrypt");
 const { sendInquiryEmail, isEmailConfigured } = require("../utils/mailer");
+const {
+  generateUploadSas,
+  generateReadSas,
+} = require("../middleware/blobClient");
+const crypto = require("crypto");
 const multer = require("multer");
 
 const logger = require("../utils/logger");
@@ -22,7 +27,8 @@ const INQUIRY_TOPICS = {
 const VALID_TOPICS = Object.keys(INQUIRY_TOPICS);
 
 const MAX_INQUIRY_ATTACHMENTS = 5;
-const MAX_INQUIRY_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_INQUIRY_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50MB
+const MAX_INQUIRY_TOTAL_BYTES = 100 * 1024 * 1024; // 100MB total
 const ALLOWED_ATTACHMENT_PREFIXES = ["image/", "video/"];
 const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   "application/pdf",
@@ -197,6 +203,159 @@ router.patch("/profile", authenticateToken, async (req, res) => {
   }
 });
 
+// --- Upload SAS rate limiter: 10 req/user/min ---
+const uploadRateLimitMap = new Map();
+const UPLOAD_RATE_WINDOW = 60 * 1000;
+const UPLOAD_RATE_MAX = 10;
+
+const checkUploadRateLimit = (userId) => {
+  const now = Date.now();
+  let entry = uploadRateLimitMap.get(userId);
+  if (!entry || now - entry.windowStart > UPLOAD_RATE_WINDOW) {
+    entry = { windowStart: now, count: 0 };
+    uploadRateLimitMap.set(userId, entry);
+  }
+  entry.count++;
+  return entry.count <= UPLOAD_RATE_MAX;
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, entry] of uploadRateLimitMap.entries()) {
+    if (now - entry.windowStart > UPLOAD_RATE_WINDOW) {
+      uploadRateLimitMap.delete(uid);
+    }
+  }
+}, 60 * 1000);
+
+const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024; // 50MB per file
+const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024; // 100MB total
+const BLOB_URL_PREFIX =
+  "https://apogeehnp.blob.core.windows.net/inquiry-attachments/";
+
+const sanitizeFilename = (name) =>
+  String(name || "file")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .substring(0, 200);
+
+/**
+ * @swagger
+ * /user/inquiry/upload-urls:
+ *   post:
+ *     summary: Get SAS upload URLs for inquiry attachments
+ *     tags: [User]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [files]
+ *             properties:
+ *               files:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     filename:
+ *                       type: string
+ *                     contentType:
+ *                       type: string
+ *                     size:
+ *                       type: number
+ *     responses:
+ *       200:
+ *         description: Upload targets returned
+ *       400:
+ *         description: Validation error
+ *       429:
+ *         description: Rate limit exceeded
+ */
+router.post(
+  "/inquiry/upload-urls",
+  authenticateToken,
+  async (req, res) => {
+    const userId = req.user.userId;
+
+    if (!checkUploadRateLimit(userId)) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many upload requests. Please try again shortly.",
+      });
+    }
+
+    const { files } = req.body;
+
+    if (!Array.isArray(files) || files.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "files array is required" });
+    }
+
+    if (files.length > MAX_INQUIRY_ATTACHMENTS) {
+      return res.status(400).json({
+        success: false,
+        message: `Too many files (max ${MAX_INQUIRY_ATTACHMENTS})`,
+      });
+    }
+
+    let totalSize = 0;
+    for (const file of files) {
+      const size = Number(file?.size || 0);
+      if (!file?.filename || !file?.contentType || size <= 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Each file must have filename, contentType, and a positive size",
+        });
+      }
+      if (!isAllowedAttachmentType(file.contentType)) {
+        return res.status(400).json({
+          success: false,
+          message: `File type not allowed: ${file.contentType}`,
+        });
+      }
+      if (size > MAX_UPLOAD_FILE_BYTES) {
+        return res.status(400).json({
+          success: false,
+          message: `File too large: ${file.filename} (max 50MB)`,
+        });
+      }
+      totalSize += size;
+    }
+
+    if (totalSize > MAX_UPLOAD_TOTAL_BYTES) {
+      return res.status(400).json({
+        success: false,
+        message: "Total upload size exceeds 100MB",
+      });
+    }
+
+    try {
+      const timestamp = Date.now();
+      const uploadTargets = files.map((file) => {
+        const uuid = crypto.randomUUID();
+        const safeName = sanitizeFilename(file.filename);
+        const blobName = `inquiries/${userId}/${timestamp}-${uuid}-${safeName}`;
+        const sasUrl = generateUploadSas(blobName, file.contentType);
+        const blobUrl = `${BLOB_URL_PREFIX}${blobName}`;
+        return { sasUrl, blobUrl, blobName };
+      });
+
+      return res.status(200).json({ success: true, uploadTargets });
+    } catch (error) {
+      logger.error("Upload URL generation error", {
+        userId,
+        error: error.message,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to generate upload URLs",
+      });
+    }
+  }
+);
+
 /**
  * @swagger
  * /user/inquiry:
@@ -301,35 +460,77 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
       });
     }
 
-    let preparedJsonAttachments = [];
+    // Separate blob-based and legacy base64 attachments
+    const blobAttachments = [];
+    const inlineJsonAttachments = [];
+
+    for (const attachment of jsonAttachments) {
+      if (attachment?.blobUrl) {
+        blobAttachments.push(attachment);
+      } else {
+        inlineJsonAttachments.push(attachment);
+      }
+    }
+
+    // Validate blob URL attachments
+    for (const attachment of blobAttachments) {
+      const blobUrl = String(attachment.blobUrl || "");
+      if (
+        !blobUrl.startsWith(
+          "https://apogeehnp.blob.core.windows.net/inquiry-attachments/inquiries/"
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid attachment URL",
+        });
+      }
+      if (attachment.contentType && !isAllowedAttachmentType(attachment.contentType)) {
+        return res.status(400).json({
+          success: false,
+          message: "File type not allowed: " + attachment.contentType,
+        });
+      }
+    }
+
+    // Process legacy base64 attachments
+    let preparedInlineAttachments = [];
     try {
-      preparedJsonAttachments = jsonAttachments.map((attachment, index) => {
-        const contentBase64 = String(attachment?.contentBase64 || "").trim();
-        const content = Buffer.from(contentBase64, "base64");
+      preparedInlineAttachments = inlineJsonAttachments.map(
+        (attachment, index) => {
+          const contentBase64 = String(
+            attachment?.contentBase64 || ""
+          ).trim();
+          const content = Buffer.from(contentBase64, "base64");
 
-        if (!contentBase64 || content.length === 0) {
-          throw new Error("Invalid attachment content");
+          if (!contentBase64 || content.length === 0) {
+            throw new Error("Invalid attachment content");
+          }
+
+          if (content.length > MAX_INQUIRY_ATTACHMENT_BYTES) {
+            throw new Error(
+              `Attachment too large (max ${MAX_INQUIRY_ATTACHMENT_BYTES / (1024 * 1024)}MB)`
+            );
+          }
+
+          const contentType = String(
+            attachment?.contentType || ""
+          ).toLowerCase();
+          if (contentType && !isAllowedAttachmentType(contentType)) {
+            throw new Error(
+              "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
+            );
+          }
+
+          return {
+            filename: String(
+              attachment?.filename || `attachment_${index + 1}`
+            ),
+            content,
+            contentType: contentType || "application/octet-stream",
+          };
         }
-
-        if (content.length > MAX_INQUIRY_ATTACHMENT_BYTES) {
-          throw new Error(
-            `Attachment too large (max ${MAX_INQUIRY_ATTACHMENT_BYTES / (1024 * 1024)}MB)`
-          );
-        }
-
-        const contentType = String(attachment?.contentType || "").toLowerCase();
-      if (contentType && !isAllowedAttachmentType(contentType)) {
-        throw new Error(
-          "Only image, video, PDF, document, spreadsheet, or text attachments are allowed"
-        );
-        }
-
-        return {
-          filename: String(attachment?.filename || `attachment_${index + 1}`),
-          content,
-          contentType: contentType || "application/octet-stream",
-        };
-      });
+      );
     } catch (attachmentError) {
       return res.status(400).json({
         success: false,
@@ -352,14 +553,23 @@ router.post("/inquiry", authenticateToken, (req, res, next) => {
     const topicDisplay = INQUIRY_TOPICS[topic];
     const subject = `FitNxt Customer Inquiry - ${topicDisplay}`;
     const totalAttachments =
-      fileAttachments.length + preparedJsonAttachments.length;
+      fileAttachments.length +
+      preparedInlineAttachments.length +
+      blobAttachments.length;
 
     const userEmail = result.recordset[0].Email;
     const sendResult = await sendInquiryEmail({
       userEmail,
       message,
       subject,
-      attachments: [...fileAttachments, ...preparedJsonAttachments],
+      topic: topicDisplay,
+      attachments: [...fileAttachments, ...preparedInlineAttachments],
+      blobAttachments: blobAttachments.map((a) => ({
+        filename: a.filename || "attachment",
+        blobUrl: a.blobUrl,
+        contentType: a.contentType || "application/octet-stream",
+        size: a.size || 0,
+      })),
     });
 
     if (!sendResult.success) {

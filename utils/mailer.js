@@ -45,9 +45,19 @@ async function sendPasswordResetEmail(email, code) {
   }
 }
 
-async function sendInquiryEmail({ userEmail, message, subject, attachments = [] }) {
+async function sendInquiryEmail({
+  userEmail,
+  message,
+  subject,
+  topic,
+  attachments = [],
+  blobAttachments = [],
+}) {
   const safeEmail = String(userEmail || "").trim();
   const safeMessage = String(message || "").trim();
+  const safeTopic = topic ? escapeHtml(topic) : null;
+
+  // Process legacy inline attachments (base64 / multer buffers)
   const safeAttachments = (attachments || [])
     .map((attachment, index) => {
       const content = attachment?.content || attachment?.buffer;
@@ -71,6 +81,41 @@ async function sendInquiryEmail({ userEmail, message, subject, attachments = [] 
     })
     .filter(Boolean);
 
+  // Generate download links for blob-based attachments
+  let blobLinksHtml = "";
+  if (blobAttachments.length > 0) {
+    const { generateReadSas } = require("../middleware/blobClient");
+
+    const linkItems = blobAttachments
+      .map((a) => {
+        try {
+          const downloadUrl = generateReadSas(a.blobUrl, 30);
+          const safeName = escapeHtml(a.filename || "attachment");
+          const safeType = escapeHtml(a.contentType || "file");
+          const sizeLabel = a.size
+            ? ` (${formatFileSize(a.size)})`
+            : "";
+          return `<li><a href="${downloadUrl}">${safeName}</a> &mdash; ${safeType}${sizeLabel}</li>`;
+        } catch (err) {
+          console.error("Failed to generate read SAS for blob:", err.message);
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    if (linkItems.length > 0) {
+      blobLinksHtml = `
+        <h3>Attachments</h3>
+        <ul>${linkItems.join("")}</ul>
+        <p style="color:#888;font-size:12px;">Links expire in 30 days.</p>
+      `;
+    }
+  }
+
+  const topicLine = safeTopic
+    ? `<p><strong>Topic:</strong> ${safeTopic}</p>`
+    : "";
+
   const mailOptions = {
     from: `"FitNxt Support" <${process.env.EMAIL_USER}>`,
     to: "fitness@hpapogee.com",
@@ -79,20 +124,28 @@ async function sendInquiryEmail({ userEmail, message, subject, attachments = [] 
     text: `From: ${safeEmail}\n\n${safeMessage}`,
     html: `
       <h2>FitNxt Customer Inquiry</h2>
+      ${topicLine}
       <p><strong>From:</strong> ${escapeHtml(safeEmail)}</p>
       <p>${escapeHtml(safeMessage).replace(/\n/g, "<br />")}</p>
+      ${blobLinksHtml}
     `,
     attachments: safeAttachments.length > 0 ? safeAttachments : undefined,
   };
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log("✅ Inquiry email sent:", info.response);
+    console.log("Inquiry email sent:", info.response);
     return { success: true };
   } catch (error) {
-    console.error("❌ Error sending inquiry email:", error);
+    console.error("Error sending inquiry email:", error);
     return { success: false, error: error.message };
   }
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
 module.exports = { sendPasswordResetEmail, sendInquiryEmail, isEmailConfigured };
