@@ -285,6 +285,88 @@ describe("Data Routes API", () => {
   });
 
   // =========================================================================
+  // DEVICE DATA SYNC
+  // =========================================================================
+
+  describe("Device Data Sync", () => {
+    describe("PATCH /data/deviceData/sync/:deviceType", () => {
+      test("syncs device data into daily logs", async () => {
+        const state = getState();
+        const collectedDate = new Date(
+          Date.now() - 2 * 24 * 60 * 60 * 1000
+        ).toISOString();
+
+        const payload = {
+          deviceData: [
+            {
+              stepCount: 4321,
+              calories: 300,
+              sleepRating: 4,
+              collectedDate,
+              heartRate: 70,
+              waterIntake: 2.5,
+              restingHeartRate: 60,
+              heartRateVariability: 42,
+              weight: 180.5,
+              sleep: 7.25,
+            },
+          ],
+        };
+
+        const { response } = await api.patch(
+          "/data/deviceData/sync/oura",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+
+        const { response: logsResponse } = await api.get(
+          "/data/dailylogs?page=1&limit=200",
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(logsResponse.status).toBe(200);
+        const targetDate = new Date(collectedDate).toISOString().split("T")[0];
+        const syncedLog = (logsResponse.data.data || []).find((log) => {
+          const logDate = log.EffectiveDate
+            ? new Date(log.EffectiveDate).toISOString().split("T")[0]
+            : null;
+          return logDate === targetDate;
+        });
+
+        expect(syncedLog).toBeDefined();
+        if (syncedLog) {
+          const steps = syncedLog.Steps ?? syncedLog.steps;
+          const calories = syncedLog.CaloriesBurned ?? syncedLog.caloriesBurned;
+          expect(steps).toBe(4321);
+          expect(calories).toBe(300);
+        }
+      });
+
+      test("rejects empty device data list", async () => {
+        const state = getState();
+        const { response } = await api.patch(
+          "/data/deviceData/sync/oura",
+          { deviceData: [] },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(400);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.patch("/data/deviceData/sync/oura", {
+          deviceData: [
+            { stepCount: 100, calories: 10, sleepRating: 1, collectedDate: today },
+          ],
+        });
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
   // EXERCISES (CUSTOM)
   // =========================================================================
 

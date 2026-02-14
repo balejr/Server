@@ -30,6 +30,32 @@ function normalizeExerciseName(s) {
     .trim();
 }
 
+const toNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const toStringOrNull = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  return String(value);
+};
+
+const toDateOnly = (value) => {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString().split("T")[0];
+};
+
 /**
  * @swagger
  * /data/exercises:
@@ -378,6 +404,220 @@ router.get("/dailylog/:logId", authenticateToken, async (req, res) => {
     res.status(500).json({ message: "Failed to fetch daily log" });
   }
 });
+
+// -------------------- DEVICE DATA SYNC --------------------
+/**
+ * @swagger
+ * /data/deviceData/sync/{deviceType}:
+ *   patch:
+ *     summary: Sync device data
+ *     description: Sync device data into DeviceDataTemp and DailyLogs
+ *     tags: [Devices]
+ *     parameters:
+ *       - in: path
+ *         name: deviceType
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [deviceData]
+ *             properties:
+ *               deviceData:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     stepCount:
+ *                       type: integer
+ *                     calories:
+ *                       type: integer
+ *                     sleepRating:
+ *                       type: string
+ *                     collectedDate:
+ *                       type: string
+ *                       format: date-time
+ *                     heartRate:
+ *                       type: integer
+ *                     waterIntake:
+ *                       type: number
+ *                     restingHeartRate:
+ *                       type: integer
+ *                     heartRateVariability:
+ *                       type: integer
+ *                     weight:
+ *                       type: number
+ *                     sleep:
+ *                       type: number
+ *     responses:
+ *       200:
+ *         description: Device data synced successfully
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.patch(
+  "/deviceData/sync/:deviceType",
+  authenticateToken,
+  async (req, res) => {
+    const userId = req.user.userId;
+    const deviceType = req.params.deviceType;
+    const { deviceData } = req.body;
+
+    if (!Array.isArray(deviceData) || deviceData.length === 0) {
+      return res.status(400).json({ message: "No device data provided" });
+    }
+
+    const pool = getPool();
+
+    try {
+      for (const item of deviceData) {
+        const {
+          stepCount,
+          calories,
+          sleepRating,
+          collectedDate,
+          heartRate,
+          waterIntake,
+          restingHeartRate,
+          heartRateVariability,
+          weight,
+          sleep,
+        } = item || {};
+
+        const effectiveDate = toDateOnly(collectedDate);
+        if (!effectiveDate) {
+          return res
+            .status(400)
+            .json({ message: "collectedDate is required" });
+        }
+
+        await pool
+          .request()
+          .input("userId", mssql.Int, userId)
+          .input("deviceType", mssql.NVarChar(50), deviceType)
+          .input("stepCount", mssql.Int, toNumberOrNull(stepCount))
+          .input("calories", mssql.Int, toNumberOrNull(calories))
+          .input("sleepRating", mssql.NVarChar(20), toStringOrNull(sleepRating))
+          .input("collectedDate", mssql.DateTime, new Date(collectedDate))
+          .query(`
+            MERGE dbo.DeviceDataTemp AS target
+            USING (SELECT 
+                    @userId AS UserID, 
+                    @deviceType AS DeviceType, 
+                    @collectedDate AS CollectedDate
+                  ) AS source
+            ON target.UserID = source.UserID
+              AND target.DeviceType = source.DeviceType
+              AND target.CollectedDate = source.CollectedDate
+            WHEN MATCHED THEN
+              UPDATE SET 
+                StepCount = @stepCount,
+                Calories = @calories,
+                SleepRating = @sleepRating
+            WHEN NOT MATCHED THEN
+              INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+              VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+          `);
+
+        await pool
+          .request()
+          .input("userId", mssql.Int, userId)
+          .input("effectiveDate", mssql.Date, effectiveDate)
+          .input("sleep", mssql.Decimal(4, 2), toNumberOrNull(sleep))
+          .input("steps", mssql.Int, toNumberOrNull(stepCount))
+          .input("heartrate", mssql.Int, toNumberOrNull(heartRate))
+          .input(
+            "waterIntake",
+            mssql.Decimal(4, 2),
+            toNumberOrNull(waterIntake)
+          )
+          .input(
+            "sleepQuality",
+            mssql.NVarChar(20),
+            toStringOrNull(sleepRating)
+          )
+          .input("caloriesBurned", mssql.Int, toNumberOrNull(calories))
+          .input(
+            "restingHeartRate",
+            mssql.Int,
+            toNumberOrNull(restingHeartRate)
+          )
+          .input(
+            "heartrateVariability",
+            mssql.Int,
+            toNumberOrNull(heartRateVariability)
+          )
+          .input("weight", mssql.Decimal(5, 2), toNumberOrNull(weight))
+          .query(`
+            MERGE dbo.DailyLogs AS target
+            USING (SELECT 
+                    @userId AS UserID,
+                    @effectiveDate AS EffectiveDate
+                  ) AS source
+            ON target.UserID = source.UserID
+              AND target.EffectiveDate = source.EffectiveDate
+            WHEN MATCHED THEN
+              UPDATE SET
+                Sleep = COALESCE(@sleep, target.Sleep),
+                Steps = COALESCE(@steps, target.Steps),
+                Heartrate = COALESCE(@heartrate, target.Heartrate),
+                WaterIntake = COALESCE(@waterIntake, target.WaterIntake),
+                SleepQuality = COALESCE(@sleepQuality, target.SleepQuality),
+                CaloriesBurned = COALESCE(@caloriesBurned, target.CaloriesBurned),
+                RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate),
+                HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability),
+                Weight = COALESCE(@weight, target.Weight),
+                UpdatedAt = SYSDATETIMEOFFSET()
+            WHEN NOT MATCHED THEN
+              INSERT (
+                UserID,
+                EffectiveDate,
+                Sleep,
+                Steps,
+                Heartrate,
+                WaterIntake,
+                SleepQuality,
+                CaloriesBurned,
+                RestingHeartRate,
+                HeartrateVariability,
+                Weight
+              )
+              VALUES (
+                @userId,
+                @effectiveDate,
+                @sleep,
+                @steps,
+                @heartrate,
+                @waterIntake,
+                @sleepQuality,
+                @caloriesBurned,
+                @restingHeartRate,
+                @heartrateVariability,
+                @weight
+              );
+          `);
+      }
+
+      return res
+        .status(200)
+        .json({ message: "Device data synced successfully" });
+    } catch (err) {
+      logger.error("DeviceData UPSERT Error", { error: err.message });
+      return res.status(500).json({
+        message: "Failed to sync device data",
+        error: err.message,
+      });
+    }
+  }
+);
 
 /**
  * @swagger

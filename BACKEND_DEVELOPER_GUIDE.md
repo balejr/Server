@@ -1087,6 +1087,23 @@ Routes to correct payment gateway based on user's subscription.
 | PATCH | `/dailylog/:logId` | Update daily log |
 | DELETE | `/dailylog/:logId` | Delete daily log |
 
+**Device Data Sync:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| PATCH | `/deviceData/sync/:deviceType` | Sync device data into DeviceDataTemp and DailyLogs |
+
+**Device Data Mapping (DailyLogs):**
+- `Steps` ← `stepCount`
+- `CaloriesBurned` ← `calories`
+- `SleepQuality` ← `sleepRating`
+- `Heartrate` ← `heartRate`
+- `WaterIntake` ← `waterIntake`
+- `RestingHeartRate` ← `restingHeartRate`
+- `HeartrateVariability` ← `heartRateVariability`
+- `Weight` ← `weight`
+- `Sleep` ← `sleep`
+- `EffectiveDate` ← `collectedDate` (date-only)
+
 **Dashboard:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|

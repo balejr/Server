@@ -1204,6 +1204,50 @@ muscle: 42.3
 
 ---
 
+### Device Data Sync
+
+#### Sync Device Data
+
+| Setting     | Value                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| **Method**  | `PATCH`                                                               |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/deviceData/sync/oura`   |
+| **Headers** | `Authorization: Bearer <your_access_token>`                           |
+| **Body**    | raw → JSON                                                            |
+
+**Body:**
+
+```json
+{
+  "deviceData": [
+    {
+      "stepCount": 4321,
+      "calories": 300,
+      "sleepRating": 4,
+      "collectedDate": "2026-02-07T10:00:00.000Z",
+      "heartRate": 70,
+      "waterIntake": 2.5,
+      "restingHeartRate": 60,
+      "heartRateVariability": 42,
+      "weight": 180.5,
+      "sleep": 7.25
+    }
+  ]
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "message": "Device data synced successfully"
+}
+```
+
+> **Note:** Device data is stored in `DeviceDataTemp` and mapped into `DailyLogs` using `collectedDate` as `EffectiveDate`.
+
+---
+
 #### Get All Exercise Instances
 
 | Setting     | Value                                                             |
