@@ -339,8 +339,18 @@ describe("Data Routes API", () => {
         if (syncedLog) {
           const steps = syncedLog.Steps ?? syncedLog.steps;
           const calories = syncedLog.CaloriesBurned ?? syncedLog.caloriesBurned;
+          const heartrate = syncedLog.Heartrate ?? syncedLog.heartrate;
+          const restingHeartRate =
+            syncedLog.RestingHeartRate ??
+            syncedLog.restingHeartRate ??
+            syncedLog.RestingHeartrate;
+          const heartrateVariability =
+            syncedLog.HeartrateVariability ?? syncedLog.heartrateVariability;
           expect(steps).toBe(4321);
           expect(calories).toBe(300);
+          expect(heartrate).toBe(70);
+          expect(restingHeartRate).toBe(60);
+          expect(heartrateVariability).toBe(42);
         }
       });
 
@@ -502,14 +512,17 @@ describe("Data Routes API", () => {
     describe("POST /data/preworkoutassessment", () => {
       test("creates pre assessment with valid data", async () => {
         const state = getState();
+        const createdAt = new Date(
+          Date.now() - 5 * 24 * 60 * 60 * 1000
+        ).toISOString();
         const payload = {
           WorkoutPlanID: "plan-123",
           Feeling: "Energized",
-          WaterIntake: "2L",
+          WaterIntake: "2.75L",
           SleepQuality: 4,
-          SleepHours: "7.5",
+          SleepHours: "7.25",
           RecoveryStatus: "Ready",
-          CreatedAt: new Date().toISOString(),
+          CreatedAt: createdAt,
         };
 
         const { response, duration } = await api.post(
@@ -520,6 +533,28 @@ describe("Data Routes API", () => {
 
         expect(response.status).toBe(200);
         expect(response.data.success).toBe(true);
+
+        const { response: logsResponse } = await api.get(
+          "/data/dailylogs?page=1&limit=200",
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(logsResponse.status).toBe(200);
+        const targetDate = new Date(createdAt).toISOString().split("T")[0];
+        const syncedLog = (logsResponse.data.data || []).find((log) => {
+          const logDate = log.EffectiveDate
+            ? new Date(log.EffectiveDate).toISOString().split("T")[0]
+            : null;
+          return logDate === targetDate;
+        });
+
+        expect(syncedLog).toBeDefined();
+        if (syncedLog) {
+          const waterIntake = syncedLog.WaterIntake ?? syncedLog.waterIntake;
+          const sleep = syncedLog.Sleep ?? syncedLog.sleep;
+          expect(waterIntake).toBeCloseTo(2.75, 2);
+          expect(sleep).toBeCloseTo(7.25, 2);
+        }
         console.log(`     Pre assessment saved (${duration}ms)`);
       });
 

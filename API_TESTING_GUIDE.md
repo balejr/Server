@@ -1244,7 +1244,45 @@ muscle: 42.3
 }
 ```
 
-> **Note:** Device data is stored in `DeviceDataTemp` and mapped into `DailyLogs` using `collectedDate` as `EffectiveDate`.
+> **Note:** Device data is stored in `DeviceDataTemp` (including heart rate metrics when provided) and mapped into `DailyLogs` using `collectedDate` as `EffectiveDate`.
+
+---
+
+### Pre-Workout Assessment
+
+#### Create Pre-Workout Assessment
+
+| Setting     | Value                                                                     |
+| ----------- | ------------------------------------------------------------------------- |
+| **Method**  | `POST`                                                                    |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/preworkoutassessment`       |
+| **Headers** | `Authorization: Bearer <your_access_token>`                               |
+| **Body**    | raw → JSON                                                                |
+
+**Body:**
+
+```json
+{
+  "WorkoutPlanID": "plan-123",
+  "Feeling": "Energized",
+  "WaterIntake": "2.75L",
+  "SleepQuality": 4,
+  "SleepHours": "7.25",
+  "RecoveryStatus": "Ready",
+  "CreatedAt": "2026-02-07T10:00:00.000Z"
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "Pre assessment saved"
+}
+```
+
+> **Note:** `WaterIntake` and `SleepHours` are mapped into `DailyLogs` for the same date (`CreatedAt`/`AssessmentDate`).
 
 ---
 

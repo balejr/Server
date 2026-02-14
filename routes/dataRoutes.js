@@ -38,6 +38,18 @@ const toNumberOrNull = (value) => {
   return Number.isFinite(num) ? num : null;
 };
 
+const toNumberFromString = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
 const toStringOrNull = (value) => {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -491,6 +503,17 @@ router.patch(
           weight,
           sleep,
         } = item || {};
+        const resolvedHeartrate = toNumberOrNull(
+          heartRate ?? item?.heartrate ?? item?.heart_rate
+        );
+        const resolvedRestingHeartrate = toNumberOrNull(
+          restingHeartRate ?? item?.restingHeartrate ?? item?.resting_heart_rate
+        );
+        const resolvedHeartrateVariability = toNumberOrNull(
+          heartRateVariability ??
+            item?.heartrateVariability ??
+            item?.heart_rate_variability
+        );
 
         const effectiveDate = toDateOnly(collectedDate);
         if (!effectiveDate) {
@@ -506,6 +529,13 @@ router.patch(
           .input("stepCount", mssql.Int, toNumberOrNull(stepCount))
           .input("calories", mssql.Int, toNumberOrNull(calories))
           .input("sleepRating", mssql.NVarChar(20), toStringOrNull(sleepRating))
+          .input("heartrate", mssql.Int, resolvedHeartrate)
+          .input("restingHeartRate", mssql.Int, resolvedRestingHeartrate)
+          .input(
+            "heartrateVariability",
+            mssql.Int,
+            resolvedHeartrateVariability
+          )
           .input("collectedDate", mssql.DateTime, new Date(collectedDate))
           .query(`
             MERGE dbo.DeviceDataTemp AS target
@@ -521,10 +551,33 @@ router.patch(
               UPDATE SET 
                 StepCount = @stepCount,
                 Calories = @calories,
-                SleepRating = @sleepRating
+                SleepRating = @sleepRating,
+                Heartrate = COALESCE(@heartrate, target.Heartrate),
+                RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate),
+                HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability)
             WHEN NOT MATCHED THEN
-              INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
-              VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+              INSERT (
+                DeviceType,
+                StepCount,
+                Calories,
+                SleepRating,
+                Heartrate,
+                RestingHeartRate,
+                HeartrateVariability,
+                CollectedDate,
+                UserID
+              )
+              VALUES (
+                @deviceType,
+                @stepCount,
+                @calories,
+                @sleepRating,
+                @heartrate,
+                @restingHeartRate,
+                @heartrateVariability,
+                @collectedDate,
+                @userId
+              );
           `);
 
         await pool
@@ -533,7 +586,7 @@ router.patch(
           .input("effectiveDate", mssql.Date, effectiveDate)
           .input("sleep", mssql.Decimal(4, 2), toNumberOrNull(sleep))
           .input("steps", mssql.Int, toNumberOrNull(stepCount))
-          .input("heartrate", mssql.Int, toNumberOrNull(heartRate))
+          .input("heartrate", mssql.Int, resolvedHeartrate)
           .input(
             "waterIntake",
             mssql.Decimal(4, 2),
@@ -548,12 +601,12 @@ router.patch(
           .input(
             "restingHeartRate",
             mssql.Int,
-            toNumberOrNull(restingHeartRate)
+            resolvedRestingHeartrate
           )
           .input(
             "heartrateVariability",
             mssql.Int,
-            toNumberOrNull(heartRateVariability)
+            resolvedHeartrateVariability
           )
           .input("weight", mssql.Decimal(5, 2), toNumberOrNull(weight))
           .query(`
@@ -618,6 +671,155 @@ router.patch(
     }
   }
 );
+
+// -------------------- PRE WORKOUT ASSESSMENT --------------------
+/**
+ * @swagger
+ * /data/preworkoutassessment:
+ *   post:
+ *     summary: Create pre-workout assessment
+ *     description: Save pre-workout assessment and map water/sleep to DailyLogs
+ *     tags: [Assessments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               WorkoutPlanID:
+ *                 type: string
+ *               Feeling:
+ *                 type: string
+ *               WaterIntake:
+ *                 type: string
+ *               SleepQuality:
+ *                 type: integer
+ *               SleepHours:
+ *                 type: string
+ *               RecoveryStatus:
+ *                 type: string
+ *               CreatedAt:
+ *                 type: string
+ *                 format: date-time
+ *               AssessmentDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       200:
+ *         description: Pre-workout assessment saved
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post("/preworkoutassessment", authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const {
+    WorkoutPlanID,
+    Feeling,
+    WaterIntake,
+    SleepQuality,
+    SleepHours,
+    RecoveryStatus,
+    CreatedAt,
+    AssessmentDate,
+  } = req.body || {};
+
+  const effectiveDate = toDateOnly(AssessmentDate || CreatedAt || new Date());
+  if (!effectiveDate) {
+    return res.status(400).json({ success: false, message: "Invalid date" });
+  }
+
+  const createdAtValue = CreatedAt ? new Date(CreatedAt) : new Date();
+  const resolvedCreatedAt = Number.isNaN(createdAtValue.getTime())
+    ? new Date()
+    : createdAtValue;
+  const waterIntakeValue = toNumberFromString(WaterIntake);
+  const sleepHoursValue = toNumberFromString(SleepHours);
+
+  try {
+    const pool = getPool();
+    await pool
+      .request()
+      .input("userId", mssql.Int, userId)
+      .input("workoutPlanId", mssql.NVarChar(100), toStringOrNull(WorkoutPlanID))
+      .input("feeling", mssql.NVarChar(100), toStringOrNull(Feeling))
+      .input("waterIntake", mssql.NVarChar(50), toStringOrNull(WaterIntake))
+      .input("sleepQuality", mssql.Int, toNumberOrNull(SleepQuality))
+      .input("sleepHours", mssql.NVarChar(50), toStringOrNull(SleepHours))
+      .input("recoveryStatus", mssql.NVarChar(100), toStringOrNull(RecoveryStatus))
+      .input("createdAt", mssql.DateTimeOffset, resolvedCreatedAt)
+      .input("assessmentDate", mssql.Date, effectiveDate)
+      .query(`
+        INSERT INTO dbo.PreWorkoutAssessment (
+          UserID,
+          WorkoutPlanID,
+          Feeling,
+          WaterIntake,
+          SleepQuality,
+          SleepHours,
+          RecoveryStatus,
+          CreatedAt,
+          AssessmentDate
+        )
+        VALUES (
+          @userId,
+          @workoutPlanId,
+          @feeling,
+          @waterIntake,
+          @sleepQuality,
+          @sleepHours,
+          @recoveryStatus,
+          @createdAt,
+          @assessmentDate
+        );
+      `);
+
+    if (waterIntakeValue !== null || sleepHoursValue !== null) {
+      await pool
+        .request()
+        .input("userId", mssql.Int, userId)
+        .input("effectiveDate", mssql.Date, effectiveDate)
+        .input("waterIntake", mssql.Decimal(4, 2), waterIntakeValue)
+        .input("sleep", mssql.Decimal(4, 2), sleepHoursValue)
+        .query(`
+          MERGE dbo.DailyLogs AS target
+          USING (SELECT 
+                  @userId AS UserID,
+                  @effectiveDate AS EffectiveDate
+                ) AS source
+          ON target.UserID = source.UserID
+            AND target.EffectiveDate = source.EffectiveDate
+          WHEN MATCHED THEN
+            UPDATE SET
+              WaterIntake = COALESCE(@waterIntake, target.WaterIntake),
+              Sleep = COALESCE(@sleep, target.Sleep),
+              UpdatedAt = SYSDATETIMEOFFSET()
+          WHEN NOT MATCHED THEN
+            INSERT (
+              UserID,
+              EffectiveDate,
+              WaterIntake,
+              Sleep
+            )
+            VALUES (
+              @userId,
+              @effectiveDate,
+              @waterIntake,
+              @sleep
+            );
+        `);
+    }
+
+    return res.status(200).json({ success: true, message: "Pre assessment saved" });
+  } catch (err) {
+    logger.error("PreWorkoutAssessment POST Error", { error: err.message });
+    return res.status(500).json({ success: false, message: "Failed to save pre assessment" });
+  }
+});
 
 /**
  * @swagger

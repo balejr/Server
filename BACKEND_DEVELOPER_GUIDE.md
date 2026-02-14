@@ -1104,6 +1104,16 @@ Routes to correct payment gateway based on user's subscription.
 - `Sleep` ← `sleep`
 - `EffectiveDate` ← `collectedDate` (date-only)
 
+**Pre-Workout Assessment:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/preworkoutassessment` | Save pre-workout assessment and update DailyLogs |
+
+**Pre-Workout Assessment Mapping (DailyLogs):**
+- `WaterIntake` ← `WaterIntake`
+- `Sleep` ← `SleepHours`
+- `EffectiveDate` ← `AssessmentDate` or `CreatedAt` (date-only)
+
 **Dashboard:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
