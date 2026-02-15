@@ -7928,6 +7928,114 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).replace("_", " ");
 }
 
+function getFirstDefinedValue(...values) {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().split("T")[0];
+  }
+
+  const valueAsString = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valueAsString)) {
+    return valueAsString;
+  }
+
+  const parsed = new Date(valueAsString);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().split("T")[0];
+}
+
+function mapDevicePayloadToDailyLog(item, userId) {
+  const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
+
+  return {
+    userId,
+    sleep: getFirstDefinedValue(
+      item.sleep,
+      item.sleepHours,
+      item.sleepDuration,
+      item.totalSleep,
+      item.totalSleepHours
+    ),
+    steps: getFirstDefinedValue(item.stepCount, item.steps, item.StepCount),
+    heartrate: getFirstDefinedValue(item.heartRate, item.heartrate, item.HeartRate),
+    waterIntake: getFirstDefinedValue(item.waterIntake, item.WaterIntake),
+    sleepQuality: getFirstDefinedValue(item.sleepRating, item.sleepQuality, item.SleepRating),
+    caloriesBurned: getFirstDefinedValue(item.calories, item.caloriesBurned, item.Calories),
+    restingHeartRate: getFirstDefinedValue(
+      item.restingHeartRate,
+      item.restingHeartrate,
+      item.RestingHeartRate
+    ),
+    heartrateVariability: getFirstDefinedValue(
+      item.heartRateVariability,
+      item.heartrateVariability,
+      item.hrv,
+      item.HeartRateVariability,
+      item.HeartrateVariability
+    ),
+    weight: getFirstDefinedValue(item.weight, item.Weight),
+    effectiveDate: normalizeDateOnly(collectedDate),
+  };
+}
+
+async function upsertDailyLogFromDevice(pool, dailyLogValues) {
+  if (!dailyLogValues.effectiveDate) {
+    return;
+  }
+
+  await pool
+    .request()
+    .input("userId", dailyLogValues.userId)
+    .input("sleep", dailyLogValues.sleep)
+    .input("steps", dailyLogValues.steps)
+    .input("heartrate", dailyLogValues.heartrate)
+    .input("waterIntake", dailyLogValues.waterIntake)
+    .input("sleepQuality", dailyLogValues.sleepQuality)
+    .input("caloriesBurned", dailyLogValues.caloriesBurned)
+    .input("restingHeartRate", dailyLogValues.restingHeartRate)
+    .input("heartrateVariability", dailyLogValues.heartrateVariability)
+    .input("weight", dailyLogValues.weight)
+    .input("effectiveDate", dailyLogValues.effectiveDate).query(`
+      ;WITH LatestLog AS (
+        SELECT TOP 1 LogID
+        FROM dbo.DailyLogs
+        WHERE UserID = @userId
+          AND EffectiveDate = @effectiveDate
+        ORDER BY LogID DESC
+      )
+      UPDATE dl
+      SET
+        Sleep = COALESCE(@sleep, dl.Sleep),
+        Steps = COALESCE(@steps, dl.Steps),
+        Heartrate = COALESCE(@heartrate, dl.Heartrate),
+        WaterIntake = COALESCE(@waterIntake, dl.WaterIntake),
+        SleepQuality = COALESCE(@sleepQuality, dl.SleepQuality),
+        CaloriesBurned = COALESCE(@caloriesBurned, dl.CaloriesBurned),
+        RestingHeartRate = COALESCE(@restingHeartRate, dl.RestingHeartRate),
+        HeartrateVariability = COALESCE(@heartrateVariability, dl.HeartrateVariability),
+        Weight = COALESCE(@weight, dl.Weight),
+        UpdatedAt = SYSDATETIMEOFFSET()
+      FROM dbo.DailyLogs dl
+      INNER JOIN LatestLog ll ON dl.LogID = ll.LogID;
+
+      IF @@ROWCOUNT = 0
+      BEGIN
+        INSERT INTO dbo.DailyLogs
+          (UserID, Sleep, Steps, Heartrate, WaterIntake, SleepQuality, CaloriesBurned, RestingHeartRate, HeartrateVariability, Weight, EffectiveDate)
+        VALUES
+          (@userId, @sleep, @steps, @heartrate, @waterIntake, @sleepQuality, @caloriesBurned, @restingHeartRate, @heartrateVariability, @weight, @effectiveDate);
+      END
+    `);
+}
+
 //-------------- DEVICE DATA --------------------
 
 // GET /api/deviceData/lastSync
@@ -7969,12 +8077,10 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
 
   try {
     for (const item of deviceData) {
-      const {
-        stepCount,
-        calories,
-        sleepRating,
-        collectedDate
-      } = item;
+      const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
+      const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
+      const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
+      const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
 
       await pool.request()
         .input('userId', userId)
@@ -8004,6 +8110,9 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
             INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
             VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
         `);
+
+      const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
+      await upsertDailyLogFromDevice(pool, dailyLogValues);
     }
 
     return res.status(200).json({ message: 'Device data synced successfully' });
@@ -8020,6 +8129,7 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
 // ----------------- OURA ------------------
 router.post('/oura/sync', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
+  const deviceType = 'oura';
   const pool = getPool();
 
   try {
@@ -8126,10 +8236,10 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
 
     // Upsert data into SQL
     for (const item of deviceData) {
-      const collectedDate = item.summary_date;
-      const stepCount = item.activity.summary.steps;
-      const calories = item.activity.summary.calories;
-      const sleepRating = item.sleep.score;
+      const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
+      const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
+      const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
+      const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
 
       await pool.request()
         .input('userId', userId) // actual variable, not string
@@ -8157,6 +8267,9 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
       VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
   `);
+
+      const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
+      await upsertDailyLogFromDevice(pool, dailyLogValues);
     }
 
     return res.status(200).json({ message: 'Oura data synced successfully' });

@@ -1122,6 +1122,32 @@ Routes to correct payment gateway based on user's subscription.
 | PATCH | `/dailylog/:logId` | Update daily log |
 | DELETE | `/dailylog/:logId` | Delete daily log |
 
+**Device Data Sync:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/deviceData/lastSync/:deviceType` | Get latest `CollectedDate` synced for the device type |
+| PATCH | `/deviceData/sync/:deviceType` | Upsert device payload into `DeviceDataTemp` and mirror mapped fields into `DailyLogs` |
+| POST | `/oura/sync` | Pull Oura activity/sleep data and sync into both `DeviceDataTemp` and `DailyLogs` |
+| POST | `/oura/disconnect` | Remove stored Oura tokens for the authenticated user |
+
+**Device Sync → DailyLogs Mapping (`PATCH /deviceData/sync/:deviceType`):**
+
+| DailyLogs Column | Device Payload Field |
+|------------------|----------------------|
+| `UserID` | Authenticated user (`req.user.userId`) |
+| `Sleep` | `sleep` / `sleepHours` / `sleepDuration` / `totalSleep` |
+| `Steps` | `stepCount` |
+| `Heartrate` | `heartRate` / `HeartRate` |
+| `WaterIntake` | `waterIntake` |
+| `SleepQuality` | `sleepRating` |
+| `CaloriesBurned` | `calories` |
+| `RestingHeartRate` | `restingHeartRate` |
+| `HeartrateVariability` | `heartRateVariability` / `HeartRateVariability` / `hrv` |
+| `Weight` | `weight` |
+| `EffectiveDate` | Date portion of `collectedDate` (`CollectedDate`) |
+
+**Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null device values. If no row exists for that date, a new `DailyLogs` row is inserted.
+
 **Pre Assessment:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
