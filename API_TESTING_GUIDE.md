@@ -1103,6 +1103,82 @@ muscle: 42.3
 
 ---
 
+#### Sync Device Data (writes `DeviceDataTemp` + `DailyLogs`)
+
+| Setting       | Value                                                                 |
+| ------------- | --------------------------------------------------------------------- |
+| **Method**    | `PATCH`                                                               |
+| **URL**       | `https://apogeehnp.azurewebsites.net/api/data/deviceData/sync/<deviceType>` |
+| **Headers**   | `Authorization: Bearer <your_access_token>`                           |
+| **Body Type** | raw → JSON                                                            |
+
+**Body:**
+
+```json
+{
+  "deviceData": [
+    {
+      "collectedDate": "2025-01-03",
+      "sleep": 7.1,
+      "stepCount": 9640,
+      "heartRate": 66,
+      "waterIntake": 2.4,
+      "sleepRating": "good",
+      "calories": 2180,
+      "restingHeartRate": 57,
+      "heartRateVariability": 42,
+      "weight": 173.5
+    }
+  ]
+}
+```
+
+**Expected Response (200 OK):**
+
+```json
+{
+  "message": "Device data synced successfully"
+}
+```
+
+**DailyLogs mapping applied during sync:**
+
+| DailyLogs Field | Device Field |
+| --------------- | ------------ |
+| `UserID` | Authenticated user |
+| `Sleep` | `sleep` |
+| `Steps` | `stepCount` |
+| `Heartrate` | `heartRate` |
+| `WaterIntake` | `waterIntake` |
+| `SleepQuality` | `sleepRating` |
+| `CaloriesBurned` | `calories` |
+| `RestingHeartRate` | `restingHeartRate` |
+| `HeartrateVariability` | `heartRateVariability` |
+| `Weight` | `weight` |
+| `EffectiveDate` | `collectedDate` (date portion) |
+
+---
+
+#### Get Device Last Sync Date
+
+| Setting     | Value                                                                       |
+| ----------- | --------------------------------------------------------------------------- |
+| **Method**  | `GET`                                                                       |
+| **URL**     | `https://apogeehnp.azurewebsites.net/api/data/deviceData/lastSync/<deviceType>` |
+| **Headers** | `Authorization: Bearer <your_access_token>`                                 |
+
+**Expected Response (200 OK):**
+
+```json
+[
+  {
+    "CollectedDate": "2025-01-03T00:00:00.000Z"
+  }
+]
+```
+
+---
+
 #### Create Pre-Workout Assessment
 
 | Setting       | Value                                                        |

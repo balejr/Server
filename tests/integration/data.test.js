@@ -31,6 +31,7 @@ let createdMicrocycleId;
 let createdCustomExerciseId;
 let createdCustomExerciseName;
 let createdCustomExerciseSuffix;
+let deviceSyncDate;
 
 // Today's date for test data
 const today = new Date().toISOString().split("T")[0];
@@ -279,6 +280,91 @@ describe("Data Routes API", () => {
 
       test("requires authentication", async () => {
         const { response } = await api.delete("/data/dailylog/1");
+        expect(response.status).toBe(401);
+      });
+    });
+  });
+
+  // =========================================================================
+  // DEVICE DATA
+  // =========================================================================
+
+  describe("Device Data", () => {
+    describe("PATCH /data/deviceData/sync/:deviceType", () => {
+      test("syncs device data payload", async () => {
+        const state = getState();
+        deviceSyncDate = new Date(Date.now() + 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0];
+
+        const payload = {
+          deviceData: [
+            {
+              stepCount: 7560,
+              calories: 2200,
+              sleepRating: "good",
+              collectedDate: deviceSyncDate,
+              sleep: 7.2,
+              heartRate: 67,
+              waterIntake: 2.4,
+              restingHeartRate: 58,
+              heartRateVariability: 41,
+              weight: 173.5,
+            },
+          ],
+        };
+
+        const { response, duration } = await api.patch(
+          "/data/deviceData/sync/device-test",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.data.message).toBeDefined();
+        console.log(`     Device data synced (${duration}ms)`);
+      });
+
+      test("returns 400 when no device data is provided", async () => {
+        const state = getState();
+        const { response } = await api.patch(
+          "/data/deviceData/sync/device-test",
+          { deviceData: [] },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(400);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.patch("/data/deviceData/sync/device-test", {
+          deviceData: [{ stepCount: 1000, collectedDate: today }],
+        });
+
+        expect(response.status).toBe(401);
+      });
+    });
+
+    describe("GET /data/deviceData/lastSync/:deviceType", () => {
+      test("returns last synced timestamp", async () => {
+        const state = getState();
+        const { response, duration } = await api.get(
+          "/data/deviceData/lastSync/device-test",
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(Array.isArray(response.data)).toBe(true);
+        if (response.data[0]) {
+          const collected =
+            response.data[0].CollectedDate ?? response.data[0].collectedDate;
+          expect(collected).toBeDefined();
+        }
+        console.log(`     Last sync fetched (${duration}ms)`);
+      });
+
+      test("requires authentication", async () => {
+        const { response } = await api.get("/data/deviceData/lastSync/device-test");
         expect(response.status).toBe(401);
       });
     });
