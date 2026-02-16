@@ -1135,16 +1135,16 @@ Routes to correct payment gateway based on user's subscription.
 | DailyLogs Column | Device Payload Field |
 |------------------|----------------------|
 | `UserID` | Authenticated user (`req.user.userId`) |
-| `Sleep` | `sleep` / `sleepHours` / `sleepDuration` / `totalSleep` |
-| `Steps` | `stepCount` |
-| `Heartrate` | `heartrate` / `heartRate` / `HeartRate` |
-| `WaterIntake` | `waterIntake` |
-| `SleepQuality` | `sleepRating` |
-| `CaloriesBurned` | `calories` |
-| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` |
-| `HeartrateVariability` | `heartrateVariability` / `heartratevariability` / `heartRateVariability` / `HeartRateVariability` / `hrv` |
+| `Sleep` | `sleep` / `sleepHours` / `sleepDuration` / `totalSleep` / `sleep_hours` |
+| `Steps` | `stepCount` / `steps` / `step_count` |
+| `Heartrate` | `heartrate` / `heartRate` / `HeartRate` / `heart_rate` (also nested like `heartRate.value`/`heart_rate.value`) |
+| `WaterIntake` | `waterIntake` / `water_intake` |
+| `SleepQuality` | `sleepRating` / `sleepQuality` / `sleep_rating` |
+| `CaloriesBurned` | `calories` / `caloriesBurned` / `calories_burned` |
+| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` / `resting_heart_rate` (supports nested `.value`) |
+| `HeartrateVariability` | `heartrateVariability` / `heartratevariability` / `heartRateVariability` / `HeartRateVariability` / `hrv` / `heart_rate_variability` (supports nested `.value`) |
 | `Weight` | `weight` |
-| `EffectiveDate` | Date portion of `collectedDate` (`CollectedDate`) |
+| `EffectiveDate` | Date portion of `collectedDate` (`CollectedDate` / `collected_date`) |
 
 **DeviceDataTemp behavior:** `PATCH /deviceData/sync/:deviceType` and `POST /oura/sync` now upsert `Heartrate`, `HeartrateVariability`, and `RestingHeartRate` into `dbo.DeviceDataTemp` when provided.
 

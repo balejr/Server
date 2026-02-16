@@ -382,6 +382,65 @@ describe("Data Routes API", () => {
         expect(response.status).toBe(200);
       });
 
+      test("accepts snake_case and nested heart metric payloads", async () => {
+        const state = getState();
+        const snakeCaseDate = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0];
+
+        const payload = {
+          deviceData: [
+            {
+              collected_date: snakeCaseDate,
+              step_count: 7021,
+              calories_burned: 1999,
+              sleep_rating: "fair",
+              heart_rate: { value: 63 },
+              heart_rate_variability: { value: 37 },
+              resting_heart_rate: { value: 54 },
+            },
+          ],
+        };
+
+        const { response } = await api.patch(
+          "/data/deviceData/sync/device-test",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+
+        const { response: logsResponse } = await api.get("/data/dailylogs?page=1&limit=50", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(logsResponse.status).toBe(200);
+        const logs = logsResponse.data?.data ?? [];
+        const logForSnakeCaseDate = logs.find((log) => {
+          const effectiveDateRaw = log.EffectiveDate ?? log.effectiveDate;
+          const effectiveDate =
+            typeof effectiveDateRaw === "string"
+              ? effectiveDateRaw.split("T")[0]
+              : null;
+          return effectiveDate === snakeCaseDate;
+        });
+
+        expect(logForSnakeCaseDate).toBeDefined();
+        expect(Number(logForSnakeCaseDate.Heartrate ?? logForSnakeCaseDate.heartrate)).toBe(63);
+        expect(
+          Number(
+            logForSnakeCaseDate.HeartrateVariability ??
+              logForSnakeCaseDate.heartrateVariability
+          )
+        ).toBe(37);
+        expect(
+          Number(
+            logForSnakeCaseDate.RestingHeartRate ??
+              logForSnakeCaseDate.restingHeartRate
+          )
+        ).toBe(54);
+      });
+
       test("maps device heartrate metrics into daily logs", async () => {
         if (!deviceSyncDate) {
           console.log("     [SKIP] No device sync date available");

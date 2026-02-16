@@ -1148,20 +1148,22 @@ muscle: 42.3
 | `UserID` | Authenticated user |
 | `Sleep` | `sleep` |
 | `Steps` | `stepCount` |
-| `Heartrate` | `heartrate` / `heartRate` |
+| `Heartrate` | `heartrate` / `heartRate` / `heart_rate` |
 | `WaterIntake` | `waterIntake` |
 | `SleepQuality` | `sleepRating` |
 | `CaloriesBurned` | `calories` |
-| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` |
-| `HeartrateVariability` | `heartratevariability` / `heartRateVariability` |
+| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` / `resting_heart_rate` |
+| `HeartrateVariability` | `heartratevariability` / `heartRateVariability` / `heart_rate_variability` |
 | `Weight` | `weight` |
-| `EffectiveDate` | `collectedDate` (date portion) |
+| `EffectiveDate` | `collectedDate` / `collected_date` (date portion) |
 
 > **Also stored in `DeviceDataTemp` when available:** `Heartrate`, `HeartrateVariability`, `RestingHeartRate`.
 >
 > **Compatibility:** If the backend database still has an older `DeviceDataTemp` schema without one or more of these heart columns, sync still succeeds and daily-log mapping still runs.
 >
 > **DailyLogs compatibility:** Sync update paths do not depend on a `DailyLogs.UpdatedAt` column. Older DailyLogs schemas are supported.
+>
+> **Nested metric support:** if device payload sends objects, the API extracts numeric values from common keys like `value`, `quantity`, `bpm`, or `sdnn` (for example, `"heart_rate": { "value": 63 }`).
 
 ---
 

@@ -7978,43 +7978,170 @@ function parseNullableNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function getValueByPath(source, path) {
+  if (!source || !path) return undefined;
+  return String(path)
+    .split(".")
+    .reduce((acc, key) => (acc == null ? undefined : acc[key]), source);
+}
+
+function unwrapMetricValue(value) {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const unwrapped = unwrapMetricValue(entry);
+      if (unwrapped !== undefined && unwrapped !== null && unwrapped !== "") {
+        return unwrapped;
+      }
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    return getFirstDefinedValue(
+      value.value,
+      value.quantity,
+      value.amount,
+      value.bpm,
+      value.sdnn,
+      value.average,
+      value.avg,
+      value.doubleValue
+    );
+  }
+
+  return value;
+}
+
+const DEVICE_SYNC_FIELD_ALIASES = {
+  collectedDate: [
+    "collectedDate",
+    "CollectedDate",
+    "collected_date",
+    "date",
+    "Date",
+    "sampleDate",
+    "sample_date",
+    "startDate",
+    "start_date",
+  ],
+  sleep: [
+    "sleep",
+    "sleepHours",
+    "sleepDuration",
+    "totalSleep",
+    "totalSleepHours",
+    "sleep_hours",
+    "sleep.durationHours",
+    "sleep.duration",
+    "sleep.value",
+  ],
+  stepCount: [
+    "stepCount",
+    "steps",
+    "StepCount",
+    "step_count",
+    "metrics.stepCount",
+    "metrics.steps",
+    "activity.steps",
+  ],
+  calories: [
+    "calories",
+    "caloriesBurned",
+    "Calories",
+    "calories_burned",
+    "total_calories",
+    "activity.calories",
+    "activity.total_calories",
+  ],
+  sleepRating: [
+    "sleepRating",
+    "sleepQuality",
+    "SleepRating",
+    "sleep_rating",
+    "sleep_score",
+    "sleep.score",
+  ],
+  heartrate: [
+    "heartrate",
+    "heartRate",
+    "HeartRate",
+    "heart_rate",
+    "heartratevalue",
+    "heartRateAvg",
+    "heart_rate_avg",
+    "heartRate.value",
+    "heartrate.value",
+    "heart_rate.value",
+    "vitals.heartRate",
+    "vitals.heartrate",
+  ],
+  heartrateVariability: [
+    "heartrateVariability",
+    "heartRateVariability",
+    "heartratevariability",
+    "HeartRateVariability",
+    "hrv",
+    "heart_rate_variability",
+    "heart_rate_variability_sdnn",
+    "heartRateVariabilitySDNN",
+    "heartRateVariability.value",
+    "heart_rate_variability.value",
+    "hrv.value",
+    "vitals.heartRateVariability",
+    "vitals.hrv",
+  ],
+  restingHeartRate: [
+    "restingHeartRate",
+    "restingHeartrate",
+    "restingheartrate",
+    "RestingHeartRate",
+    "resting_heart_rate",
+    "restingHeartRate.value",
+    "resting_heart_rate.value",
+    "vitals.restingHeartRate",
+    "vitals.resting_heart_rate",
+  ],
+  waterIntake: [
+    "waterIntake",
+    "WaterIntake",
+    "water_intake",
+    "hydration",
+    "hydration.value",
+  ],
+  weight: ["weight", "Weight", "bodyWeight", "body_weight", "weight.value"],
+};
+
+function getDeviceSyncField(item, fieldName) {
+  const aliases = DEVICE_SYNC_FIELD_ALIASES[fieldName] || [];
+  for (const alias of aliases) {
+    const candidate = unwrapMetricValue(getValueByPath(item, alias));
+    if (candidate !== undefined && candidate !== null && candidate !== "") {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 function mapDevicePayloadToDailyLog(item, userId) {
-  const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
+  const collectedDate = getDeviceSyncField(item, "collectedDate");
 
   return {
     userId,
-    sleep: getFirstDefinedValue(
-      item.sleep,
-      item.sleepHours,
-      item.sleepDuration,
-      item.totalSleep,
-      item.totalSleepHours
+    sleep: parseNullableNumber(getDeviceSyncField(item, "sleep")),
+    steps: parseNullableNumber(getDeviceSyncField(item, "stepCount")),
+    heartrate: parseNullableNumber(getDeviceSyncField(item, "heartrate")),
+    waterIntake: parseNullableNumber(getDeviceSyncField(item, "waterIntake")),
+    sleepQuality: getDeviceSyncField(item, "sleepRating"),
+    caloriesBurned: parseNullableNumber(getDeviceSyncField(item, "calories")),
+    restingHeartRate: parseNullableNumber(getDeviceSyncField(item, "restingHeartRate")),
+    heartrateVariability: parseNullableNumber(
+      getDeviceSyncField(item, "heartrateVariability")
     ),
-    steps: getFirstDefinedValue(item.stepCount, item.steps, item.StepCount),
-    heartrate: getFirstDefinedValue(
-      item.heartRate,
-      item.heartrate,
-      item.HeartRate,
-      item.heartratevalue
-    ),
-    waterIntake: getFirstDefinedValue(item.waterIntake, item.WaterIntake),
-    sleepQuality: getFirstDefinedValue(item.sleepRating, item.sleepQuality, item.SleepRating),
-    caloriesBurned: getFirstDefinedValue(item.calories, item.caloriesBurned, item.Calories),
-    restingHeartRate: getFirstDefinedValue(
-      item.restingHeartRate,
-      item.restingHeartrate,
-      item.restingheartrate,
-      item.RestingHeartRate
-    ),
-    heartrateVariability: getFirstDefinedValue(
-      item.heartRateVariability,
-      item.heartrateVariability,
-      item.heartratevariability,
-      item.hrv,
-      item.HeartRateVariability,
-      item.HeartrateVariability
-    ),
-    weight: getFirstDefinedValue(item.weight, item.Weight),
+    weight: parseNullableNumber(getDeviceSyncField(item, "weight")),
     effectiveDate: normalizeDateOnly(collectedDate),
   };
 }
@@ -8224,30 +8351,25 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
     }
 
     for (const item of deviceData) {
-      const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
-      const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
-      const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
-      const heartrate = getFirstDefinedValue(
-        item.heartrate,
-        item.heartRate,
-        item.HeartRate,
-        item.heartratevalue
+      const stepCount = parseNullableNumber(getDeviceSyncField(item, "stepCount"));
+      const calories = parseNullableNumber(getDeviceSyncField(item, "calories"));
+      const sleepRating = getDeviceSyncField(item, "sleepRating");
+      const heartrate = parseNullableNumber(getDeviceSyncField(item, "heartrate"));
+      const heartrateVariability = parseNullableNumber(
+        getDeviceSyncField(item, "heartrateVariability")
       );
-      const heartrateVariability = getFirstDefinedValue(
-        item.heartrateVariability,
-        item.heartRateVariability,
-        item.heartratevariability,
-        item.HeartRateVariability,
-        item.HeartrateVariability,
-        item.hrv
+      const restingHeartRate = parseNullableNumber(
+        getDeviceSyncField(item, "restingHeartRate")
       );
-      const restingHeartRate = getFirstDefinedValue(
-        item.restingHeartRate,
-        item.restingHeartrate,
-        item.restingheartrate,
-        item.RestingHeartRate
-      );
-      const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
+      const collectedDate = getDeviceSyncField(item, "collectedDate");
+
+      if (!collectedDate) {
+        logger.warn("Skipping device sync row with missing collectedDate", {
+          userId,
+          deviceType,
+        });
+        continue;
+      }
 
       await upsertDeviceDataTemp(
         pool,
@@ -8408,29 +8530,25 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
 
     // Upsert data into SQL
     for (const item of deviceData) {
-      const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
-      const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
-      const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
-      const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
-      const heartrate = getFirstDefinedValue(
-        item.heartrate,
-        item.heartRate,
-        item.HeartRate
+      const collectedDate = getDeviceSyncField(item, "collectedDate");
+      const stepCount = parseNullableNumber(getDeviceSyncField(item, "stepCount"));
+      const calories = parseNullableNumber(getDeviceSyncField(item, "calories"));
+      const sleepRating = getDeviceSyncField(item, "sleepRating");
+      const heartrate = parseNullableNumber(getDeviceSyncField(item, "heartrate"));
+      const heartrateVariability = parseNullableNumber(
+        getDeviceSyncField(item, "heartrateVariability")
       );
-      const heartrateVariability = getFirstDefinedValue(
-        item.heartrateVariability,
-        item.heartRateVariability,
-        item.heartratevariability,
-        item.HeartRateVariability,
-        item.HeartrateVariability,
-        item.hrv
+      const restingHeartRate = parseNullableNumber(
+        getDeviceSyncField(item, "restingHeartRate")
       );
-      const restingHeartRate = getFirstDefinedValue(
-        item.restingHeartRate,
-        item.restingHeartrate,
-        item.restingheartrate,
-        item.RestingHeartRate
-      );
+
+      if (!collectedDate) {
+        logger.warn("Skipping Oura sync row with missing collectedDate", {
+          userId,
+          deviceType,
+        });
+        continue;
+      }
 
       await upsertDeviceDataTemp(
         pool,
