@@ -8054,8 +8054,7 @@ async function upsertDailyLogFromDevice(pool, dailyLogValues) {
         CaloriesBurned = COALESCE(@caloriesBurned, dl.CaloriesBurned),
         RestingHeartRate = COALESCE(@restingHeartRate, dl.RestingHeartRate),
         HeartrateVariability = COALESCE(@heartrateVariability, dl.HeartrateVariability),
-        Weight = COALESCE(@weight, dl.Weight),
-        UpdatedAt = SYSDATETIMEOFFSET()
+        Weight = COALESCE(@weight, dl.Weight)
       FROM dbo.DailyLogs dl
       INNER JOIN LatestLog ll ON dl.LogID = ll.LogID;
 

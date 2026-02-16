@@ -1152,6 +1152,8 @@ Routes to correct payment gateway based on user's subscription.
 
 **Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null values. If no row exists for that date, a new `DailyLogs` row is inserted.
 
+**DailyLogs schema compatibility:** Device/pre-assessment sync does not require `DailyLogs.UpdatedAt` to exist. The upsert works with older schemas that only include core health columns.
+
 **Pre Assessment:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|

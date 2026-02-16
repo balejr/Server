@@ -1160,6 +1160,8 @@ muscle: 42.3
 > **Also stored in `DeviceDataTemp` when available:** `Heartrate`, `HeartrateVariability`, `RestingHeartRate`.
 >
 > **Compatibility:** If the backend database still has an older `DeviceDataTemp` schema without one or more of these heart columns, sync still succeeds and daily-log mapping still runs.
+>
+> **DailyLogs compatibility:** Sync update paths do not depend on a `DailyLogs.UpdatedAt` column. Older DailyLogs schemas are supported.
 
 ---
 
