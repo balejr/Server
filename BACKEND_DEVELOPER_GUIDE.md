@@ -1148,6 +1148,8 @@ Routes to correct payment gateway based on user's subscription.
 
 **DeviceDataTemp behavior:** `PATCH /deviceData/sync/:deviceType` and `POST /oura/sync` now upsert `Heartrate`, `HeartrateVariability`, and `RestingHeartRate` into `dbo.DeviceDataTemp` when provided.
 
+**Compatibility note:** The API checks which heart-rate columns exist in `dbo.DeviceDataTemp` at runtime. If one or more are missing in an older database schema, sync continues (without failing the whole request), and `DailyLogs` mirroring still proceeds.
+
 **Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null values. If no row exists for that date, a new `DailyLogs` row is inserted.
 
 **Pre Assessment:**

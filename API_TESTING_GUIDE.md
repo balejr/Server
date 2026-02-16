@@ -1158,6 +1158,8 @@ muscle: 42.3
 | `EffectiveDate` | `collectedDate` (date portion) |
 
 > **Also stored in `DeviceDataTemp` when available:** `Heartrate`, `HeartrateVariability`, `RestingHeartRate`.
+>
+> **Compatibility:** If the backend database still has an older `DeviceDataTemp` schema without one or more of these heart columns, sync still succeeds and daily-log mapping still runs.
 
 ---
 

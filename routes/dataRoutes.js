@@ -8069,6 +8069,106 @@ async function upsertDailyLogFromDevice(pool, dailyLogValues) {
     `);
 }
 
+async function getDeviceDataTempHeartColumnSupport(pool) {
+  const result = await pool.request().query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = 'dbo'
+      AND TABLE_NAME = 'DeviceDataTemp'
+      AND COLUMN_NAME IN ('Heartrate', 'HeartrateVariability', 'RestingHeartRate');
+  `);
+
+  const existingColumns = new Set(
+    result.recordset.map((row) => String(row.COLUMN_NAME || "").toLowerCase())
+  );
+
+  return {
+    heartrate: existingColumns.has("heartrate"),
+    heartrateVariability: existingColumns.has("heartratevariability"),
+    restingHeartRate: existingColumns.has("restingheartrate"),
+  };
+}
+
+function buildDeviceDataTempMergeQuery(heartColumnSupport) {
+  const updateSet = [
+    "StepCount = COALESCE(@stepCount, target.StepCount)",
+    "Calories = COALESCE(@calories, target.Calories)",
+    "SleepRating = COALESCE(@sleepRating, target.SleepRating)",
+  ];
+  const insertColumns = ["DeviceType", "StepCount", "Calories", "SleepRating"];
+  const insertValues = ["@deviceType", "@stepCount", "@calories", "@sleepRating"];
+
+  if (heartColumnSupport.heartrate) {
+    updateSet.push("Heartrate = COALESCE(@heartrate, target.Heartrate)");
+    insertColumns.push("Heartrate");
+    insertValues.push("@heartrate");
+  }
+
+  if (heartColumnSupport.heartrateVariability) {
+    updateSet.push(
+      "HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability)"
+    );
+    insertColumns.push("HeartrateVariability");
+    insertValues.push("@heartrateVariability");
+  }
+
+  if (heartColumnSupport.restingHeartRate) {
+    updateSet.push(
+      "RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate)"
+    );
+    insertColumns.push("RestingHeartRate");
+    insertValues.push("@restingHeartRate");
+  }
+
+  insertColumns.push("CollectedDate", "UserID");
+  insertValues.push("@collectedDate", "@userId");
+
+  return `
+    MERGE DeviceDataTemp AS target
+    USING (SELECT 
+            @userId AS UserID, 
+            @deviceType AS DeviceType, 
+            @collectedDate AS CollectedDate
+          ) AS source
+    ON target.UserID = source.UserID
+       AND target.DeviceType = source.DeviceType
+       AND target.CollectedDate = source.CollectedDate
+
+    WHEN MATCHED THEN
+      UPDATE SET 
+        ${updateSet.join(",\n        ")}
+
+    WHEN NOT MATCHED THEN
+      INSERT (${insertColumns.join(", ")})
+      VALUES (${insertValues.join(", ")});
+  `;
+}
+
+async function upsertDeviceDataTemp(pool, values, heartColumnSupport) {
+  const request = pool
+    .request()
+    .input("userId", values.userId)
+    .input("deviceType", values.deviceType)
+    .input("stepCount", values.stepCount ?? null)
+    .input("calories", values.calories ?? null)
+    .input("sleepRating", values.sleepRating ?? null)
+    .input("collectedDate", values.collectedDate);
+
+  if (heartColumnSupport.heartrate) {
+    request.input("heartrate", values.heartrate ?? null);
+  }
+
+  if (heartColumnSupport.heartrateVariability) {
+    request.input("heartrateVariability", values.heartrateVariability ?? null);
+  }
+
+  if (heartColumnSupport.restingHeartRate) {
+    request.input("restingHeartRate", values.restingHeartRate ?? null);
+  }
+
+  await request.query(buildDeviceDataTempMergeQuery(heartColumnSupport));
+}
+
 //-------------- DEVICE DATA --------------------
 
 // GET /api/deviceData/lastSync
@@ -8109,6 +8209,21 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
   const pool = getPool();
 
   try {
+    const heartColumnSupport = await getDeviceDataTempHeartColumnSupport(pool);
+    const missingHeartColumns = [
+      !heartColumnSupport.heartrate ? "Heartrate" : null,
+      !heartColumnSupport.heartrateVariability ? "HeartrateVariability" : null,
+      !heartColumnSupport.restingHeartRate ? "RestingHeartRate" : null,
+    ].filter(Boolean);
+
+    if (missingHeartColumns.length > 0) {
+      logger.warn("DeviceDataTemp heart columns missing; skipping those temp fields", {
+        userId,
+        deviceType,
+        missingHeartColumns,
+      });
+    }
+
     for (const item of deviceData) {
       const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
       const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
@@ -8135,40 +8250,21 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
       );
       const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
 
-      await pool.request()
-        .input('userId', userId)
-        .input('deviceType', deviceType)
-        .input('stepCount', stepCount)
-        .input('calories', calories)
-        .input('sleepRating', sleepRating)
-        .input('heartrate', heartrate)
-        .input('heartrateVariability', heartrateVariability)
-        .input('restingHeartRate', restingHeartRate)
-        .input('collectedDate', collectedDate)
-        .query(`
-          MERGE DeviceDataTemp AS target
-          USING (SELECT 
-                  @userId AS UserID, 
-                  @deviceType AS DeviceType, 
-                  @collectedDate AS CollectedDate
-                ) AS source
-          ON target.UserID = source.UserID
-             AND target.DeviceType = source.DeviceType
-             AND target.CollectedDate = source.CollectedDate
-
-          WHEN MATCHED THEN
-            UPDATE SET 
-              StepCount = COALESCE(@stepCount, target.StepCount),
-              Calories = COALESCE(@calories, target.Calories),
-              SleepRating = COALESCE(@sleepRating, target.SleepRating),
-              Heartrate = COALESCE(@heartrate, target.Heartrate),
-              HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability),
-              RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate)
-
-          WHEN NOT MATCHED THEN
-            INSERT (DeviceType, StepCount, Calories, SleepRating, Heartrate, HeartrateVariability, RestingHeartRate, CollectedDate, UserID)
-            VALUES (@deviceType, @stepCount, @calories, @sleepRating, @heartrate, @heartrateVariability, @restingHeartRate, @collectedDate, @userId);
-        `);
+      await upsertDeviceDataTemp(
+        pool,
+        {
+          userId,
+          deviceType,
+          stepCount,
+          calories,
+          sleepRating,
+          heartrate,
+          heartrateVariability,
+          restingHeartRate,
+          collectedDate,
+        },
+        heartColumnSupport
+      );
 
       const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
       await upsertDailyLogFromDevice(pool, dailyLogValues);
@@ -8296,6 +8392,21 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       return res.status(200).json({ message: 'No new Oura data to sync' });
     }
 
+    const heartColumnSupport = await getDeviceDataTempHeartColumnSupport(pool);
+    const missingHeartColumns = [
+      !heartColumnSupport.heartrate ? "Heartrate" : null,
+      !heartColumnSupport.heartrateVariability ? "HeartrateVariability" : null,
+      !heartColumnSupport.restingHeartRate ? "RestingHeartRate" : null,
+    ].filter(Boolean);
+
+    if (missingHeartColumns.length > 0) {
+      logger.warn("DeviceDataTemp heart columns missing; skipping those temp fields", {
+        userId,
+        deviceType,
+        missingHeartColumns,
+      });
+    }
+
     // Upsert data into SQL
     for (const item of deviceData) {
       const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
@@ -8322,38 +8433,21 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
         item.RestingHeartRate
       );
 
-      await pool.request()
-        .input('userId', userId) // actual variable, not string
-        .input('deviceType', deviceType)
-        .input('stepCount', stepCount)
-        .input('calories', calories)
-        .input('sleepRating', sleepRating)
-        .input('heartrate', heartrate)
-        .input('heartrateVariability', heartrateVariability)
-        .input('restingHeartRate', restingHeartRate)
-        .input('collectedDate', collectedDate)
-        .query(`
-    MERGE DeviceDataTemp AS target
-    USING (SELECT 
-            @userId AS UserID, 
-            @deviceType AS DeviceType, 
-            @collectedDate AS CollectedDate
-          ) AS source
-    ON target.UserID = source.UserID
-       AND target.DeviceType = source.DeviceType
-       AND target.CollectedDate = source.CollectedDate
-    WHEN MATCHED THEN
-      UPDATE SET 
-        StepCount = COALESCE(@stepCount, target.StepCount),
-        Calories = COALESCE(@calories, target.Calories),
-        SleepRating = COALESCE(@sleepRating, target.SleepRating),
-        Heartrate = COALESCE(@heartrate, target.Heartrate),
-        HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability),
-        RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate)
-    WHEN NOT MATCHED THEN
-      INSERT (DeviceType, StepCount, Calories, SleepRating, Heartrate, HeartrateVariability, RestingHeartRate, CollectedDate, UserID)
-      VALUES (@deviceType, @stepCount, @calories, @sleepRating, @heartrate, @heartrateVariability, @restingHeartRate, @collectedDate, @userId);
-  `);
+      await upsertDeviceDataTemp(
+        pool,
+        {
+          userId,
+          deviceType,
+          stepCount,
+          calories,
+          sleepRating,
+          heartrate,
+          heartrateVariability,
+          restingHeartRate,
+          collectedDate,
+        },
+        heartColumnSupport
+      );
 
       const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
       await upsertDailyLogFromDevice(pool, dailyLogValues);

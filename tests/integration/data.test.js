@@ -326,6 +326,35 @@ describe("Data Routes API", () => {
         console.log(`     Device data synced (${duration}ms)`);
       });
 
+      test("accepts camelCase heart metrics in device payload", async () => {
+        const state = getState();
+        const camelCaseDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0];
+
+        const payload = {
+          deviceData: [
+            {
+              stepCount: 6800,
+              calories: 2050,
+              sleepRating: "fair",
+              collectedDate: camelCaseDate,
+              heartRate: 64,
+              heartRateVariability: 39,
+              restingHeartRate: 56,
+            },
+          ],
+        };
+
+        const { response } = await api.patch(
+          "/data/deviceData/sync/device-test",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+      });
+
       test("maps device heartrate metrics into daily logs", async () => {
         if (!deviceSyncDate) {
           console.log("     [SKIP] No device sync date available");
