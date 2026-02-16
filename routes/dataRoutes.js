@@ -7835,6 +7835,14 @@ router.post("/preworkoutassessment", authenticateToken, async (req, res) => {
           (@userId, @workoutPlanId, @feeling, @waterIntake, @sleepQuality, @sleepHours, @recoveryStatus, @createdAt)
       `);
 
+    const preAssessmentDailyLogValues = {
+      userId,
+      sleep: parseNullableNumber(SleepHours),
+      waterIntake: parseNullableNumber(WaterIntake),
+      effectiveDate: normalizeDateOnly(createdAt),
+    };
+    await upsertDailyLogFromDevice(pool, preAssessmentDailyLogValues);
+
     return res.status(200).json({ success: true });
   } catch (error) {
     logger.error("PreWorkoutAssessment POST Error", {
@@ -7952,6 +7960,24 @@ function normalizeDateOnly(value) {
   return parsed.toISOString().split("T")[0];
 }
 
+function parseNullableNumber(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const numericMatch = String(value).trim().match(/-?\d+(\.\d+)?/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const parsed = Number(numericMatch[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function mapDevicePayloadToDailyLog(item, userId) {
   const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
 
@@ -7965,18 +7991,25 @@ function mapDevicePayloadToDailyLog(item, userId) {
       item.totalSleepHours
     ),
     steps: getFirstDefinedValue(item.stepCount, item.steps, item.StepCount),
-    heartrate: getFirstDefinedValue(item.heartRate, item.heartrate, item.HeartRate),
+    heartrate: getFirstDefinedValue(
+      item.heartRate,
+      item.heartrate,
+      item.HeartRate,
+      item.heartratevalue
+    ),
     waterIntake: getFirstDefinedValue(item.waterIntake, item.WaterIntake),
     sleepQuality: getFirstDefinedValue(item.sleepRating, item.sleepQuality, item.SleepRating),
     caloriesBurned: getFirstDefinedValue(item.calories, item.caloriesBurned, item.Calories),
     restingHeartRate: getFirstDefinedValue(
       item.restingHeartRate,
       item.restingHeartrate,
+      item.restingheartrate,
       item.RestingHeartRate
     ),
     heartrateVariability: getFirstDefinedValue(
       item.heartRateVariability,
       item.heartrateVariability,
+      item.heartratevariability,
       item.hrv,
       item.HeartRateVariability,
       item.HeartrateVariability
@@ -7994,15 +8027,15 @@ async function upsertDailyLogFromDevice(pool, dailyLogValues) {
   await pool
     .request()
     .input("userId", dailyLogValues.userId)
-    .input("sleep", dailyLogValues.sleep)
-    .input("steps", dailyLogValues.steps)
-    .input("heartrate", dailyLogValues.heartrate)
-    .input("waterIntake", dailyLogValues.waterIntake)
-    .input("sleepQuality", dailyLogValues.sleepQuality)
-    .input("caloriesBurned", dailyLogValues.caloriesBurned)
-    .input("restingHeartRate", dailyLogValues.restingHeartRate)
-    .input("heartrateVariability", dailyLogValues.heartrateVariability)
-    .input("weight", dailyLogValues.weight)
+    .input("sleep", dailyLogValues.sleep ?? null)
+    .input("steps", dailyLogValues.steps ?? null)
+    .input("heartrate", dailyLogValues.heartrate ?? null)
+    .input("waterIntake", dailyLogValues.waterIntake ?? null)
+    .input("sleepQuality", dailyLogValues.sleepQuality ?? null)
+    .input("caloriesBurned", dailyLogValues.caloriesBurned ?? null)
+    .input("restingHeartRate", dailyLogValues.restingHeartRate ?? null)
+    .input("heartrateVariability", dailyLogValues.heartrateVariability ?? null)
+    .input("weight", dailyLogValues.weight ?? null)
     .input("effectiveDate", dailyLogValues.effectiveDate).query(`
       ;WITH LatestLog AS (
         SELECT TOP 1 LogID
@@ -8080,6 +8113,26 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
       const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
       const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
       const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
+      const heartrate = getFirstDefinedValue(
+        item.heartrate,
+        item.heartRate,
+        item.HeartRate,
+        item.heartratevalue
+      );
+      const heartrateVariability = getFirstDefinedValue(
+        item.heartrateVariability,
+        item.heartRateVariability,
+        item.heartratevariability,
+        item.HeartRateVariability,
+        item.HeartrateVariability,
+        item.hrv
+      );
+      const restingHeartRate = getFirstDefinedValue(
+        item.restingHeartRate,
+        item.restingHeartrate,
+        item.restingheartrate,
+        item.RestingHeartRate
+      );
       const collectedDate = getFirstDefinedValue(item.collectedDate, item.CollectedDate);
 
       await pool.request()
@@ -8088,6 +8141,9 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
         .input('stepCount', stepCount)
         .input('calories', calories)
         .input('sleepRating', sleepRating)
+        .input('heartrate', heartrate)
+        .input('heartrateVariability', heartrateVariability)
+        .input('restingHeartRate', restingHeartRate)
         .input('collectedDate', collectedDate)
         .query(`
           MERGE DeviceDataTemp AS target
@@ -8102,13 +8158,16 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
 
           WHEN MATCHED THEN
             UPDATE SET 
-              StepCount = @stepCount,
-              Calories = @calories,
-              SleepRating = @sleepRating
+              StepCount = COALESCE(@stepCount, target.StepCount),
+              Calories = COALESCE(@calories, target.Calories),
+              SleepRating = COALESCE(@sleepRating, target.SleepRating),
+              Heartrate = COALESCE(@heartrate, target.Heartrate),
+              HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability),
+              RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate)
 
           WHEN NOT MATCHED THEN
-            INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
-            VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+            INSERT (DeviceType, StepCount, Calories, SleepRating, Heartrate, HeartrateVariability, RestingHeartRate, CollectedDate, UserID)
+            VALUES (@deviceType, @stepCount, @calories, @sleepRating, @heartrate, @heartrateVariability, @restingHeartRate, @collectedDate, @userId);
         `);
 
       const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
@@ -8209,7 +8268,10 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
           collectedDate: activityItem.day,
           stepCount: activityItem.steps ?? 0,
           calories: activityItem.total_calories ?? null,
-          sleepRating: sleepItem?.score ?? null
+          sleepRating: sleepItem?.score ?? null,
+          heartrate: sleepItem?.average_heart_rate ?? null,
+          heartrateVariability: sleepItem?.average_hrv ?? null,
+          restingHeartRate: sleepItem?.lowest_heart_rate ?? null
         };
       });
 
@@ -8240,6 +8302,25 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
       const stepCount = getFirstDefinedValue(item.stepCount, item.steps);
       const calories = getFirstDefinedValue(item.calories, item.caloriesBurned);
       const sleepRating = getFirstDefinedValue(item.sleepRating, item.sleepQuality);
+      const heartrate = getFirstDefinedValue(
+        item.heartrate,
+        item.heartRate,
+        item.HeartRate
+      );
+      const heartrateVariability = getFirstDefinedValue(
+        item.heartrateVariability,
+        item.heartRateVariability,
+        item.heartratevariability,
+        item.HeartRateVariability,
+        item.HeartrateVariability,
+        item.hrv
+      );
+      const restingHeartRate = getFirstDefinedValue(
+        item.restingHeartRate,
+        item.restingHeartrate,
+        item.restingheartrate,
+        item.RestingHeartRate
+      );
 
       await pool.request()
         .input('userId', userId) // actual variable, not string
@@ -8247,6 +8328,9 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
         .input('stepCount', stepCount)
         .input('calories', calories)
         .input('sleepRating', sleepRating)
+        .input('heartrate', heartrate)
+        .input('heartrateVariability', heartrateVariability)
+        .input('restingHeartRate', restingHeartRate)
         .input('collectedDate', collectedDate)
         .query(`
     MERGE DeviceDataTemp AS target
@@ -8260,12 +8344,15 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
        AND target.CollectedDate = source.CollectedDate
     WHEN MATCHED THEN
       UPDATE SET 
-        StepCount = @stepCount,
-        Calories = @calories,
-        SleepRating = @sleepRating
+        StepCount = COALESCE(@stepCount, target.StepCount),
+        Calories = COALESCE(@calories, target.Calories),
+        SleepRating = COALESCE(@sleepRating, target.SleepRating),
+        Heartrate = COALESCE(@heartrate, target.Heartrate),
+        HeartrateVariability = COALESCE(@heartrateVariability, target.HeartrateVariability),
+        RestingHeartRate = COALESCE(@restingHeartRate, target.RestingHeartRate)
     WHEN NOT MATCHED THEN
-      INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
-      VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+      INSERT (DeviceType, StepCount, Calories, SleepRating, Heartrate, HeartrateVariability, RestingHeartRate, CollectedDate, UserID)
+      VALUES (@deviceType, @stepCount, @calories, @sleepRating, @heartrate, @heartrateVariability, @restingHeartRate, @collectedDate, @userId);
   `);
 
       const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);

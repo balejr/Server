@@ -32,6 +32,7 @@ let createdCustomExerciseId;
 let createdCustomExerciseName;
 let createdCustomExerciseSuffix;
 let deviceSyncDate;
+let preAssessmentDate;
 
 // Today's date for test data
 const today = new Date().toISOString().split("T")[0];
@@ -305,10 +306,10 @@ describe("Data Routes API", () => {
               sleepRating: "good",
               collectedDate: deviceSyncDate,
               sleep: 7.2,
-              heartRate: 67,
+              heartrate: 67,
               waterIntake: 2.4,
-              restingHeartRate: 58,
-              heartRateVariability: 41,
+              restingheartrate: 58,
+              heartratevariability: 41,
               weight: 173.5,
             },
           ],
@@ -323,6 +324,43 @@ describe("Data Routes API", () => {
         expect(response.status).toBe(200);
         expect(response.data.message).toBeDefined();
         console.log(`     Device data synced (${duration}ms)`);
+      });
+
+      test("maps device heartrate metrics into daily logs", async () => {
+        if (!deviceSyncDate) {
+          console.log("     [SKIP] No device sync date available");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.get("/data/dailylogs?page=1&limit=50", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(response.status).toBe(200);
+        const logs = response.data?.data ?? [];
+        const logForDeviceDate = logs.find((log) => {
+          const effectiveDateRaw = log.EffectiveDate ?? log.effectiveDate;
+          const effectiveDate =
+            typeof effectiveDateRaw === "string"
+              ? effectiveDateRaw.split("T")[0]
+              : null;
+          return effectiveDate === deviceSyncDate;
+        });
+
+        expect(logForDeviceDate).toBeDefined();
+        expect(Number(logForDeviceDate.Heartrate ?? logForDeviceDate.heartrate)).toBe(67);
+        expect(
+          Number(
+            logForDeviceDate.HeartrateVariability ??
+              logForDeviceDate.heartrateVariability
+          )
+        ).toBe(41);
+        expect(
+          Number(
+            logForDeviceDate.RestingHeartRate ?? logForDeviceDate.restingHeartRate
+          )
+        ).toBe(58);
       });
 
       test("returns 400 when no device data is provided", async () => {
@@ -506,6 +544,9 @@ describe("Data Routes API", () => {
     describe("POST /data/preworkoutassessment", () => {
       test("creates pre assessment with valid data", async () => {
         const state = getState();
+        preAssessmentDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0];
         const payload = {
           WorkoutPlanID: "plan-123",
           Feeling: "Energized",
@@ -513,7 +554,7 @@ describe("Data Routes API", () => {
           SleepQuality: 4,
           SleepHours: "7.5",
           RecoveryStatus: "Ready",
-          CreatedAt: new Date().toISOString(),
+          CreatedAt: `${preAssessmentDate}T09:30:00.000Z`,
         };
 
         const { response, duration } = await api.post(
@@ -525,6 +566,38 @@ describe("Data Routes API", () => {
         expect(response.status).toBe(200);
         expect(response.data.success).toBe(true);
         console.log(`     Pre assessment saved (${duration}ms)`);
+      });
+
+      test("maps pre-assessment water and sleep hours into daily logs", async () => {
+        if (!preAssessmentDate) {
+          console.log("     [SKIP] No pre-assessment date available");
+          return;
+        }
+
+        const state = getState();
+        const { response } = await api.get("/data/dailylogs?page=1&limit=50", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(response.status).toBe(200);
+        const logs = response.data?.data ?? [];
+        const logForPreAssessmentDate = logs.find((log) => {
+          const effectiveDateRaw = log.EffectiveDate ?? log.effectiveDate;
+          const effectiveDate =
+            typeof effectiveDateRaw === "string"
+              ? effectiveDateRaw.split("T")[0]
+              : null;
+          return effectiveDate === preAssessmentDate;
+        });
+
+        expect(logForPreAssessmentDate).toBeDefined();
+        expect(
+          Number(logForPreAssessmentDate.WaterIntake ?? logForPreAssessmentDate.waterIntake)
+        ).toBeCloseTo(2, 1);
+        expect(Number(logForPreAssessmentDate.Sleep ?? logForPreAssessmentDate.sleep)).toBeCloseTo(
+          7.5,
+          1
+        );
       });
 
       test("requires authentication", async () => {

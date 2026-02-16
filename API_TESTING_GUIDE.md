@@ -1121,12 +1121,12 @@ muscle: 42.3
       "collectedDate": "2025-01-03",
       "sleep": 7.1,
       "stepCount": 9640,
-      "heartRate": 66,
+      "heartrate": 66,
       "waterIntake": 2.4,
       "sleepRating": "good",
       "calories": 2180,
-      "restingHeartRate": 57,
-      "heartRateVariability": 42,
+      "restingheartrate": 57,
+      "heartratevariability": 42,
       "weight": 173.5
     }
   ]
@@ -1148,14 +1148,16 @@ muscle: 42.3
 | `UserID` | Authenticated user |
 | `Sleep` | `sleep` |
 | `Steps` | `stepCount` |
-| `Heartrate` | `heartRate` |
+| `Heartrate` | `heartrate` / `heartRate` |
 | `WaterIntake` | `waterIntake` |
 | `SleepQuality` | `sleepRating` |
 | `CaloriesBurned` | `calories` |
-| `RestingHeartRate` | `restingHeartRate` |
-| `HeartrateVariability` | `heartRateVariability` |
+| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` |
+| `HeartrateVariability` | `heartratevariability` / `heartRateVariability` |
 | `Weight` | `weight` |
 | `EffectiveDate` | `collectedDate` (date portion) |
+
+> **Also stored in `DeviceDataTemp` when available:** `Heartrate`, `HeartrateVariability`, `RestingHeartRate`.
 
 ---
 
@@ -1211,6 +1213,10 @@ muscle: 42.3
 ```
 
 > **Note:** `CreatedAt` is optional; the server defaults to the current time.
+
+> **DailyLogs mirror:** this endpoint also upserts `DailyLogs` for the same `CreatedAt` date with:
+> - `WaterIntake` from parsed `WaterIntake` (for example `"2L"` becomes `2`)
+> - `Sleep` from parsed `SleepHours`
 
 ---
 

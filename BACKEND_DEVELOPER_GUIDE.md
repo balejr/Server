@@ -1137,16 +1137,18 @@ Routes to correct payment gateway based on user's subscription.
 | `UserID` | Authenticated user (`req.user.userId`) |
 | `Sleep` | `sleep` / `sleepHours` / `sleepDuration` / `totalSleep` |
 | `Steps` | `stepCount` |
-| `Heartrate` | `heartRate` / `HeartRate` |
+| `Heartrate` | `heartrate` / `heartRate` / `HeartRate` |
 | `WaterIntake` | `waterIntake` |
 | `SleepQuality` | `sleepRating` |
 | `CaloriesBurned` | `calories` |
-| `RestingHeartRate` | `restingHeartRate` |
-| `HeartrateVariability` | `heartRateVariability` / `HeartRateVariability` / `hrv` |
+| `RestingHeartRate` | `restingHeartRate` / `restingheartrate` |
+| `HeartrateVariability` | `heartrateVariability` / `heartratevariability` / `heartRateVariability` / `HeartRateVariability` / `hrv` |
 | `Weight` | `weight` |
 | `EffectiveDate` | Date portion of `collectedDate` (`CollectedDate`) |
 
-**Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null device values. If no row exists for that date, a new `DailyLogs` row is inserted.
+**DeviceDataTemp behavior:** `PATCH /deviceData/sync/:deviceType` and `POST /oura/sync` now upsert `Heartrate`, `HeartrateVariability`, and `RestingHeartRate` into `dbo.DeviceDataTemp` when provided.
+
+**Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null values. If no row exists for that date, a new `DailyLogs` row is inserted.
 
 **Pre Assessment:**
 | Method | Endpoint | Description |
@@ -1154,6 +1156,11 @@ Routes to correct payment gateway based on user's subscription.
 | POST | `/preworkoutassessment` | Save pre-workout assessment |
 
 **Body Fields:** `WorkoutPlanID`, `Feeling`, `WaterIntake`, `SleepQuality`, `SleepHours`, `RecoveryStatus`, `CreatedAt` (optional; defaults to now).
+
+**DailyLogs mirror:** On successful insert, the API also mirrors:
+- `DailyLogs.WaterIntake` ← parsed numeric value from `PreWorkoutAssessment.WaterIntake` (for example, `"2L"` → `2`)
+- `DailyLogs.Sleep` ← parsed numeric value from `PreWorkoutAssessment.SleepHours`
+- `DailyLogs.EffectiveDate` ← date portion of `CreatedAt`
 
 **Post Assessment:**
 | Method | Endpoint | Description |
