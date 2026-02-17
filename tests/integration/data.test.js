@@ -441,6 +441,70 @@ describe("Data Routes API", () => {
         ).toBe(54);
       });
 
+      test("uses latest metric values for same date regardless of payload order", async () => {
+        const state = getState();
+        const sameDate = "2099-12-31";
+
+        const payload = {
+          deviceData: [
+            {
+              // Newer reading appears first
+              collectedDate: `${sameDate}T20:00:00.000Z`,
+              stepCount: 9550,
+              calories: 2440,
+              heartrate: 76,
+              heartratevariability: 48,
+              restingheartrate: 53,
+            },
+            {
+              // Older reading appears second
+              collectedDate: `${sameDate}T08:00:00.000Z`,
+              stepCount: 6100,
+              calories: 1980,
+              heartrate: 61,
+              heartratevariability: 35,
+              restingheartrate: 58,
+            },
+          ],
+        };
+
+        const { response } = await api.patch(
+          "/data/deviceData/sync/device-test",
+          payload,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+
+        const { response: logsResponse } = await api.get("/data/dailylogs?page=1&limit=100", {
+          Authorization: `Bearer ${state.accessToken}`,
+        });
+
+        expect(logsResponse.status).toBe(200);
+        const logs = logsResponse.data?.data ?? [];
+        const logForSameDate = logs.find((log) => {
+          const effectiveDateRaw = log.EffectiveDate ?? log.effectiveDate;
+          const effectiveDate =
+            typeof effectiveDateRaw === "string"
+              ? effectiveDateRaw.split("T")[0]
+              : null;
+          return effectiveDate === sameDate;
+        });
+
+        expect(logForSameDate).toBeDefined();
+        expect(Number(logForSameDate.Steps ?? logForSameDate.steps)).toBe(9550);
+        expect(Number(logForSameDate.CaloriesBurned ?? logForSameDate.caloriesBurned)).toBe(
+          2440
+        );
+        expect(Number(logForSameDate.Heartrate ?? logForSameDate.heartrate)).toBe(76);
+        expect(
+          Number(logForSameDate.HeartrateVariability ?? logForSameDate.heartrateVariability)
+        ).toBe(48);
+        expect(Number(logForSameDate.RestingHeartRate ?? logForSameDate.restingHeartRate)).toBe(
+          53
+        );
+      });
+
       test("maps device heartrate metrics into daily logs", async () => {
         if (!deviceSyncDate) {
           console.log("     [SKIP] No device sync date available");

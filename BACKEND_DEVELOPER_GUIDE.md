@@ -1152,6 +1152,10 @@ Routes to correct payment gateway based on user's subscription.
 
 **Upsert behavior:** For a given `UserID + EffectiveDate`, the latest existing daily log row is updated with incoming non-null values. If no row exists for that date, a new `DailyLogs` row is inserted.
 
+**Multiple entries same date:** When a sync payload contains multiple rows for the same day, the API selects the **latest metric value by `CollectedDate` timestamp per field** before writing to `DailyLogs`. This prevents older readings from overwriting newer readings when payload order is mixed.
+
+**Multiple entries same date:** when payload contains multiple records for the same day, the API applies the newest metric values (based on `CollectedDate` timestamp) per field before writing to `DailyLogs`, so older samples in the same batch cannot overwrite newer values.
+
 **DailyLogs schema compatibility:** Device/pre-assessment sync does not require `DailyLogs.UpdatedAt` to exist. The upsert works with older schemas that only include core health columns.
 
 **Pre Assessment:**

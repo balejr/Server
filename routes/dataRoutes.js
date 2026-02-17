@@ -8146,6 +8146,79 @@ function mapDevicePayloadToDailyLog(item, userId) {
   };
 }
 
+const DAILY_LOG_DEVICE_FIELDS = [
+  "sleep",
+  "steps",
+  "heartrate",
+  "waterIntake",
+  "sleepQuality",
+  "caloriesBurned",
+  "restingHeartRate",
+  "heartrateVariability",
+  "weight",
+];
+
+function getCollectedTimestamp(item) {
+  const collectedDate = getDeviceSyncField(item, "collectedDate");
+  if (!collectedDate) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const parsed = new Date(collectedDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  return parsed.getTime();
+}
+
+function buildLatestDailyLogsByDate(items, userId) {
+  const latestByDate = new Map();
+
+  for (const item of items) {
+    const mapped = mapDevicePayloadToDailyLog(item, userId);
+    if (!mapped.effectiveDate) {
+      continue;
+    }
+
+    const collectedTs = getCollectedTimestamp(item);
+
+    if (!latestByDate.has(mapped.effectiveDate)) {
+      latestByDate.set(mapped.effectiveDate, {
+        values: {
+          userId,
+          effectiveDate: mapped.effectiveDate,
+        },
+        metricTimestamps: {},
+      });
+    }
+
+    const aggregate = latestByDate.get(mapped.effectiveDate);
+
+    for (const field of DAILY_LOG_DEVICE_FIELDS) {
+      const incomingValue = mapped[field];
+      if (incomingValue === undefined || incomingValue === null) {
+        continue;
+      }
+
+      const existingTs = aggregate.metricTimestamps[field];
+      if (existingTs === undefined || collectedTs >= existingTs) {
+        aggregate.values[field] = incomingValue;
+        aggregate.metricTimestamps[field] = collectedTs;
+      }
+    }
+  }
+
+  return Array.from(latestByDate.values()).map((entry) => entry.values);
+}
+
+async function upsertLatestDailyLogsFromDeviceData(pool, userId, items) {
+  const dailyLogValues = buildLatestDailyLogsByDate(items, userId);
+  for (const values of dailyLogValues) {
+    await upsertDailyLogFromDevice(pool, values);
+  }
+}
+
 async function upsertDailyLogFromDevice(pool, dailyLogValues) {
   if (!dailyLogValues.effectiveDate) {
     return;
@@ -8386,10 +8459,9 @@ router.patch('/deviceData/sync/:deviceType', authenticateToken, async (req, res)
         },
         heartColumnSupport
       );
-
-      const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
-      await upsertDailyLogFromDevice(pool, dailyLogValues);
     }
+
+    await upsertLatestDailyLogsFromDeviceData(pool, userId, deviceData);
 
     return res.status(200).json({ message: 'Device data synced successfully' });
 
@@ -8565,10 +8637,9 @@ router.post('/oura/sync', authenticateToken, async (req, res) => {
         },
         heartColumnSupport
       );
-
-      const dailyLogValues = mapDevicePayloadToDailyLog(item, userId);
-      await upsertDailyLogFromDevice(pool, dailyLogValues);
     }
+
+    await upsertLatestDailyLogsFromDeviceData(pool, userId, deviceData);
 
     return res.status(200).json({ message: 'Oura data synced successfully' });
 

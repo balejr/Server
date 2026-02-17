@@ -1164,6 +1164,8 @@ muscle: 42.3
 > **DailyLogs compatibility:** Sync update paths do not depend on a `DailyLogs.UpdatedAt` column. Older DailyLogs schemas are supported.
 >
 > **Nested metric support:** if device payload sends objects, the API extracts numeric values from common keys like `value`, `quantity`, `bpm`, or `sdnn` (for example, `"heart_rate": { "value": 63 }`).
+>
+> **Same-date conflict handling:** if multiple entries for the same date are sent in one payload, the API uses the latest `collectedDate` timestamp per metric when writing to `DailyLogs`.
 
 ---
 
