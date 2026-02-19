@@ -8206,4 +8206,191 @@ router.post('/oura/disconnect', authenticateToken, async (req, res) => {
   }
 });
 
+// ----------------- GARMIN ------------------
+
+router.post('/garmin/sync', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const pool = getPool();
+  const deviceType = 'garmin';
+
+  try {
+    // Get user tokens
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT accessToken, refreshToken
+        FROM GarminTokens
+        WHERE userId = @userId
+      `);
+
+    let garminAccessToken = tokenResult.recordset[0]?.accessToken;
+    const refreshToken = tokenResult.recordset[0]?.refreshToken;
+
+    if (!garminAccessToken && !refreshToken) {
+      return res.status(400).json({ message: 'No Garmin token found for this user' });
+    }
+
+    // Get last sync date
+    const result = await pool.request()
+      .input('userId', userId)
+      .input('deviceType', deviceType)
+      .query(`
+        SELECT MAX(CollectedDate) AS LastSyncDate
+        FROM DeviceDataTemp
+        WHERE UserID = @userId
+          AND DeviceType = @deviceType
+      `);
+
+    const lastSyncDate = result.recordset[0].LastSyncDate;
+
+    const endDate = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    let startDate;
+
+    if (lastSyncDate) {
+      const lastSync = new Date(lastSyncDate);
+      startDate = lastSync > sevenDaysAgo ? lastSync : sevenDaysAgo;
+    } else {
+      startDate = sevenDaysAgo;
+    }
+
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    // Fetch Garmin data
+    const fetchGarminData = async (token) => {
+
+      const [activityRes, sleepRes] = await Promise.all([
+        axios.get(
+          `https://apis.garmin.com/wellness-api/rest/activities?uploadStartTimeInSeconds=${Math.floor(startDate.getTime() / 1000)}&uploadEndTimeInSeconds=${Math.floor(endDate.getTime() / 1000)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        ),
+        axios.get(
+          `https://apis.garmin.com/wellness-api/rest/sleeps?startTimeInSeconds=${Math.floor(startDate.getTime() / 1000)}&endTimeInSeconds=${Math.floor(endDate.getTime() / 1000)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+      ]);
+
+      const activityData = activityRes.data ?? [];
+      const sleepData = sleepRes.data ?? [];
+
+      const sleepByDate = new Map(
+        sleepData.map(s => [
+          new Date(s.sleepStartTimestampGMT).toISOString().split('T')[0],
+          s
+        ])
+      );
+
+      const mergedData = activityData.map(activityItem => {
+        const day = new Date(activityItem.startTimeGMT).toISOString().split('T')[0];
+        const sleepItem = sleepByDate.get(day);
+
+        return {
+          collectedDate: day,
+          stepCount: activityItem.steps ?? 0,
+          calories: activityItem.calories ?? null,
+          sleepRating: sleepItem?.sleepQualityType ?? null
+        };
+      });
+
+      return mergedData;
+    };
+
+    let deviceData;
+
+    try {
+      deviceData = await fetchGarminData(garminAccessToken);
+    } catch (err) {
+      if (err.response?.status === 401 && refreshToken) {
+        garminAccessToken = await refreshGarminToken(userId, refreshToken);
+        deviceData = await fetchGarminData(garminAccessToken);
+      } else {
+        throw err;
+      }
+    }
+
+    if (!deviceData.length) {
+      return res.status(200).json({ message: 'No new Garmin data to sync' });
+    }
+
+    // Upsert into SQL
+    for (const item of deviceData) {
+      await pool.request()
+        .input('userId', userId)
+        .input('deviceType', deviceType)
+        .input('stepCount', item.stepCount)
+        .input('calories', item.calories)
+        .input('sleepRating', item.sleepRating)
+        .input('collectedDate', item.collectedDate)
+        .query(`
+          MERGE DeviceDataTemp AS target
+          USING (SELECT 
+                  @userId AS UserID, 
+                  @deviceType AS DeviceType, 
+                  @collectedDate AS CollectedDate
+                ) AS source
+          ON target.UserID = source.UserID
+             AND target.DeviceType = source.DeviceType
+             AND target.CollectedDate = source.CollectedDate
+          WHEN MATCHED THEN
+            UPDATE SET 
+              StepCount = @stepCount,
+              Calories = @calories,
+              SleepRating = @sleepRating
+          WHEN NOT MATCHED THEN
+            INSERT (DeviceType, StepCount, Calories, SleepRating, CollectedDate, UserID)
+            VALUES (@deviceType, @stepCount, @calories, @sleepRating, @collectedDate, @userId);
+        `);
+    }
+
+    return res.status(200).json({ message: 'Garmin data synced successfully' });
+
+  } catch (err) {
+    console.error('Garmin Data Sync Error:', err);
+    return res.status(500).json({
+      message: 'Failed to sync Garmin data',
+      error: err.message,
+    });
+  }
+});
+
+router.post('/garmin/disconnect', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const pool = getPool();
+
+  try {
+    const tokenResult = await pool.request()
+      .input('userId', userId)
+      .query(`
+        SELECT *
+        FROM GarminTokens
+        WHERE UserID = @userId
+      `);
+
+    if (!tokenResult.recordset.length) {
+      return res.status(400).json({ message: 'No Garmin token found for this user' });
+    }
+
+    await pool.request()
+      .input('userId', userId)
+      .query(`
+        DELETE FROM GarminTokens
+        WHERE UserID = @userId
+      `);
+
+    return res.status(200).json({ message: 'Garmin account disconnected successfully' });
+
+  } catch (err) {
+    console.error('Garmin disconnect error:', err);
+    return res.status(500).json({
+      message: 'Failed to disconnect Garmin account',
+      error: err.message
+    });
+  }
+});
+
+
+
 module.exports = router; // Redeployed Fri Nov 21 21:16:54 PST 2025
