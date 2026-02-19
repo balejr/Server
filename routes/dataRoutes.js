@@ -31,6 +31,58 @@ function normalizeExerciseName(s) {
     .trim();
 }
 
+function generateCustomExerciseId(userId) {
+  return `custom_${userId}_${Date.now()}_${
+    crypto.randomUUID
+      ? crypto.randomUUID()
+      : crypto.randomBytes(8).toString("hex")
+  }`;
+}
+
+function createExerciseLookup(recordset = []) {
+  const byId = new Map();
+  const byNormalizedName = new Map();
+
+  for (const row of recordset) {
+    const exerciseId = String(row.ExerciseId || "").trim();
+    const normalizedName = normalizeExerciseName(row.ExerciseName || "");
+
+    if (exerciseId && !byId.has(exerciseId)) {
+      byId.set(exerciseId, row);
+    }
+
+    if (normalizedName && !byNormalizedName.has(normalizedName)) {
+      byNormalizedName.set(normalizedName, row);
+    }
+  }
+
+  return { byId, byNormalizedName };
+}
+
+async function loadExerciseLookup(pool) {
+  const result = await pool.request().query(`
+    SELECT MasterExerciseID, ExerciseId, ExerciseName
+    FROM dbo.Exercise
+  `);
+
+  return createExerciseLookup(result.recordset);
+}
+
+function registerExerciseInLookup(lookup, row) {
+  if (!lookup || !row) return;
+
+  const exerciseId = String(row.ExerciseId || "").trim();
+  const normalizedName = normalizeExerciseName(row.ExerciseName || "");
+
+  if (exerciseId) {
+    lookup.byId.set(exerciseId, row);
+  }
+
+  if (normalizedName) {
+    lookup.byNormalizedName.set(normalizedName, row);
+  }
+}
+
 /**
  * @swagger
  * /data/exercises:
@@ -137,28 +189,21 @@ router.post("/exercises", authenticateToken, async (req, res) => {
     }
 
     const normName = normalizeExerciseName(name);
+    const exerciseLookup = await loadExerciseLookup(pool);
 
-    // 1) DEDUPE BY NAME FIRST
-    const existingByName = await pool
-      .request()
-      .input("normName", mssql.NVarChar(mssql.MAX), normName)
-      .query(`
-        SELECT TOP 1 MasterExerciseID, ExerciseId
-        FROM dbo.Exercise
-        WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
-      `);
-
-    if (existingByName.recordset.length > 0) {
+    // 1) DEDUPE BY NORMALIZED NAME FIRST
+    if (normName && exerciseLookup.byNormalizedName.has(normName)) {
+      const existingByName = exerciseLookup.byNormalizedName.get(normName);
       return res.status(200).json({
         success: true,
         data: {
-          MasterExerciseID: existingByName.recordset[0].MasterExerciseID,
-          ExerciseId: existingByName.recordset[0].ExerciseId,
+          MasterExerciseID: existingByName.MasterExerciseID,
+          ExerciseId: existingByName.ExerciseId,
         },
       });
     }
 
-    // If caller provided an exerciseId, use it; otherwise generate a unique custom ID
+    // Optional caller-provided id; used only if it does not already exist
     const providedExerciseId =
       req.body?.ExerciseId ||
       req.body?.ExerciseID ||
@@ -166,31 +211,19 @@ router.post("/exercises", authenticateToken, async (req, res) => {
       req.body?.id ||
       null;
 
-    const exerciseId =
-      (providedExerciseId && String(providedExerciseId).trim()) ||
-      `custom_${userId}_${Date.now()}_${
-        crypto.randomUUID
-          ? crypto.randomUUID()
-          : crypto.randomBytes(8).toString("hex")
-      }`;
-
-    // Idempotent by ExerciseId
-    const existing = await pool
-      .request()
-      .input("exerciseId", mssql.NVarChar(128), String(exerciseId))
-      .query(
-        `SELECT TOP 1 MasterExerciseID, ExerciseId FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
-      );
-
-    if (existing.recordset.length > 0) {
+    const trimmedProvidedExerciseId = String(providedExerciseId || "").trim();
+    if (trimmedProvidedExerciseId && exerciseLookup.byId.has(trimmedProvidedExerciseId)) {
+      const existing = exerciseLookup.byId.get(trimmedProvidedExerciseId);
       return res.status(200).json({
         success: true,
         data: {
-          MasterExerciseID: existing.recordset[0].MasterExerciseID,
-          ExerciseId: existing.recordset[0].ExerciseId,
+          MasterExerciseID: existing.MasterExerciseID,
+          ExerciseId: existing.ExerciseId,
         },
       });
     }
+
+    const exerciseId = trimmedProvidedExerciseId || generateCustomExerciseId(userId);
 
     const targetMuscle =
       req.body?.TargetMuscle ||
@@ -220,6 +253,12 @@ router.post("/exercises", authenticateToken, async (req, res) => {
         OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
         VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
       `);
+
+    registerExerciseInLookup(exerciseLookup, {
+      MasterExerciseID: inserted.recordset[0].MasterExerciseID,
+      ExerciseId: inserted.recordset[0].ExerciseId,
+      ExerciseName: String(name).trim(),
+    });
 
     return res.status(201).json({
       success: true,
@@ -756,6 +795,8 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
   let workoutNameForRoutine = "";
 
   try {
+    const exerciseLookup = await loadExerciseLookup(pool);
+
     for (const item of exerciseList) {
       const {
         exercise,
@@ -791,49 +832,50 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
       allEquipment.add(equipment);
       today = today || date;
 
-      // Check by ExerciseId first
-      let checkExercise = await pool
-        .request()
-        .input("exerciseId", mssql.NVarChar(mssql.MAX), sourceExerciseId)
-        .query(
-          `SELECT TOP 1 MasterExerciseID, ExerciseId FROM dbo.Exercise WHERE ExerciseId = @exerciseId`
-        );
-
-      // If not found, check by normalized ExerciseName
-      if (checkExercise.recordset.length === 0 && normName) {
-        checkExercise = await pool
-          .request()
-          .input("normName", mssql.NVarChar(mssql.MAX), normName)
-          .query(`
-            SELECT TOP 1 MasterExerciseID, ExerciseId
-            FROM dbo.Exercise
-            WHERE LOWER(LTRIM(RTRIM(ExerciseName))) = @normName
-          `);
-      }
-
       logger.debug("gifURL being inserted", { gifURL });
 
-      let canonicalExerciseId = sourceExerciseId;
+      // Canonical resolution: prefer normalized name match, fallback to id only when name is blank
+      const existingByName =
+        normName && exerciseLookup.byNormalizedName.has(normName)
+          ? exerciseLookup.byNormalizedName.get(normName)
+          : null;
+      const existingById =
+        !normName && sourceExerciseId && exerciseLookup.byId.has(sourceExerciseId)
+          ? exerciseLookup.byId.get(sourceExerciseId)
+          : null;
+      const existingExercise = existingByName || existingById;
+
+      let canonicalExerciseId;
       let MasterExerciseId;
 
-      if (checkExercise.recordset.length > 0) {
-        MasterExerciseId = checkExercise.recordset[0].MasterExerciseID;
-        canonicalExerciseId = checkExercise.recordset[0].ExerciseId;
+      if (existingExercise) {
+        MasterExerciseId = existingExercise.MasterExerciseID;
+        canonicalExerciseId = existingExercise.ExerciseId;
       } else {
+        const generatedExerciseId = generateCustomExerciseId(userId);
+        const safeExerciseName = exerciseName || `Custom Exercise ${Date.now()}`;
+
         const insertExercise = await pool
           .request()
-          .input("name", mssql.NVarChar(mssql.MAX), exerciseName)
-          .input("exerciseId", mssql.NVarChar(mssql.MAX), sourceExerciseId)
+          .input("name", mssql.NVarChar(mssql.MAX), safeExerciseName)
+          .input("exerciseId", mssql.NVarChar(mssql.MAX), generatedExerciseId)
           .input("targetMuscle", mssql.NVarChar(mssql.MAX), targetMuscle)
           .input("instructions", mssql.NVarChar(mssql.MAX), instructions)
           .input("equipment", mssql.NVarChar(mssql.MAX), equipment)
           .input("imageURL", mssql.NVarChar(mssql.MAX), gifURL).query(`
             INSERT INTO dbo.Exercise (ExerciseName, ExerciseId, TargetMuscle, Instructions, Equipment, ImageURL)
-            OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId
+            OUTPUT INSERTED.MasterExerciseID, INSERTED.ExerciseId, INSERTED.ExerciseName
             VALUES (@name, @exerciseId, @targetMuscle, @instructions, @equipment, @imageURL)
           `);
+
         MasterExerciseId = insertExercise.recordset[0].MasterExerciseID;
         canonicalExerciseId = insertExercise.recordset[0].ExerciseId;
+
+        registerExerciseInLookup(exerciseLookup, {
+          MasterExerciseID: MasterExerciseId,
+          ExerciseId: canonicalExerciseId,
+          ExerciseName: insertExercise.recordset[0].ExerciseName,
+        });
       }
 
       // Insert into dbo.ExerciseExistence
@@ -869,14 +911,18 @@ router.post("/exerciseexistence", authenticateToken, async (req, res) => {
         try {
           await prService.checkAndRecordPR(
             userId,
-            sourceExerciseId,
+            canonicalExerciseId,
             exerciseName,
             weight,
             reps,
             insertedId
           );
         } catch (prError) {
-          logger.warn("PR check failed", { userId, exerciseId: sourceExerciseId, error: prError.message });
+          logger.warn("PR check failed", {
+            userId,
+            exerciseId: canonicalExerciseId,
+            error: prError.message,
+          });
         }
       }
     }

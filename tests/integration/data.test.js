@@ -944,6 +944,64 @@ describe("Data Routes API", () => {
         console.log(`     Exercise created: ${createdExerciseExistenceId} (${duration}ms)`);
       });
 
+      test("creates new catalog entry with generated ExerciseId when name is new", async () => {
+        const state = getState();
+        const uniqueSuffix = Date.now();
+        const customName = `Unseen Custom Exercise ${uniqueSuffix}`;
+
+        const { response } = await api.post(
+          "/data/exerciseexistence",
+          {
+            exerciseList: [
+              {
+                exercise: {
+                  id: "",
+                  exerciseName: customName,
+                  target: "core",
+                  equipment: "bodyweight",
+                  instructions: ["Controlled movement"],
+                  gifURL: "",
+                },
+                reps: 8,
+                sets: 3,
+                difficulty: "medium",
+                date: today,
+                note: "Generated ExerciseId test",
+                rir: 2,
+                rpe: 7,
+                status: "completed",
+                completed: true,
+                weight: 0,
+                workoutName: "Custom Generated Exercise Test",
+              },
+            ],
+          },
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+
+        expect(response.status).toBe(200);
+        expect(Array.isArray(response.data.ids)).toBe(true);
+        expect(response.data.ids.length).toBeGreaterThan(0);
+
+        const insertedExistenceId = response.data.ids[0];
+        const { response: byDateResponse } = await api.get(
+          `/data/exerciseexistence/date/${today}`,
+          { Authorization: `Bearer ${state.accessToken}` }
+        );
+        expect(byDateResponse.status).toBe(200);
+        expect(Array.isArray(byDateResponse.data)).toBe(true);
+
+        const insertedRow = byDateResponse.data.find((row) => {
+          const rowId = row.ExerciseExistenceID ?? row.ExerciseExistenceId;
+          return Number(rowId) === Number(insertedExistenceId);
+        });
+
+        expect(insertedRow).toBeDefined();
+        const resolvedExerciseId = insertedRow.ExerciseID ?? insertedRow.exerciseId;
+        expect(typeof resolvedExerciseId).toBe("string");
+        expect(resolvedExerciseId.startsWith("custom_")).toBe(true);
+      });
+
       test("reuses canonical exerciseId when names match", async () => {
         const state = getState();
         let canonicalExerciseId = createdCustomExerciseId;

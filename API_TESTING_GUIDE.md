@@ -1357,7 +1357,9 @@ muscle: 42.3
 }
 ```
 
-> **Note:** When logging exercise instances, the server reuses an existing `ExerciseId` if the normalized `exerciseName` matches an existing record to avoid duplicates.
+> **Catalog behavior for exercise instances:**
+> - If normalized `exerciseName` already exists in `dbo.Exercise`, the existing `ExerciseId` is reused for `ExerciseExistence`.
+> - If it does not exist, the backend inserts a new `dbo.Exercise` row and generates a new `custom_<userId>_<timestamp>_<uuid>` `ExerciseId` before inserting `ExerciseExistence`.
 
 ---
 
