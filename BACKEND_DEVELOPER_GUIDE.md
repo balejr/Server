@@ -1179,7 +1179,10 @@ Routes to correct payment gateway based on user's subscription.
 | PATCH | `/exerciseexistence/:id` | Update logged exercise |
 | DELETE | `/exerciseexistence/:id` | Delete logged exercise |
 
-**Notes:** When logging exercise instances, the server reuses an existing `ExerciseId` if the normalized `ExerciseName` matches an existing record to avoid duplicates.
+**Notes (POST `/exerciseexistence`):**
+- The server checks existing catalog entries by normalized `ExerciseName` first.
+- If a matching name exists, it reuses that existing `ExerciseId` when inserting into `ExerciseExistence`.
+- If no matching name exists, it creates a new `Exercise` row and generates a new `custom_<userId>_<timestamp>_<uuid>` `ExerciseId` for use in `ExerciseExistence`.
 
 **Custom Exercise (POST `/exercises`)**
 
